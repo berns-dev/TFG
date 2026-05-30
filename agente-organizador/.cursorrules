@@ -1,0 +1,53 @@
+# Agente Organizador — Reglas de Cursor
+
+## Contexto del proyecto
+Aplicación Streamlit que actúa como agente de IA para extraer y organizar 
+temas y subtemas de una asignatura universitaria de ingeniería, estimando 
+la distribución de horas por tema. El agente NO inventa contenido: extrae 
+únicamente lo que aparece explícitamente en los documentos del profesor 
+(guía docente + materiales de teoría).
+
+## Stack técnico
+- Python 3.11+
+- Streamlit (interfaz web)
+- Anthropic SDK (librería oficial `anthropic`)
+- pdfplumber para extracción de texto de PDFs
+- python-pptx para extracción de texto de archivos PPTX
+- python-dotenv para gestión de variables de entorno
+
+## Selección de modelo
+- Todas las generaciones usan `claude-sonnet-4-5` (fijo en agente.py)
+- Justificación: la tarea exige razonamiento sobre distribución proporcional de horas y adherencia a plantilla con restricciones numéricas
+
+## Principios de desarrollo
+- El agente extrae, no genera. Si algo no está en el material, no aparece en el output.
+- Cada función tiene una responsabilidad única y clara.
+- Los errores se muestran al usuario en la interfaz, nunca se silencian.
+- El prompt al LLM siempre incluye restricción explícita de no inventar contenido.
+- El output final es Markdown renderizado en pantalla y descargable como archivo .md.
+- Comentarios en español, código en inglés.
+
+## Estructura de archivos
+- app.py: interfaz Streamlit + lógica principal
+- parser.py: extracción de texto de PDF y PPTX
+- agente.py: llamada a la API
+- prompts.py: construcción dinámica del prompt (idioma, horas, feedback, plantilla)
+
+## Convenciones
+- Variables de entorno en .env, nunca hardcodeadas
+- Funciones pequeñas, testeables, con nombre descriptivo
+- No usar frameworks de agentes (LangChain, etc.), llamadas directas a la API
+
+## Regla de agnosticismo
+El sistema no contiene ninguna referencia a asignaturas, bloques
+temáticos, horas o contenidos específicos de ninguna materia.
+Si en cualquier momento se detecta que un archivo contiene nombres
+de asignaturas o bloques hardcodeados, debe considerarse un bug
+crítico y corregirse inmediatamente.
+
+## Estado actual
+- API: Anthropic directo (ANTHROPIC_API_KEY)
+- Una sola llamada LLM por generación/regeneración
+- Loop de feedback hasta 5 iteraciones (historial acumulado)
+- Truncado automático a 20.000 chars/archivo si el total supera 120.000 chars
+- extraer_horas_docencia: 2 estrategias, 3 categorías (TE, PA, PL)

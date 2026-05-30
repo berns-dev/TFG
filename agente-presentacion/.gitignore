@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Archivos de salida generados
+/*.pdf
+/*.html
+/output_*.md

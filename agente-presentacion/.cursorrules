@@ -1,0 +1,38 @@
+# Agente Presentación — Material interactivo para docentes
+# TFG — Metodologías de Ingeniería Aumentada
+
+## Propósito
+Este agente genera material de presentación a partir del Markdown estructurado producido
+por el Agente Contenido. Soporta dos formatos de salida: PDF académico (WeasyPrint) y
+página HTML interactiva con Chart.js y controles paramétricos.
+
+NO genera contenido nuevo. El texto que aparece en el output proviene exclusivamente
+del Markdown de entrada — el modelo extrae y reformatea, no inventa.
+
+## Reglas de desarrollo
+- La API usada es Anthropic directa (no OpenRouter). Nunca uses openrouter en este proyecto.
+- Los modelos válidos son: claude-haiku-4-5-20251001 (fast) y claude-sonnet-4-5 (smart).
+- Haiku solo para desambiguar nombre y tipo de elementos detectados (detector.py).
+- Sonnet para generar bloques HTML interactivos con lógica JS compleja (generador_html.py).
+- La detección de elementos es híbrida: regex determinista primero, Haiku solo para ambiguos.
+- Los parámetros JS en los bloques HTML deben coincidir EXACTAMENTE con las variables
+  de la expresión original — nunca alucinar parámetros que no estén en la ecuación.
+- El HTML generado debe ser autocontenido (todo inline) EXCEPTO Chart.js (CDN permitido).
+- Si una expresión no permite interactividad útil, generar bloque estático con la fórmula
+  y su explicación contextual — no inventar interactividad forzada.
+
+## Estructura de módulos
+- app.py: interfaz Streamlit — upload, detección, selección de elementos, generación
+- detector.py: detección híbrida de ecuaciones, relaciones y tablas en Markdown
+- generador_pdf.py: pipeline Markdown → LaTeX SVG → HTML → WeasyPrint → bytes
+- generador_html.py: pipeline elementos seleccionados → bloques HTML → página completa (pendiente)
+- prompts.py: PROMPT_DETECTOR_INTERACTIVIDAD, PROMPT_GENERADOR_HTML, constructores
+- config.py: constantes y carga de .env
+
+## Archivos críticos que no deben modificarse sin justificación
+- PROMPT_DETECTOR_INTERACTIVIDAD en prompts.py: revisado y validado — no modificar sin consenso.
+- PROMPT_GENERADOR_HTML en prompts.py: idem — central para calidad del HTML interactivo.
+- Las firmas de generar_pdf() y generar_html() en sus respectivos módulos: son el
+  contrato público que app.py consume. Cambiarlas rompe la integración.
+- El pipeline WeasyPrint en generador_pdf.py: orden de pasos no es arbitrario —
+  los placeholders deben sustituirse ANTES de que markdown() procese el texto.

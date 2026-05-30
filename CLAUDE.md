@@ -1,0 +1,131 @@
+# TFG — Suite de Agentes Docentes
+
+**Universidad de Oviedo · EPI Gijón · Grado en Ingeniería Mecánica**
+**Autor:** Bernardo | **Tutor:** Miguel
+
+---
+
+## Descripción del proyecto
+
+Monorepo con tres agentes de IA independientes que transforman material docente universitario (PDF, PPTX, guías docentes) en recursos estructurados, calibrados horariamente e interactivos.
+
+**Principio rector (los tres agentes):** Transforman, nunca inventan. El output de cada agente solo puede contener información explícitamente presente en el material de entrada.
+
+---
+
+## Los tres agentes
+
+| Agente | Subcarpeta | Función |
+|--------|-----------|---------|
+| Organizador | `agente-organizador/` | Extrae distribución temática y horas lectivas de la guía docente |
+| Contenido | `agente-contenido/` | Convierte PDF/PPTX a Markdown estructurado y curado por tema |
+| Presentación | `agente-presentacion/` | Genera PDF académico o HTML interactivo desde el Markdown curado |
+
+Cada subcarpeta tiene su propio `CLAUDE.md` con el contexto específico de ese agente, su arquitectura de módulos, decisiones de implementación y limitaciones documentadas. **Lee siempre el `CLAUDE.md` del agente correspondiente antes de modificar su código.**
+
+---
+
+## Workflow entre agentes
+
+```
+[Guía docente PDF] ──┐
+                     ├──► agente-organizador ──► [Distribución temática .md]
+[Materiales PDF/PPTX]┘                                    │
+                                                          │
+                     ┌────────────────────────────────────┘
+                     │    + [Material del tema PDF/PPTX]
+                     ▼
+              agente-contenido ──► [Markdown curado por tema]
+                                              │
+                                              ▼
+                                  agente-presentacion
+                                  ├──► [PDF estructurado]
+                                  └──► [HTML interactivo]
+```
+
+---
+
+## Stack tecnológico común
+
+- **API:** Anthropic directo — nunca OpenRouter ni otros proveedores
+  - `claude-haiku-4-5-20251001` — tareas mecánicas (clasificación, extracción)
+  - `claude-sonnet-4-5` — razonamiento, contenido matemático, generación compleja
+- **UI:** Streamlit (`layout="wide"`) con identidad visual compartida:
+  - Tipografía: Playfair Display + DM Sans (Google Fonts CDN)
+  - Acento: `#185FA5` (fijo, identidad de marca)
+  - Dark/light mode: JS `sync()` en iframes, `var(--background-color)` en estilos Streamlit
+- **Extracción:** `pdfplumber` (PDF), `python-pptx` (PPTX)
+- **PDF generado:** `reportlab` (puro Python, sin GTK)
+- **HTML interactivo:** Chart.js + MathJax (CDN)
+- **Credenciales:** `.env` en cada subcarpeta + `python-dotenv`
+
+---
+
+## Reglas de desarrollo
+
+- La API usada es Anthropic directo. Nunca uses OpenRouter en este proyecto.
+- Los modelos válidos son `claude-haiku-4-5-20251001` y `claude-sonnet-4-5`.
+- Cada agente tiene su `.cursorrules` con restricciones específicas de ese agente. Léelas antes de modificar cualquier archivo de código.
+- No modificar `SYSTEM_PROMPT` en `agente-contenido/classifier.py` sin consenso explícito del usuario.
+- No modificar `PROMPT_GENERADOR_HTML` ni `PROMPT_DETECTOR_INTERACTIVIDAD` en `agente-presentacion/prompts.py` sin consenso explícito.
+- El código determinista (extracción de horas, clasificación de archivos, detección de ecuaciones) no se reemplaza por LLM sin justificación documentada.
+
+---
+
+## Estructura del repositorio
+
+```
+TFG/
+├── README.md                     ← README principal del proyecto
+├── CLAUDE.md                     ← este archivo — contexto global para Claude Code
+├── agente-organizador/
+│   ├── CLAUDE.md                 ← contexto específico del Agente Organizador
+│   ├── README.md
+│   ├── app.py
+│   ├── agente.py
+│   ├── parser.py
+│   ├── prompts.py
+│   ├── requirements.txt
+│   ├── .env.example
+│   ├── .gitignore
+│   └── .cursorrules
+├── agente-contenido/
+│   ├── CLAUDE.md                 ← contexto específico del Agente Contenido
+│   ├── README.md
+│   ├── app.py
+│   ├── classifier.py
+│   ├── chunker.py
+│   ├── extractor.py
+│   ├── cleaner.py
+│   ├── assembler.py
+│   ├── validator.py
+│   ├── validate_pdf.py
+│   ├── config.py
+│   ├── requirements.txt
+│   ├── .env.example
+│   ├── .gitignore
+│   └── .cursorrules
+└── agente-presentacion/
+    ├── CLAUDE.md                 ← contexto específico del Agente Presentación
+    ├── README.md
+    ├── app.py
+    ├── detector.py
+    ├── generador_pdf.py
+    ├── generador_html.py
+    ├── prompts.py
+    ├── config.py
+    ├── requirements.txt
+    ├── .env.example
+    ├── .gitignore
+    └── .cursorrules
+```
+
+---
+
+## Estado del proyecto (2026-05-30)
+
+| Agente | Estado | Validado con |
+|--------|--------|-------------|
+| Organizador | Funcional | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
+| Contenido | ~90% — pendiente validación PPTX | Temas 1 y 2 de Tecnología de Materiales (PDF) |
+| Presentación | Funcional — PDF y HTML habilitados | Tema 1_curado.md |
