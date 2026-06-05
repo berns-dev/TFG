@@ -13,6 +13,8 @@ Flujo:
 from __future__ import annotations
 
 import hashlib
+import io
+import re
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -135,6 +137,69 @@ _TIPO_LABEL = {
     "tabla": "Tabla numérica",
 }
 
+_TEXTO_ORIGINAL_MAX = 8000
+_DENSIDAD_NUMERICA_RE = re.compile(
+    r"\d+\.?\d*\s*(?:MPa|GPa|μm|µm|mm|nm|°|N|kN|Pa)",
+    re.IGNORECASE,
+)
+
+
+def _extraer_texto_pdf_inteligente(file_bytes: bytes) -> str | None:
+    """Prioriza páginas con más contenido numérico + las 2 primeras."""
+    import pdfplumber
+
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        pages_data: list[tuple[int, int, str]] = []
+        for i, page in enumerate(pdf.pages):
+            text = page.extract_text() or ""
+            density = len(_DENSIDAD_NUMERICA_RE.findall(text))
+            pages_data.append((i, density, text))
+
+    if not pages_data:
+        return None
+
+    selected: set[int] = set()
+    for i in range(min(2, len(pages_data))):
+        selected.add(i)
+
+    by_density = sorted(pages_data, key=lambda item: item[1], reverse=True)
+    for i, density, _ in by_density:
+        if len(selected) >= 5:
+            break
+        if density > 0 or len(selected) < 3:
+            selected.add(i)
+
+    ordered_text = "\n\n".join(
+        pages_data[i][2] for i in sorted(selected) if pages_data[i][2].strip()
+    )
+    if not ordered_text.strip():
+        return None
+    return ordered_text[:_TEXTO_ORIGINAL_MAX]
+
+
+def _extraer_texto_original(file_bytes: bytes, filename: str) -> str | None:
+    """Extrae texto de PDF o PPTX; retorna None si falla o no hay texto."""
+    try:
+        name_lower = filename.lower()
+        if name_lower.endswith(".pdf"):
+            return _extraer_texto_pdf_inteligente(file_bytes)
+
+        if name_lower.endswith(".pptx"):
+            from pptx import Presentation
+
+            parts: list[str] = []
+            prs = Presentation(io.BytesIO(file_bytes))
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text:
+                        parts.append(shape.text.strip())
+            if not parts:
+                return None
+            return "\n\n".join(parts)[:_TEXTO_ORIGINAL_MAX]
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
 
 # ---------------------------------------------------------------------------
 # App principal
@@ -156,6 +221,8 @@ def main() -> None:
         st.session_state["html_bytes"] = None
     if "html_titulo" not in st.session_state:
         st.session_state["html_titulo"] = "material"
+    if "texto_original" not in st.session_state:
+        st.session_state["texto_original"] = None
 
     st.set_page_config(page_title="Agente Presentación", layout="wide")
 
@@ -316,6 +383,38 @@ section[data-testid="stMain"] > div {
                 stem = uploaded_file.name.replace(".md", "")
                 st.session_state["pdf_titulo"] = stem
 
+        st.markdown(
+            """<div style="display:flex; align-items:center; gap:10px; margin:16px 0 8px 0;">
+  <span style="display:inline-flex; align-items:center; justify-content:center;
+        width:20px; height:20px; border-radius:50%;
+        background:#E6F1FB; color:#185FA5;
+        font-family:'DM Sans',sans-serif; font-size:10px; font-weight:500; flex-shrink:0;">+</span>
+  <div>
+    <div style="font-family:'DM Sans',sans-serif; font-size:11px; font-weight:500;
+         color:var(--text-color); letter-spacing:0.06em; text-transform:uppercase; line-height:1;">
+      Material original del profesor (opcional)</div>
+    <div style="font-family:'DM Sans',sans-serif; font-size:12px; color:var(--text-color); opacity:0.55; margin-top:3px;">
+      PDF o PPTX del tema. Mejora los rangos de los sliders
+      y la selección del tipo de visualización.</div>
+  </div>
+</div>""",
+            unsafe_allow_html=True,
+        )
+        uploaded_original = st.file_uploader(
+            "Material original del profesor (opcional)",
+            type=["pdf", "pptx"],
+            accept_multiple_files=False,
+            key="uploader_original",
+            label_visibility="collapsed",
+        )
+        if uploaded_original is not None:
+            st.session_state["texto_original"] = _extraer_texto_original(
+                uploaded_original.getvalue(),
+                uploaded_original.name,
+            )
+        else:
+            st.session_state["texto_original"] = None
+
         st.divider()
         puede_detectar = uploaded_file is not None
         st.button(
@@ -452,13 +551,27 @@ section[data-testid="stMain"] > div {
             col_chk, col_exp = st.columns([1, 12])
             with col_chk:
                 checked = st.checkbox(
-                    "",
+                    el["nombre"],
                     key=chk_key,
                     label_visibility="collapsed",
                 )
             with col_exp:
-                # Elements are now section-level: nombre == seccion, no suffix needed
-                with st.expander(f"**{el['nombre']}**", expanded=False):
+                st.markdown(f"**{el['nombre']}**")
+                if el.get("advertencia"):
+                    razon_esc = (
+                        el["advertencia"]
+                        .replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                    )
+                    st.markdown(
+                        f'<div style="font-size:12px;color:#E67E22;'
+                        f'margin-bottom:4px;line-height:1.4;">'
+                        f"⚠ Este contenido puede tener baja interactividad: "
+                        f"{razon_esc}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with st.expander("Ver expresión y contexto", expanded=False):
                     # expresion contains $$...$$ blocks — use markdown for rendering
                     st.markdown(el["expresion"])
                     if el.get("contexto"):
@@ -495,7 +608,13 @@ section[data-testid="stMain"] > div {
                     titulo = st.session_state.get("pdf_titulo", "Material interactivo")
                     seleccionados_set = set(seleccionados)
                     elementos_sel = [el for el in elementos if el["id"] in seleccionados_set]
-                    html_str = generar_html(elementos_sel, md, titulo)
+                    html_str = generar_html(
+                        elementos_sel,
+                        md,
+                        titulo,
+                        verbose=True,
+                        texto_original=st.session_state.get("texto_original"),
+                    )
                     st.session_state["html_bytes"] = html_str.encode("utf-8")
                     st.session_state["html_titulo"] = titulo
                     status.update(label="✅ HTML generado", state="complete")

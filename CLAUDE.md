@@ -7,7 +7,10 @@
 
 ## Descripción del proyecto
 
-Monorepo con tres agentes de IA independientes que transforman material docente universitario (PDF, PPTX, guías docentes) en recursos estructurados, calibrados horariamente e interactivos.
+Monorepo con tres agentes de IA con arquitectura de **pipeline suave**: cada agente
+produce un Markdown que alimenta al siguiente, pero sin acoplamiento de código. Cada
+agente puede ejecutarse de forma independiente si el profesor ya dispone del input en
+el formato correcto.
 
 **Principio rector (los tres agentes):** Transforman, nunca inventan. El output de cada agente solo puede contener información explícitamente presente en el material de entrada.
 
@@ -18,12 +21,24 @@ Monorepo con tres agentes de IA independientes que transforman material docente 
 | Agente | Subcarpeta | Función |
 |--------|-----------|---------|
 | Organizador | `agente-organizador/` | Extrae distribución temática y horas lectivas de la guía docente |
-| Contenido | `agente-contenido/` | Convierte PDF/PPTX a Markdown estructurado y curado por tema |
+| Contenido | `agente-contenido/` | Convierte PDF/PPTX a Markdown estructurado y curado por tema; calibra extensión y profundidad según las horas del bloque (output del Organizador, opcional) |
 | Presentación | `agente-presentacion/` | Genera PDF académico o HTML interactivo desde el Markdown curado |
 
 Cada subcarpeta tiene su propio `CLAUDE.md` con el contexto específico de ese agente, su arquitectura de módulos, decisiones de implementación y limitaciones documentadas. **Lee siempre el `CLAUDE.md` del agente correspondiente antes de modificar su código.**
 
 ---
+
+## Arquitectura — pipeline suave
+
+Los agentes se conectan a través de archivos Markdown, no a través de código. Esto los
+distingue del pipeline encadenado original (descartado): en ese diseño los agentes se
+llamaban entre sí en código y un error upstream se propagaba downstream. Aquí el fallo
+de un agente no rompe los demás — el siguiente simplemente no tiene su input.
+
+El Agente Contenido usa el `.md` del Organizador para conocer el bloque temático y la
+densidad horaria del material que está procesando. Es técnicamente opcional pero
+necesario para que el output esté calibrado por tema. El Agente Presentación necesita
+el `.md` curado del Contenido — es su único input requerido.
 
 ## Workflow entre agentes
 
@@ -122,10 +137,10 @@ TFG/
 
 ---
 
-## Estado del proyecto (2026-05-30)
+## Estado del proyecto (2026-06-03)
 
 | Agente | Estado | Validado con |
 |--------|--------|-------------|
 | Organizador | Funcional | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
-| Contenido | ~90% — pendiente validación PPTX | Temas 1 y 2 de Tecnología de Materiales (PDF) |
-| Presentación | Funcional — PDF y HTML habilitados | Tema 1_curado.md |
+| Contenido | Funcional — validado con PDF y PPTX | Temas 1 y 2 de Tecnología de Materiales (PDF) |
+| Presentación | Funcional — pendiente renderizado LaTeX en PDF | Tema 1_curado.md (Tecnología de Materiales) |

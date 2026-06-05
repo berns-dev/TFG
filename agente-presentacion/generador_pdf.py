@@ -6,18 +6,26 @@ Pipeline:
   3. Recorrer el HTML con html.parser y convertir cada elemento a un
      Flowable de ReportLab (Paragraph, Spacer, Preformatted, HRFlowable).
   4. Las ecuaciones LaTeX ($$...$$ e inline $...$) se renderizan como
-     bloques monoespaciados con fondo gris y borde izquierdo azul.
+     imagenes PNG con matplotlib (mathtext) e incrustan en el PDF.
   5. ReportLab genera el PDF en memoria y devuelve bytes.
 
-Dependencias: reportlab, markdown (ambas puras Python, sin GTK).
+Dependencias: reportlab, markdown, matplotlib.
 """
 
 from __future__ import annotations
 
 import io
+import os
 import re
+import tempfile
 from html.parser import HTMLParser
 from typing import Any
+
+import matplotlib
+
+matplotlib.use("Agg")
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 
 try:
     import markdown as _md_lib
@@ -31,16 +39,20 @@ from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
     HRFlowable,
+    Image,
     PageTemplate,
     Paragraph,
     Preformatted,
     Spacer,
 )
 from reportlab.platypus.flowables import Flowable
+
+_LATEX_DPI = 150
 
 # ---------------------------------------------------------------------------
 # Colores de la paleta
@@ -218,6 +230,64 @@ class _LeftBorderBox(Flowable):
 
 
 # ---------------------------------------------------------------------------
+# Renderizado LaTeX → PNG (matplotlib mathtext, sin LaTeX del sistema)
+# ---------------------------------------------------------------------------
+
+def _latex_figsize(latex_str: str) -> tuple[float, float]:
+    """Calcula figsize dinámico según la longitud de la expresión."""
+    length = len(latex_str)
+    width = min(10.0, max(3.0, 3.0 + length * 0.08))
+    height = min(1.5, max(0.6, 0.6 + length * 0.01))
+    return width, height
+
+
+def render_latex_to_image(latex_str: str) -> io.BytesIO | None:
+    """Renderiza una expresión LaTeX como PNG en memoria.
+
+    Usa matplotlib mathtext (usetex=False); no requiere LaTeX instalado.
+    Retorna BytesIO posicionado en 0, o None si el parseo falla.
+    """
+    try:
+        fig_w, fig_h = _latex_figsize(latex_str)
+        fig = Figure(figsize=(fig_w, fig_h))
+        fig.patch.set_alpha(0)
+        FigureCanvasAgg(fig)
+        fig.text(
+            0.5,
+            0.5,
+            f"${latex_str}$",
+            ha="center",
+            va="center",
+            fontsize=12,
+        )
+        buf = io.BytesIO()
+        fig.savefig(
+            buf,
+            format="png",
+            dpi=_LATEX_DPI,
+            transparent=True,
+            bbox_inches="tight",
+            pad_inches=0.05,
+        )
+        buf.seek(0)
+        return buf
+    except Exception:
+        return None
+
+
+def _scale_equation_image(img: Image, max_width: float) -> None:
+    """Ajusta drawWidth/drawHeight de una Image de ReportLab respetando max_width."""
+    w_pt = img.imageWidth * 72.0 / _LATEX_DPI
+    h_pt = img.imageHeight * 72.0 / _LATEX_DPI
+    if w_pt > max_width:
+        scale = max_width / w_pt
+        w_pt *= scale
+        h_pt *= scale
+    img.drawWidth = w_pt
+    img.drawHeight = h_pt
+
+
+# ---------------------------------------------------------------------------
 # Regex pre-proceso de LaTeX antes del parseo HTML
 # ---------------------------------------------------------------------------
 
@@ -271,10 +341,12 @@ class _MarkdownFlowableParser(HTMLParser):
                    "hr", "table", "thead", "tbody", "tr", "th", "td",
                    "div", "section"}
 
-    def __init__(self, latex_subs: dict[str, str]):
+    def __init__(self, latex_subs: dict[str, str], max_eq_width: float):
         super().__init__()
         self._subs = latex_subs
+        self._max_eq_width = max_eq_width
         self.flowables: list[Flowable] = []
+        self.temp_image_paths: list[str] = []
 
         self._tag_stack: list[str] = []       # block tag stack
         self._text_buf: list[str] = []         # current inline text buffer
@@ -282,6 +354,14 @@ class _MarkdownFlowableParser(HTMLParser):
         self._list_stack: list[str] = []       # "ul" / "ol" item tracking
         self._ol_counters: list[int] = []
         self._skip_tags = {"html", "body", "head"}
+        self._block_latex_pattern = (
+            rf"{re.escape(_BLOCK_PLACEHOLDER)}\d+"
+            rf"{re.escape(_BLOCK_PLACEHOLDER)}"
+        )
+        self._inline_latex_pattern = (
+            rf"{re.escape(_INLINE_PLACEHOLDER_START)}\d+"
+            rf"{re.escape(_INLINE_PLACEHOLDER_END)}"
+        )
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -333,54 +413,82 @@ class _MarkdownFlowableParser(HTMLParser):
             self.flowables.append(Paragraph(text, style))
 
         else:
-            # Check if this text is purely a latex block placeholder
             stripped = text.strip()
-            blk_match = re.fullmatch(
-                rf"{_BLOCK_PLACEHOLDER}(\d+){_BLOCK_PLACEHOLDER}", stripped
-            )
-            if blk_match:
+            if re.fullmatch(self._block_latex_pattern, stripped):
                 expr = self._subs.get(stripped, stripped)
                 self._add_block_equation(expr)
-            else:
-                # Normal paragraph — expand block latex placeholders too
-                text = self._expand_block_latex(text)
-                if text.strip():
-                    self.flowables.append(Paragraph(text, _ESTILOS["p"]))
+            elif re.search(self._block_latex_pattern, text):
+                self._emit_mixed_paragraph(text, _ESTILOS["p"])
+            elif text.strip():
+                self.flowables.append(Paragraph(text, _ESTILOS["p"]))
+
+    def _save_inline_image(self, buf: io.BytesIO) -> str:
+        """Persist PNG en disco temporal para <img> inline de ReportLab."""
+        fd, path = tempfile.mkstemp(suffix=".png")
+        os.write(fd, buf.getvalue())
+        os.close(fd)
+        self.temp_image_paths.append(path)
+        return path
+
+    def _inline_latex_markup(self, expr: str) -> str:
+        """Sustituye LaTeX inline por <img> o texto monoespaciado de respaldo."""
+        buf = render_latex_to_image(expr)
+        if buf is None:
+            safe = self._escape(expr)
+            return f'<font name="Courier" size="9">[{safe}]</font>'
+
+        reader = ImageReader(buf)
+        iw, ih = reader.getSize()
+        w_pt = iw * 72.0 / _LATEX_DPI
+        h_pt = ih * 72.0 / _LATEX_DPI
+        target_h = 12.0
+        scale = target_h / h_pt if h_pt else 1.0
+        target_w = w_pt * scale
+        path = self._save_inline_image(buf)
+        return (
+            f'<img src="{path}" width="{target_w:.1f}" height="{target_h}" '
+            f'valign="middle"/>'
+        )
 
     def _expand_inline_latex(self, text: str) -> str:
-        """Replace inline latex placeholders with monospace markup."""
+        """Replace inline latex placeholders with rendered images or fallback."""
         def repl(m: re.Match) -> str:
             key = m.group(0)
             expr = self._subs.get(key, key)
-            safe = self._escape(expr)
-            return f'<font name="Courier" size="9">${safe}$</font>'
+            return self._inline_latex_markup(expr)
 
-        pattern = (
-            rf"{re.escape(_INLINE_PLACEHOLDER_START)}\d+"
-            rf"{re.escape(_INLINE_PLACEHOLDER_END)}"
-        )
-        return re.sub(pattern, repl, text)
+        return re.sub(self._inline_latex_pattern, repl, text)
 
-    def _expand_block_latex(self, text: str) -> str:
-        """Replace block latex placeholders in paragraphs."""
-        pattern = (
-            rf"{re.escape(_BLOCK_PLACEHOLDER)}\d+"
-            rf"{re.escape(_BLOCK_PLACEHOLDER)}"
-        )
-        def repl(m: re.Match) -> str:
-            key = m.group(0)
-            expr = self._subs.get(key, key)
-            safe = self._escape(expr)
-            return f'<font name="Courier" size="9">$${safe}$$</font>'
-        return re.sub(pattern, repl, text)
+    def _emit_mixed_paragraph(
+        self, text: str, style: ParagraphStyle
+    ) -> None:
+        """Emite párrafos intercalados con bloques display de ecuaciones."""
+        parts = re.split(f"({self._block_latex_pattern})", text)
+        for part in parts:
+            if not part or not part.strip():
+                continue
+            if re.fullmatch(self._block_latex_pattern, part.strip()):
+                expr = self._subs.get(part.strip(), part.strip())
+                self._add_block_equation(expr)
+            else:
+                expanded = self._expand_inline_latex(part)
+                if expanded.strip():
+                    self.flowables.append(Paragraph(expanded, style))
 
     def _add_block_equation(self, expr: str) -> None:
-        safe = self._escape(expr)
-        display = f"$$ {safe} $$"
-        inner = Paragraph(display, _ESTILOS["ecuacion_bloque"])
-        self.flowables.append(Spacer(1, 2))
-        self.flowables.append(_LeftBorderBox(inner))
-        self.flowables.append(Spacer(1, 2))
+        buf = render_latex_to_image(expr)
+        self.flowables.append(Spacer(1, 6))
+        if buf is not None:
+            img = Image(buf)
+            _scale_equation_image(img, self._max_eq_width)
+            img.hAlign = "CENTER"
+            self.flowables.append(img)
+        else:
+            safe = self._escape(expr)
+            self.flowables.append(
+                Paragraph(f"[{safe}]", _ESTILOS["ecuacion_bloque"])
+            )
+        self.flowables.append(Spacer(1, 6))
 
     @staticmethod
     def _escape(text: str) -> str:
@@ -555,8 +663,8 @@ def _preprocess_md(markdown_text: str) -> tuple[str, dict[str, str]]:
 def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
     """Generate a structured PDF from markdown text using ReportLab.
 
-    LaTeX equations ($$...$$  and $...$) are rendered as monospaced blocks
-    with a blue left-border accent. No external rendering engine needed.
+    LaTeX equations ($$...$$ and $...$) are rendered as PNG images via
+    matplotlib mathtext and embedded in the PDF.
 
     Args:
         markdown_text: Full markdown content (output from Agente Contenido).
@@ -584,7 +692,9 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
     )
 
     # 3. HTML → Flowables
-    parser = _MarkdownFlowableParser(latex_subs)
+    margin = 2.5 * cm
+    max_eq_width = 0.8 * (A4[0] - 2 * margin)
+    parser = _MarkdownFlowableParser(latex_subs, max_eq_width)
     parser.feed(html)
     parser.close()
     flowables = parser.flowables
@@ -594,7 +704,6 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
 
     # 4. Build PDF with ReportLab
     buf = io.BytesIO()
-    margin = 2.5 * cm
     doc = BaseDocTemplate(
         buf,
         pagesize=A4,
@@ -604,7 +713,14 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
         bottomMargin=2.0 * cm,  # extra for footer
     )
     doc.addPageTemplates([_make_page_template(doc, titulo)])
-    doc.build(flowables)
+    try:
+        doc.build(flowables)
+    finally:
+        for path in parser.temp_image_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     buf.seek(0)
     return buf.read()

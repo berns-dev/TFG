@@ -13,66 +13,304 @@ from __future__ import annotations
 
 PROMPT_DETECTOR_INTERACTIVIDAD = """Eres un analizador de contenido técnico de ingeniería. Tu única función es determinar si un fragmento de texto contiene elementos que se beneficiarían de una representación interactiva.
 
-Un elemento es interactivo si cumple AL MENOS UNO de estos criterios:
-- Contiene una ecuación con dos o más variables independientes manipulables
-- Describe una relación paramétrica entre magnitudes físicas
-- Contiene una tabla con valores numéricos de propiedades comparables
+CRITERIO OBLIGATORIO — Un elemento es interactivo solo si cumple AMBAS condiciones:
+1. Contiene una relación matemática entre variables (no una constante, no un valor
+   empírico fijo, no una definición).
+2. Al menos una variable tiene un rango físico de exploración con significado — es
+   decir, cambiar su valor revela algo que el texto no dice ya.
 
-Un elemento NO es interactivo si:
-- Es una definición, descripción o clasificación textual
-- Contiene una ecuación con una sola variable o sin variables (resultado fijo)
-- Es un procedimiento de pasos sin magnitudes numéricas
+NO son interactivos:
+- Valores numéricos característicos de un material o fenómeno (10^8 dislocaciones/cm³,
+  E/1000, resistencia típica de X)
+- Derivaciones algebraicas paso a paso donde el resultado final es una expresión fija
+- Igualdades que sustituyen una expresión por otra equivalente sin añadir variables
+  nuevas
+- Definiciones, descripciones o clasificaciones textuales sin relación funcional
+  explorable
+- Procedimientos de pasos sin magnitudes con rango útil
+
+Sí son interactivos (además de tablas comparativas):
+- Relaciones paramétricas con variables manipulables (Hall-Petch, concentración de
+  tensiones, tensión de clivaje en función del ángulo)
+- Efectos físicos comparables donde variar un parámetro (temperatura, velocidad de
+  carga, geometría) cambia el comportamiento de forma no trivial
 
 Responde ÚNICAMENTE con este formato, sin texto adicional:
 
 <INTERACTIVO>true|false</INTERACTIVO>
 <TIPO>ecuacion|relacion|tabla|ninguno</TIPO>
 <NOMBRE>nombre descriptivo de máximo 5 palabras</NOMBRE>
-<VARIABLES>lista de variables separadas por coma, o "ninguna"</VARIABLES>"""
+<VARIABLES>lista de variables separadas por coma, o "ninguna"</VARIABLES>
+<CONFIANZA>ALTA|MEDIA|BAJA</CONFIANZA>
+
+CONFIANZA:
+- ALTA: relación funcional clara con variables explorables identificadas
+- MEDIA: relación plausible pero el fragmento no detalla todos los rangos
+- BAJA: dudoso, constante empírica, derivación algebraica o contenido cualitativo"""
+
+
+# ---------------------------------------------------------------------------
+# Sistema: razonador de visualización
+# Modelo: Sonnet — decide el patrón de representación antes de generar código
+# ---------------------------------------------------------------------------
+
+PROMPT_RAZONADOR_VISUALIZACION = """Eres un analizador de contenido técnico de ingeniería. Tu única función es decidir si una ecuación o relación merece una representación visual interactiva y, en caso afirmativo, qué patrón usar. NO generas código HTML ni JavaScript.
+
+INPUT QUE RECIBIRÁS:
+- Nombre de la ecuación o relación
+- Expresión matemática (LaTeX)
+- Variables de entrada y salida (si se conocen)
+- Texto del fragmento: contexto completo del material original que rodea la expresión
+
+INSTRUCCIONES:
+
+0. CRITERIO DE VALOR PEDAGÓGICO (obligatorio, antes de elegir patrón)
+   Lee el TEXTO DEL FRAGMENTO completo, no solo la expresión matemática.
+   Responde internamente: ¿Qué comprensión nueva obtiene el alumno al mover
+   un slider que no pueda obtener leyendo el texto del fragmento?
+
+   Si la respuesta es "ninguna" o "la misma que en el texto", devuelve SOLO:
+   <VISUALIZABLE>NO</VISUALIZABLE>
+   <RAZON>explicación de una frase</RAZON>
+   y no emitas el resto de tags.
+
+   Casos típicos de contenido NO visualizable:
+   - Observaciones empíricas expresadas como factor fijo (E/10, E/1000,
+     "aproximadamente 3 veces mayor")
+   - Definiciones con una sola variable sin rango de exploración útil
+   - Expresiones donde todas las variables son constantes del material
+     sin rango físico significativo
+   - Descripciones cualitativas que contienen algún símbolo matemático
+     pero no expresan una relación funcional explorable
+
+   Si el contenido SÍ es visualizable, emite:
+   <VISUALIZABLE>SI</VISUALIZABLE>
+   y continúa con los pasos siguientes.
+
+1. Lee la expresión matemática y el contexto físico del fragmento de Markdown original.
+
+2. Clasifica la visualización más adecuada eligiendo UNO de estos patrones genéricos:
+
+   - CURVA_SIMPLE: una variable dependiente, una independiente, sin parámetros adicionales de peso. La gráfica Y=f(X) es suficiente.
+
+   - FAMILIA_CURVAS: una variable dependiente, una independiente, más uno o dos parámetros que modulan la respuesta (propiedad del material, geometría, configuración del sistema). La representación adecuada es múltiples curvas simultáneas para valores representativos del parámetro, no una sola curva que se desplaza.
+
+   - REGION_CRITERIO: la expresión define una frontera entre dos estados (seguro/falla, estable/inestable, válido/inválido). La representación adecuada es un plano dividido en zonas con el estado actual del usuario como punto móvil. Aplica a cualquier criterio de falla, estabilidad o validez en cualquier dominio de ingeniería.
+
+   - MAPA_2D: tres o más variables con peso comparable. La representación adecuada es un heatmap donde X e Y son las dos variables de mayor peso y el color es el resultado. Las variables restantes son sliders auxiliares.
+
+   - TRAYECTORIA: la expresión describe un proceso o ciclo en un espacio de estados (P-V, T-S, tensión-deformación cíclica, etc.). La representación adecuada es la trayectoria animada o interactiva sobre el espacio de estados.
+
+   - RESPUESTA_FRECUENCIAL: la variable independiente es la frecuencia o el tiempo y la expresión describe una respuesta dinámica. La representación adecuada es magnitud y fase (o similar) en escala logarítmica.
+
+3. Identifica qué variables son los ejes principales (X, Y) y cuáles son parámetros secundarios (sliders auxiliares).
+
+4. Indica si algún eje requiere escala logarítmica (cuando los valores varían más de 2 órdenes de magnitud en el rango físico habitual).
+
+5. Si <VISUALIZABLE>SI</VISUALIZABLE>, devuelve SOLO el siguiente XML, sin texto adicional:
+
+<VISUALIZACION>
+  <VISUALIZABLE>SI</VISUALIZABLE>
+  <PATRON>NOMBRE_DEL_PATRON</PATRON>
+  <EJE_X>variable y unidades si se conocen</EJE_X>
+  <EJE_Y>variable y unidades si se conocen</EJE_Y>
+  <PARAMETROS_SLIDER>lista separada por comas</PARAMETROS_SLIDER>
+  <ESCALA_LOG_X>SI/NO</ESCALA_LOG_X>
+  <ESCALA_LOG_Y>SI/NO</ESCALA_LOG_Y>
+  <JUSTIFICACION>una frase explicando la elección</JUSTIFICACION>
+  <RANGO_VARIABLES>
+    variable1: min=X, max=Y, default=Z
+    variable2: min=X, max=Y, default=Z
+  </RANGO_VARIABLES>
+  <ZONA_VALIDEZ>descripción de condiciones límite si las hay, o "ninguna" si no aplica</ZONA_VALIDEZ>
+</VISUALIZACION>
+
+RANGO_VARIABLES y ZONA_VALIDEZ son obligatorios cuando <VISUALIZABLE>SI</VISUALIZABLE>.
+Extrae rangos pedagógicos útiles (min, max, default) para explorar la relación en
+clase — no el rango físico total teórico. El default debe ser un valor representativo
+del material o del ejemplo del profesor, no el punto medio del rango.
+Si se proporciona MATERIAL ORIGINAL DEL PROFESOR, prioriza los valores numéricos
+que aparecen ahí para min, max y default.
+
+Si no hay suficiente información para determinar el patrón con confianza, usar CURVA_SIMPLE como fallback e indicarlo en JUSTIFICACION."""
 
 
 # ---------------------------------------------------------------------------
 # Sistema: generador de bloques HTML interactivos
-# Modelo: Sonnet — generacion de logica JS compleja + Chart.js
+# Modelo: Sonnet — generacion de logica JS compleja + Chart.js / canvas
 # ---------------------------------------------------------------------------
 
-PROMPT_GENERADOR_HTML = """Eres un generador de bloques HTML interactivos para material docente de ingeniería. Generas código HTML autocontenido que permite a estudiantes explorar ecuaciones y relaciones paramétricas de forma visual.
+PROMPT_GENERADOR_HTML = """Eres un generador de bloques HTML interactivos para material docente de ingeniería. El diseño debe ser visualmente atractivo e interactivo — no académico ni corporativo. Generas un bloque autocontenido por ecuación.
 
 INPUT QUE RECIBIRÁS:
 - Nombre de la ecuación o relación
 - Expresión LaTeX de la ecuación
 - Variables de entrada con sus unidades y rango físico razonable
 - Variable de salida con sus unidades
-- Contexto: párrafo del material original que explica la ecuación
+- Contexto: fragmento del material original (incluye encabezados ### si existen)
+- DECISIÓN DE VISUALIZACIÓN: patrón elegido por el razonador (PATRON, EJE_X, EJE_Y, PARAMETROS_SLIDER, ESCALA_LOG_X, ESCALA_LOG_Y, JUSTIFICACION)
 
-FORMATO DE SALIDA OBLIGATORIO:
-Genera exactamente un bloque HTML con esta estructura en este orden:
+Implementa el patrón indicado. El rediseño visual aplica a todos los patrones.
 
-1. CABECERA: título H2 con el nombre de la ecuación, subtítulo con la expresión en notación matemática usando MathJax (CDN: https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js)
+── SISTEMA DE DISEÑO ──────────────────
 
-2. EXPLICACIÓN: párrafo de 2-3 líneas extraído y parafraseado del contexto proporcionado. No inventar contenido.
+Fuentes (importar en el <style> del bloque vía @import de Google Fonts):
+  - Títulos: 'Playfair Display', serif, weight 600
+  - Cuerpo y controles: 'DM Sans', sans-serif, weight 400/500
 
-3. PARÁMETROS: un slider por cada variable de entrada. Cada slider tiene: etiqueta con nombre y unidades, valor mínimo, máximo y paso coherentes con el rango físico proporcionado, valor numérico visible que se actualiza en tiempo real.
+Paleta:
+  - Acento principal: #185FA5
+  - Acento hover: #0C447C
+  - Fondo de página: #F7F5F0
+  - Superficie de card: #FFFFFF
+  - Superficie de control: #F0EEE9
+  - Borde sutil: rgba(0,0,0,0.08)
+  - Texto primario: #1A1A1A
+  - Texto secundario: #6B6860
+  - Texto terciario: #9A9890
 
-4. RESULTADO: campo de solo lectura que muestra el valor calculado de la variable de salida con sus unidades, actualizado en tiempo real al mover cualquier slider.
+Prohibido: gradientes, box-shadow, blur, glow.
 
-5. GRÁFICA: un canvas con Chart.js versión 4 (CDN: https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js). La gráfica muestra la variable de salida en el eje Y frente a la variable de entrada más relevante en el eje X, manteniendo fijas las demás en su valor actual. Se actualiza en tiempo real. Ejes etiquetados con nombre y unidades.
+── ESTRUCTURA DE CADA BLOQUE ──────────
 
-6. INTERPRETACIÓN: un párrafo de texto dinámico generado por JS que cambia según el valor del resultado. Define al menos 3 rangos con su significado físico usando el contexto proporcionado.
+Envuelve todo en un div exterior (card):
+  background #FFFFFF, border 0.5px solid rgba(0,0,0,0.08),
+  border-radius 14px, padding 1.75rem 2rem.
+  margin-bottom 1.25rem entre secciones internas.
+
+Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
+
+1. ETIQUETA DE SECCIÓN
+   <p> uppercase, 11px, letter-spacing 0.08em, color #9A9890, margin-bottom 0.4rem.
+   Texto: el encabezado ### del fragmento de contexto original (no el nombre
+   del elemento — el contexto temático del que viene). Si no hay ###, inferir
+   el tema del contexto en 2-4 palabras.
+
+2. TÍTULO
+   <h2> Playfair Display, 24px, weight 600, color #1A1A1A.
+   El nombre descriptivo del elemento.
+
+3. DESCRIPCIÓN
+   <p> DM Sans, 14px, line-height 1.65, color #6B6860.
+   Máximo 3 líneas. Solo desde el contexto proporcionado.
+
+4. ECUACIÓN EN DISPLAY
+   Centrada, padding 1rem 0 1.25rem, font-size 20px.
+   MathJax (\\( ... \\) o \\[ ... \\]). Sin caja, sin borde.
+
+5. GRID DE CONTROLES
+   display:grid, grid-template-columns: repeat(2, 1fr), gap 12px.
+   Si hay un solo slider, 1 columna.
+   Cada control en card: background #F0EEE9, border-radius 10px,
+   padding 14px 16px, sin borde.
+   Dentro de cada card:
+     - Header flex, space-between, baseline:
+       - Label: 13px, #6B6860, variable con unidades
+       - Valor actual: 15px, weight 500, #185FA5
+     - Slider: width 100%, margin-top 8px, accent-color #185FA5
+
+6. GRÁFICA (según patrón — ver abajo)
+   Contenedor: background #F0EEE9, border-radius 12px, padding
+   1rem 1.25rem 2rem 2.5rem, position relative, height 240px,
+   margin 1.25rem 0.
+   Etiquetas de ejes: position absolute, 11px, #9A9890.
+   Eje Y: rotado -90deg, anclado izquierda. Eje X: centrado abajo.
+   Canvas Chart.js dentro sin padding propio.
+
+7. RESULTADO ACTUAL
+   Strip horizontal: border-left 3px solid #185FA5, border-radius 0 10px 10px 0,
+   background #F0EEE9, padding 14px 18px, display flex, gap 16px,
+   align-items center, margin 1.25rem 0.
+   - Valor principal: 22px, weight 500, #185FA5. Actualiza en tiempo real.
+     Valor numérico calculado con unidades.
+   - Descripción contextual: 13px, #6B6860, max 1 línea.
+     "para [variable] = [valor] con los parámetros actuales"
+
+8. INSIGHT DINÁMICO
+   Contenedor: border 0.5px solid rgba(0,0,0,0.08), border-radius 10px,
+   padding 14px 18px, display flex, gap 12px, align-items flex-start.
+   Sin color de fondo. NO usar blockquote.
+   - Punto decorativo: 8px × 8px, border-radius 50%, background #185FA5,
+     margin-top 5px, flex-shrink 0.
+   - Texto: 13px, #6B6860, line-height 1.6. Mínimo 2 rangos que cambien
+     según el slider. Solo desde el contexto original.
+
+── INSTRUCCIONES POR PATRÓN (sección 6) ──
+
+CURVA_SIMPLE:
+  Chart.js línea. Escala logarítmica si ESCALA_LOG_X/Y = SI.
+  Sin leyenda Chart.js si hay una sola serie.
+
+FAMILIA_CURVAS:
+  Chart.js multilínea, 4 curvas por parámetro (mín, 33%, 66%, máx).
+  plugins.legend.display: false.
+  Etiquetas inline: <span> position:absolute al final de cada familia de curvas
+  (no por curva individual), calculadas con chart.getDatasetMeta() tras render.
+  Div contenedor position:relative sobre el canvas.
+  Máximo 2 familias de curvas, máximo 8 datasets.
+  Slider principal: curvas activas #185FA5, resto #CCCCCC borderDash [4,4].
+
+REGION_CRITERIO:
+  Chart.js scatter. Zonas fill verde/rojo, frontera como línea, punto móvil.
+  Leyenda mínima si aplica: 12px, bottom-left, sin borde.
+
+MAPA_2D:
+  Canvas HTML5 nativo, grid 80×80, escala #185FA5 → blanco → #C0392B.
+  Leyenda vertical derecha. Sliders recalculan con event 'input'. Sin Chart.js.
+
+TRAYECTORIA:
+  Chart.js scatter+línea. Slider progreso 0-100%. Referencia gris claro,
+  trayectoria recorrida #185FA5. Sin leyenda si una sola serie.
+
+RESPUESTA_FRECUENCIAL:
+  Dos Chart.js apilados: magnitud y fase, eje X logarítmico.
+  Leyenda mínima bottom-left si múltiples series.
+
+INICIALIZACIÓN LAZY (obligatorio — pestañas del contenedor):
+  El script del bloque NO debe ejecutar Chart.js ni cálculos al cargarse.
+  Todo el código de inicialización (creación del chart, primera update(),
+  primera evaluación, MathJax del bloque) debe estar dentro de:
+
+    window['initBloque_{SLUG_EXACTO}'] = function() { ... };
+
+  El nombre de la función de inicialización debe ser EXACTAMENTE
+  window['initBloque_{SLUG_EXACTO}'] donde SLUG_EXACTO es el valor
+  proporcionado en el mensaje de usuario. No abreviar ni modificar el slug.
+
+  Dentro de initBloque_{slug}():
+    if (window[chartId]) window[chartId].destroy() antes de recrear el chart.
+    Crear el chart, llamar a update_{slug}() una vez al final.
+
+  Los event listeners de sliders (oninput) pueden estar fuera de init — solo
+  llaman a update_{slug}() u otras funciones que no dependen de dimensiones
+  iniciales del canvas. update_{slug}() debe ser invocable en cualquier momento
+  tras la primera inicialización.
+
+  NO usar DOMContentLoaded ni ejecución inmediata para crear charts.
+
+RANGOS DE SLIDERS (obligatorio si se proporcionan en RANGO_VARIABLES):
+  Los atributos min, max y value de cada input[type=range] DEBEN ser
+  exactamente los valores de RANGO_VARIABLES. No usar otros valores.
+  Si RANGO_VARIABLES no especifica un rango para una variable, usar:
+  min=0, max=100, value=50 como fallback neutro.
+  Si ZONA_VALIDEZ no es "ninguna", reflejarla en la interpretación dinámica.
 
 RESTRICCIONES TÉCNICAS:
-- Todo el CSS y JS inline en el mismo bloque, sin archivos externos salvo los dos CDN indicados
-- Chart.js: usar siempre new Chart(ctx, {type: 'line', data: {...}, options: {...}}) y destruir el chart anterior con if (window.myChart) window.myChart.destroy() antes de recrear
-- Los IDs de todos los elementos HTML deben llevar el prefijo bloque_ seguido de un slug del nombre de la ecuación para evitar conflictos cuando se concatenen varios bloques
-- El cálculo de la variable de salida se hace en JS puro, sin librerías matemáticas externas
-- Paleta: fondo del bloque #F7F5F0, acento #185FA5, tipografía system-ui
+- CSS y JS inline en el bloque; @import de Google Fonts permitido en <style>
+- Chart.js: destrucción previa dentro de initBloque_{slug}()
+- IDs con prefijo bloque_{slug}_ obligatorio
+- Cálculo en JS puro, sin librerías matemáticas externas
+- Sin gradientes, box-shadow, blur ni glow
 
 RESTRICCIÓN DE CONTENIDO:
-La explicación y la interpretación se construyen exclusivamente a partir del contexto proporcionado. Si el contexto no contiene información suficiente para un rango de interpretación, omitir ese rango antes que inventar.
+Descripción e insight solo desde el contexto. Si falta información, omitir
+rangos antes que inventar.
 
-Devuelve ÚNICAMENTE el HTML del bloque, sin explicaciones, sin backticks, sin texto antes ni después.
+Devuelve ÚNICAMENTE el HTML del bloque, sin explicaciones, sin backticks.
 
-IMPORTANTE: El bloque que generes se insertará dentro de un HTML contenedor que ya carga MathJax y Chart.js en el head. NO incluyas tags <html>, <head>, <body>, ni ningún CDN. Genera únicamente el contenido del panel: estilos inline o un bloque <style> con selectores prefijados por el slug, y el JS del bloque. Los IDs de todos los elementos deben empezar por bloque_{slug}_ donde {slug} es el nombre de la ecuación en minúsculas con guiones."""
+IMPORTANTE: El bloque se inserta en un contenedor que ya carga MathJax y
+Chart.js v4. NO incluyas <html>, <head>, <body> ni CDN de MathJax/Chart.js.
+Genera <style> con selectores prefijados bloque_{slug}_ y el markup+JS del bloque."""
 
 
 # ---------------------------------------------------------------------------
@@ -96,12 +334,73 @@ def build_detector_message(fragmento: str) -> str:
     return fragmento
 
 
+def build_razonador_message(
+    elemento: dict,
+    texto_original: str | None = None,
+) -> str:
+    """Build the user message for Sonnet to decide the visualization pattern.
+
+    Args:
+        elemento: Element dict with keys nombre, expresion, contexto.
+                  Optional: variables_entrada, variable_salida.
+        texto_original: Optional text extracted from professor's PDF/PPTX.
+
+    Returns:
+        User message string ready to send to the API.
+    """
+    nombre = elemento.get("nombre", "Sin nombre")
+    expresion = elemento.get("expresion", "")
+    contexto = elemento.get("contexto", "")
+    variables_entrada: list[dict] = elemento.get("variables_entrada", [])
+    variable_salida: dict = elemento.get(
+        "variable_salida", {"nombre": "", "unidades": ""}
+    )
+
+    lines = [f"NOMBRE: {nombre}"]
+    if texto_original:
+        lines += [
+            "",
+            "MATERIAL ORIGINAL DEL PROFESOR (contexto ampliado):",
+            "---",
+            texto_original[:8000],
+            "---",
+            "Usa este material para:",
+            "1. Determinar los rangos físicos realistas de cada variable "
+            "(mínimo, máximo, valor por defecto) según los valores que "
+            "aparecen en el material original.",
+            "2. Confirmar o ajustar el patrón de visualización elegido "
+            "contrastando con cómo el profesor presenta el concepto.",
+            "3. Identificar si hay condiciones de contorno, zonas de validez "
+            "o casos límite mencionados en el material que deban "
+            "reflejarse en la visualización.",
+        ]
+    lines += [
+        "",
+        "EXPRESIÓN MATEMÁTICA:",
+        expresion,
+        "",
+        "TEXTO DEL FRAGMENTO (leer completo para evaluar valor pedagógico):",
+        contexto.strip(),
+    ]
+    if variables_entrada:
+        lines += ["", "VARIABLES DE ENTRADA:"]
+        for v in variables_entrada:
+            unidades = v.get("unidades", "")
+            rango = ""
+            if "min" in v and "max" in v:
+                rango = f": rango {v['min']} – {v['max']}"
+            lines.append(f"  - {v.get('nombre', '')} [{unidades}]{rango}")
+    if variable_salida.get("nombre"):
+        lines += [
+            "",
+            f"VARIABLE DE SALIDA: {variable_salida['nombre']}"
+            f" [{variable_salida.get('unidades', '')}]",
+        ]
+    return "\n".join(lines)
+
+
 def build_generador_message(
-    nombre: str,
-    latex: str,
-    variables_entrada: list[dict],
-    variable_salida: dict,
-    contexto: str,
+    elemento: dict, visualizacion: dict, slug: str
 ) -> str:
     """Build the user message for Sonnet to generate an interactive HTML block.
 
@@ -115,32 +414,75 @@ def build_generador_message(
         nombre (str): output variable symbol or name
         unidades (str): physical units of the output
 
+    visualizacion must have keys from the razonador XML:
+        PATRON, EJE_X, EJE_Y, PARAMETROS_SLIDER,
+        ESCALA_LOG_X, ESCALA_LOG_Y, JUSTIFICACION
+
     Args:
-        nombre: Descriptive name of the equation or relation (≤5 words).
-        latex: LaTeX expression WITHOUT surrounding $ signs.
-        variables_entrada: List of input variable dicts (see above).
-        variable_salida: Output variable dict (see above).
-        contexto: Paragraph from the source material explaining the equation.
-                  Used verbatim — Sonnet is instructed not to invent content.
+        elemento: Element dict (nombre, expresion, contexto, variables_entrada,
+                  variable_salida).
+        visualizacion: Parsed visualization decision from the razonador step.
+        slug: Slug exacto del panel (misma fuente que generador_html._slug).
 
     Returns:
         User message string ready to send to the API.
     """
+    nombre = elemento.get("nombre", "Sin nombre")
+    latex = elemento.get("expresion", "")
+    variables_entrada: list[dict] = elemento.get("variables_entrada", [])
+    variable_salida: dict = elemento.get(
+        "variable_salida", {"nombre": "resultado", "unidades": ""}
+    )
+    contexto = elemento.get("contexto", "")
+
     lines = [
         f"NOMBRE: {nombre}",
+        f"SLUG_EXACTO: {slug}",
         f"EXPRESIÓN LaTeX: {latex}",
         "",
         "VARIABLES DE ENTRADA:",
     ]
-    for v in variables_entrada:
-        lines.append(
-            f"  - {v['nombre']} [{v['unidades']}]: rango {v['min']} – {v['max']}"
-        )
+    if variables_entrada:
+        for v in variables_entrada:
+            nombre_v = v.get("nombre", "")
+            unidades_v = v.get("unidades", "")
+            if "min" in v and "max" in v:
+                lines.append(
+                    f"  - {nombre_v} [{unidades_v}]: "
+                    f"rango {v['min']} – {v['max']}"
+                )
+            else:
+                lines.append(f"  - {nombre_v} [{unidades_v}]")
+    else:
+        lines.append("  (ninguna especificada — inferir del contexto)")
     lines += [
         "",
-        f"VARIABLE DE SALIDA: {variable_salida['nombre']} [{variable_salida['unidades']}]",
+        f"VARIABLE DE SALIDA: {variable_salida.get('nombre', 'resultado')}"
+        f" [{variable_salida.get('unidades', '')}]",
         "",
         "CONTEXTO DEL MATERIAL ORIGINAL:",
         contexto.strip(),
+        "",
+        "DECISIÓN DE VISUALIZACIÓN (del razonador — seguir obligatoriamente):",
+        f"  PATRÓN: {visualizacion.get('PATRON', 'CURVA_SIMPLE')}",
+        f"  EJE_X: {visualizacion.get('EJE_X', '')}",
+        f"  EJE_Y: {visualizacion.get('EJE_Y', '')}",
+        f"  PARÁMETROS SLIDER: {visualizacion.get('PARAMETROS_SLIDER', '')}",
+        f"  ESCALA LOG X: {visualizacion.get('ESCALA_LOG_X', 'NO')}",
+        f"  ESCALA LOG Y: {visualizacion.get('ESCALA_LOG_Y', 'NO')}",
+        f"  JUSTIFICACIÓN: {visualizacion.get('JUSTIFICACION', '')}",
     ]
+    if visualizacion.get("ZONA_VALIDEZ"):
+        lines.append(f"  ZONA_VALIDEZ: {visualizacion['ZONA_VALIDEZ']}")
+    if visualizacion.get("RANGO_VARIABLES"):
+        lines += [
+            "",
+            "RANGOS DE SLIDERS (usar exactamente estos valores):",
+            visualizacion["RANGO_VARIABLES"],
+            "",
+            "INSTRUCCIÓN DE RANGOS (no negociable):",
+            "Los atributos min, max y value de cada input[type=range] DEBEN",
+            "coincidir con RANGO_VARIABLES. No inferir ni ajustar otros valores.",
+            "Si una variable no aparece en RANGO_VARIABLES: min=0, max=100, value=50.",
+        ]
     return "\n".join(lines)

@@ -1,7 +1,7 @@
 # Agente Contenido — Estado del proyecto
 
 **Repositorio:** `berns-dev/agente-contenido-tfg`
-**Última actualización:** 2026-05-30
+**Última actualización:** 2026-06-03
 
 ---
 
@@ -9,19 +9,21 @@
 
 Convierte PDFs y PPTXs de material docente a Markdown estructurado y fiel al original. Incluye validador de fidelidad léxica (umbral 0.85), chunking semántico, selección de modelo por heurística y protocolo XML para parseo robusto.
 
+Cuando el profesor aporta el `.md` del Agente Organizador, el agente lee las horas lectivas del bloque temático seleccionado y calibra la extensión y profundidad del Markdown en proporción a ese tiempo. Esta información se inyecta como prefijo del user message (`_DENSITY_CONTEXT_TMPL` en `classifier.py`) sin alterar el SYSTEM_PROMPT ni el principio de no añadir contenido ausente en el material.
+
 **Principio rector:** Extrae y estructura. No inventa. Si algo no está en el material del profesor, no aparece en el output.
 
 ---
 
 ## Estado
 
-**~90% implementado.**
+Funcional. Validado con:
+- Temas 1 y 2 de Tecnología de Materiales (PDFs con texto extraíble)
+- Validación con PPTX reales: pendiente
 
-- Validado parcialmente: Temas 1 y 2 de Tecnología de Materiales (PDFs con texto extraíble)
-- Pendiente: validación end-to-end con PPTX reales
-- Pendiente: decisión sobre reconstrucción posicional para PDFs exportados desde PowerPoint (aplazada a próxima reunión con tutor)
-
-**Limitación documentada:** PDFs exportados desde PPTX destruyen la estructura semántica irreversiblemente. Decisión adoptada: tratar como formato degradado con aviso visible en UI, preferir PPTX nativo.
+Limitación documentada: PDFs exportados desde PPTX destruyen la estructura semántica
+irreversiblemente. Decisión adoptada: tratar como formato degradado con aviso visible
+en UI, preferir PPTX nativo. Ver datos empíricos en sección Limitaciones documentadas.
 
 ---
 

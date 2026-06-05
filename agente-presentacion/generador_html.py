@@ -1,9 +1,12 @@
 """Generacion de HTML interactivo autocontenido con Chart.js.
 
 Pipeline:
-  1. Para cada elemento seleccionado por el profesor, llamar a Sonnet
-     (MODEL_SMART) con PROMPT_GENERADOR_HTML + build_generador_message()
-     para generar el bloque HTML del panel (sliders, Chart.js, JS).
+  1. Para cada elemento seleccionado por el profesor:
+     a) Llamar a Sonnet (MODEL_SMART) con PROMPT_RAZONADOR_VISUALIZACION
+        + build_razonador_message() para decidir el patrón de visualización.
+     b) Parsear el XML <VISUALIZACION> de la respuesta.
+     c) Llamar a Sonnet con PROMPT_GENERADOR_HTML + build_generador_message()
+        para generar el bloque HTML adaptado al patrón elegido.
      Las llamadas se hacen en paralelo con ThreadPoolExecutor (max 4 workers).
      El orden original se preserva por indice, no por orden de finalizacion.
   2. Envolver los bloques en una pagina HTML fija (template Python con
@@ -36,11 +39,26 @@ from config import (
     MODEL_SMART,
     REQUEST_TIMEOUT_SECONDS,
 )
-from prompts import PROMPT_GENERADOR_HTML, build_generador_message
+from prompts import (
+    PROMPT_GENERADOR_HTML,
+    PROMPT_RAZONADOR_VISUALIZACION,
+    build_generador_message,
+    build_razonador_message,
+)
 
 
 _MAX_RETRIES = 2
 _MAX_WORKERS = 4  # llamadas Sonnet simultaneas maximas
+_MAX_TOKENS_HTML = 8192
+
+_PATRONES_VALIDOS = frozenset({
+    "CURVA_SIMPLE",
+    "FAMILIA_CURVAS",
+    "REGION_CRITERIO",
+    "MAPA_2D",
+    "TRAYECTORIA",
+    "RESPUESTA_FRECUENCIAL",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +106,7 @@ _HTML_TEMPLATE = """\
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title><!--TITULO--></title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
   <!-- CDN cargados una sola vez: los bloques individuales no deben incluirlos -->
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -95,60 +114,65 @@ _HTML_TEMPLATE = """\
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: system-ui, -apple-system, sans-serif;
+      font-family: 'DM Sans', sans-serif;
       background: #F7F5F0;
-      color: #2C2C2A;
+      color: #1A1A1A;
       line-height: 1.6;
     }
 
     /* ---- Page header ---- */
     .page-header {
       background: #185FA5;
-      color: #fff;
-      padding: 2rem 2.5rem 1.5rem;
+      color: #FFFFFF;
+      padding: 1.5rem 2rem;
+      font-family: 'DM Sans', sans-serif;
     }
     .page-header h1 {
-      font-size: 1.75rem;
-      font-weight: 700;
+      font-size: 22px;
+      font-weight: 500;
       margin-bottom: 0.25rem;
     }
     .page-header .subtitle {
-      font-size: 0.875rem;
-      opacity: 0.8;
+      font-size: 14px;
+      opacity: 0.75;
     }
 
-    /* ---- CSS-only tab system ----
-       Radio inputs must precede .tabs-wrapper in the DOM so the
-       general sibling combinator (~) can reach it from :checked. */
+    /* ---- CSS-only tab system (pill bar) ---- */
     .tab-inputs { display: none; }
 
     .tabs-wrapper {
-      max-width: 960px;
-      margin: 2rem auto;
-      padding: 0 1.5rem 4rem;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
     }
 
     .tab-labels {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.5rem;
-      border-bottom: 2px solid #D3D1C7;
-      padding-bottom: 0.5rem;
-      margin-bottom: 1.75rem;
+      gap: 4px;
+      background: #F0EEE9;
+      border-radius: 12px;
+      padding: 4px;
+      margin-bottom: 2rem;
+      border-bottom: none;
     }
 
     .tab-label {
+      flex: 1;
+      min-width: 0;
       cursor: pointer;
-      padding: 0.45rem 1rem;
-      border-radius: 4px 4px 0 0;
-      font-size: 0.875rem;
+      padding: 8px;
+      font-size: 13px;
       font-weight: 500;
-      color: #5F5E5A;
-      border: 1px solid transparent;
-      border-bottom: none;
-      transition: color 0.15s, background 0.15s;
+      font-family: 'DM Sans', sans-serif;
+      text-align: center;
+      border-radius: 10px;
+      color: #6B6860;
+      background: transparent;
+      border: none;
+      transition: background 0.15s, color 0.15s;
     }
-    .tab-label:hover { color: #185FA5; background: #E6F1FB; }
+    .tab-label:hover { background: rgba(0,0,0,0.04); }
 
     .tab-panel { display: none; }
 
@@ -160,8 +184,8 @@ _HTML_TEMPLATE = """\
       text-align: center;
       padding: 2rem;
       font-size: 0.8rem;
-      color: #888780;
-      border-top: 1px solid #D3D1C7;
+      color: #9A9890;
+      border-top: 0.5px solid rgba(0,0,0,0.08);
       margin-top: 3rem;
     }
   </style>
@@ -188,9 +212,194 @@ _HTML_TEMPLATE = """\
   Generado a partir del material original del profesor.
 </footer>
 
+<script>
+(function () {
+  function initPanel(panel) {
+    if (!panel || panel.dataset.initialized === "true") return;
+    var slug = panel.dataset.slug;
+    var initName = "initBloque_" + slug;
+
+    function runInit() {
+      if (typeof window[initName] === "function") {
+        window[initName]();
+      }
+      panel.dataset.initialized = "true";
+    }
+
+    if (window.MathJax && window.MathJax.typesetPromise) {
+      MathJax.typesetPromise([panel]).then(runInit).catch(runInit);
+    } else {
+      runInit();
+    }
+  }
+
+  function setupTabs() {
+    var inputs = document.querySelectorAll(".tab-inputs");
+    inputs.forEach(function (input) {
+      input.addEventListener("change", function () {
+        if (!this.checked) return;
+        var panelId = this.getAttribute("data-panel-id");
+        initPanel(document.getElementById(panelId));
+      });
+    });
+    var checked = document.querySelector(".tab-inputs:checked");
+    if (checked) {
+      initPanel(document.getElementById(checked.getAttribute("data-panel-id")));
+    }
+  }
+
+  function boot() {
+    if (window.MathJax && window.MathJax.startup && window.MathJax.startup.promise) {
+      MathJax.startup.promise.then(setupTabs);
+    } else {
+      setupTabs();
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+
 </body>
 </html>
 """
+
+
+# ---------------------------------------------------------------------------
+# Parsing XML de visualización (mismo patrón que agente-contenido/classifier.py)
+# ---------------------------------------------------------------------------
+
+def _extract_xml_tag(raw: str, tag: str) -> str | None:
+    """Extrae el contenido entre <TAG> y </TAG>, tolerando espacios y saltos."""
+    match = re.search(
+        rf"<{tag}>\s*(.*?)\s*</{tag}>",
+        raw,
+        re.DOTALL | re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else None
+
+
+def _fallback_visualizacion(
+    elemento: dict,
+    patron_invalido: str | None = None,
+) -> dict:
+    """Dict de visualización por defecto cuando el parsing falla."""
+    variables_entrada: list[dict] = elemento.get("variables_entrada", [])
+    variable_salida: dict = elemento.get(
+        "variable_salida", {"nombre": "Y", "unidades": ""}
+    )
+    params = ", ".join(
+        v.get("nombre", "") for v in variables_entrada if v.get("nombre")
+    )
+    eje_x = (
+        variables_entrada[0].get("nombre", "X")
+        if variables_entrada
+        else "X"
+    )
+    justificacion = (
+        f"Fallback: patrón '{patron_invalido}' no reconocido."
+        if patron_invalido
+        else "Fallback: no se pudo parsear la respuesta del razonador."
+    )
+    return {
+        "VISUALIZABLE": "SI",
+        "PATRON": "CURVA_SIMPLE",
+        "EJE_X": eje_x,
+        "EJE_Y": variable_salida.get("nombre", "Y"),
+        "PARAMETROS_SLIDER": params,
+        "ESCALA_LOG_X": "NO",
+        "ESCALA_LOG_Y": "NO",
+        "JUSTIFICACION": justificacion,
+        "RANGO_VARIABLES": "",
+        "ZONA_VALIDEZ": "",
+    }
+
+
+def _parse_visualizacion(raw: str, elemento: dict) -> dict:
+    """Parsea la respuesta XML del razonador (visualizable o patrón)."""
+    visualizable = _extract_xml_tag(raw, "VISUALIZABLE")
+    if visualizable and visualizable.upper() == "NO":
+        return {
+            "VISUALIZABLE": "NO",
+            "RAZON": _extract_xml_tag(raw, "RAZON") or "Sin valor pedagógico interactivo.",
+        }
+
+    patron = _extract_xml_tag(raw, "PATRON")
+    if not patron or patron not in _PATRONES_VALIDOS:
+        return _fallback_visualizacion(elemento, patron)
+
+    return {
+        "VISUALIZABLE": "SI",
+        "PATRON": patron,
+        "EJE_X": _extract_xml_tag(raw, "EJE_X") or "",
+        "EJE_Y": _extract_xml_tag(raw, "EJE_Y") or "",
+        "PARAMETROS_SLIDER": _extract_xml_tag(raw, "PARAMETROS_SLIDER") or "",
+        "ESCALA_LOG_X": _extract_xml_tag(raw, "ESCALA_LOG_X") or "NO",
+        "ESCALA_LOG_Y": _extract_xml_tag(raw, "ESCALA_LOG_Y") or "NO",
+        "JUSTIFICACION": _extract_xml_tag(raw, "JUSTIFICACION") or "",
+        "RANGO_VARIABLES": _extract_xml_tag(raw, "RANGO_VARIABLES") or "",
+        "ZONA_VALIDEZ": _extract_xml_tag(raw, "ZONA_VALIDEZ") or "",
+    }
+
+
+def _razonar_visualizacion(
+    elemento: dict,
+    client: anthropic.Anthropic,
+    verbose: bool = False,
+    texto_original: str | None = None,
+) -> dict:
+    """Llama al razonador Sonnet y devuelve el dict de visualización parseado."""
+    nombre = elemento.get("nombre", "Sin nombre")
+    user_msg = build_razonador_message(elemento, texto_original)
+
+    response = client.messages.create(
+        model=MODEL_SMART,
+        max_tokens=1024,
+        system=PROMPT_RAZONADOR_VISUALIZACION,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    raw = response.content[0].text.strip()
+    visualizacion = _parse_visualizacion(raw, elemento)
+
+    if verbose and visualizacion.get("VISUALIZABLE") != "NO":
+        print(f"\n[{nombre}]")
+        print(f"  Patrón: {visualizacion['PATRON']}")
+        print(f"  Eje X: {visualizacion['EJE_X']}")
+        print(f"  Eje Y: {visualizacion['EJE_Y']}")
+        print(f"  Justificación: {visualizacion['JUSTIFICACION']}")
+        if visualizacion.get("RANGO_VARIABLES"):
+            print(f"  Rangos: {visualizacion['RANGO_VARIABLES']}")
+        if visualizacion.get("ZONA_VALIDEZ"):
+            print(f"  Zona validez: {visualizacion['ZONA_VALIDEZ']}")
+
+    return visualizacion
+
+
+def evaluar_advertencia(elemento: dict) -> str | None:
+    """Evalúa valor pedagógico en detección; retorna RAZON o None.
+
+    Usado por detector.py para rellenar el campo ``advertencia`` del
+    elemento antes de mostrarlo al profesor. No descarta ni genera HTML.
+    """
+    if not ANTHROPIC_API_KEY:
+        return None
+
+    client = anthropic.Anthropic(
+        api_key=ANTHROPIC_API_KEY,
+        timeout=float(REQUEST_TIMEOUT_SECONDS),
+    )
+    try:
+        visualizacion = _razonar_visualizacion(elemento, client, verbose=False)
+    except Exception:  # noqa: BLE001
+        return None
+
+    if visualizacion.get("VISUALIZABLE") == "NO":
+        return visualizacion.get("RAZON") or "Sin valor pedagógico interactivo."
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +411,206 @@ def _is_valid_html(text: str) -> bool:
     return bool(text) and "<" in text and ">" in text
 
 
-def _generar_bloque(elemento: dict, idx: int) -> tuple[int, str]:
+def _parse_rango_variables(texto: str) -> dict[str, dict[str, float]]:
+    """Parsea RANGO_VARIABLES del razonador a {variable: {min, max, default}}."""
+    rangos: dict[str, dict[str, float]] = {}
+    if not texto:
+        return rangos
+    for line in texto.strip().splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        var_name, rest = line.split(":", 1)
+        var_name = var_name.strip()
+        rango: dict[str, float] = {}
+        for match in re.finditer(
+            r"(min|max|default)\s*=\s*([\d.]+)", rest, re.IGNORECASE
+        ):
+            rango[match.group(1).lower()] = float(match.group(2))
+        if rango:
+            rangos[var_name] = rango
+    return rangos
+
+
+def normalizar_nombre(nombre: str) -> str:
+    """Convierte nombre de variable a forma normalizable para matching en IDs."""
+    replacements = {
+        "σ₀": "sigma0",
+        "σ0": "sigma0",
+        "σ_0": "sigma0",
+        "σ_y": "sigmay",
+        "σ_max": "sigmamax",
+        "k_y": "ky",
+        "c/ρ": "c_rho",
+        "c/p": "c_rho",
+        "ρ": "rho",
+        "θ": "theta",
+        "σ": "sigma",
+        "ε": "epsilon",
+    }
+    nombre_norm = nombre.strip()
+    for orig, repl in sorted(replacements.items(), key=lambda item: -len(item[0])):
+        nombre_norm = nombre_norm.replace(orig, repl)
+    nombre_norm = re.sub(r"[^a-z0-9_]", "", nombre_norm.lower())
+    return nombre_norm
+
+
+def _format_rango_val(val: float) -> str:
+    """Formatea un valor numérico de rango para atributos HTML."""
+    return str(int(val)) if val == int(val) else str(val)
+
+
+def _ajustar_atributos_range(tag: str, rango: dict[str, float]) -> str:
+    """Sustituye o añade min, max y value en un tag input[type=range]."""
+    attrs = {
+        "min": rango.get("min"),
+        "max": rango.get("max"),
+        "value": rango.get("default"),
+    }
+    for attr, val in attrs.items():
+        if val is None:
+            continue
+        val_s = _format_rango_val(val)
+        if re.search(rf"\b{attr}\s*=", tag, re.IGNORECASE):
+            tag = re.sub(
+                rf'\b{attr}\s*=\s*["\'][^"\']*["\']',
+                f'{attr}="{val_s}"',
+                tag,
+                flags=re.IGNORECASE,
+            )
+            tag = re.sub(
+                rf"\b{attr}\s*=\s*[\d.+-]+",
+                f'{attr}="{val_s}"',
+                tag,
+                flags=re.IGNORECASE,
+            )
+        else:
+            insert = f' {attr}="{val_s}"'
+            if tag.rstrip().endswith("/>"):
+                tag = tag.rstrip()[:-2] + insert + " />"
+            else:
+                tag = tag.rstrip()[:-1] + insert + ">"
+    return tag
+
+
+def _id_coincide_variable(id_attr: str, var_norm: str) -> bool:
+    """True si el id del input corresponde a la variable normalizada."""
+    id_norm = re.sub(r"[^a-z0-9_]", "_", id_attr.lower())
+    if len(var_norm) <= 2:
+        return bool(
+            re.search(rf"(?:^|_){re.escape(var_norm)}(?:_|$)", id_norm)
+        )
+    id_compact = re.sub(r"[^a-z0-9]", "", id_attr.lower())
+    return var_norm in id_compact
+
+
+_RANGE_INPUT_RE = re.compile(
+    r"<input\b([^>]*?\btype\s*=\s*[\"']range[\"'][^>]*?)/?>",
+    re.IGNORECASE,
+)
+
+
+def aplicar_rangos(
+    html_bloque: str,
+    rangos: dict[str, dict[str, float]],
+    verbose: bool = False,
+) -> str:
+    """Corrige min/max/value de sliders según RANGO_VARIABLES del razonador."""
+    if not rangos:
+        return html_bloque
+
+    rangos_norm = {normalizar_nombre(k): v for k, v in rangos.items()}
+    orig_por_norm = {normalizar_nombre(k): k for k in rangos}
+    matched: set[str] = set()
+
+    def reemplazar_input(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        id_match = re.search(
+            r'\bid\s*=\s*["\']([^"\']+)["\']', inner, re.IGNORECASE
+        )
+        if not id_match:
+            return match.group(0)
+        id_attr = id_match.group(1)
+        for var_norm, rango in sorted(
+            rangos_norm.items(), key=lambda item: -len(item[0])
+        ):
+            if _id_coincide_variable(id_attr, var_norm):
+                matched.add(var_norm)
+                return _ajustar_atributos_range(f"<input{inner}>", rango)
+        return match.group(0)
+
+    html_corregido = _RANGE_INPUT_RE.sub(reemplazar_input, html_bloque)
+
+    if verbose:
+        for var_norm, nombre_orig in orig_por_norm.items():
+            if var_norm not in matched:
+                print(
+                    f'[RANGOS] Variable "{nombre_orig}" no encontrada en el HTML '
+                    f"— slider no corregido"
+                )
+
+    return html_corregido
+
+
+def validar_rangos(
+    html_bloque: str,
+    rangos_esperados: dict[str, dict[str, float]],
+    nombre: str = "",
+) -> None:
+    """Comprueba que los defaults del razonador aparecen en el HTML generado."""
+    prefijo = f"[ADVERTENCIA] {nombre}: " if nombre else "[ADVERTENCIA] "
+    for variable, rango in rangos_esperados.items():
+        default = rango.get("default")
+        if default is None:
+            continue
+        default_str = (
+            str(int(default)) if default == int(default) else str(default)
+        )
+        patron = rf'value=["\']?{re.escape(default_str)}["\']?'
+        if not re.search(patron, html_bloque):
+            print(
+                f"{prefijo}Rango incorrecto para {variable}: "
+                f"esperado default={default_str}"
+            )
+
+
+def validar_bloque_html(bloque: str, slug: str) -> bool:
+    """Comprueba que el bloque incluye initBloque completo y no está truncado."""
+    nombre_funcion = "initBloque_" + slug
+    tiene_funcion = nombre_funcion in bloque
+    stripped = bloque.rstrip()
+    tiene_cierre = stripped.endswith("</script>") or stripped.endswith("};")
+    return tiene_funcion and tiene_cierre
+
+
+def _bloque_placeholder(slug: str, nombre: str) -> str:
+    """HTML de reserva cuando Sonnet devuelve un bloque truncado o inválido."""
+    nombre_esc = nombre.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        f'<div id="bloque_{slug}_card" style="background:#FFFFFF;'
+        f"border:0.5px solid rgba(0,0,0,0.08);border-radius:14px;"
+        f'padding:1.75rem 2rem;font-family:\'DM Sans\',sans-serif;">'
+        f'<h2 style="font-family:\'Playfair Display\',serif;font-size:24px;'
+        f'font-weight:600;color:#1A1A1A;margin-bottom:0.75rem;">{nombre_esc}</h2>'
+        f'<p style="font-size:14px;line-height:1.65;color:#6B6860;">'
+        "No se pudo generar la visualización para este elemento. "
+        "Prueba a seleccionar menos elementos simultáneamente."
+        "</p>"
+        f"<script>window['initBloque_{slug}'] = function() {{}};</script>"
+        "</div>"
+    )
+
+
+def _generar_bloque(
+    elemento: dict,
+    idx: int,
+    verbose: bool = False,
+    texto_original: str | None = None,
+) -> tuple[int, str]:
     """Call Sonnet to generate the interactive HTML panel for one element.
+
+    Paso 1: razonador de visualización (patrón adaptativo).
+    Paso 2: generador HTML — siempre genera si el elemento fue seleccionado.
 
     Retries up to _MAX_RETRIES times if the response does not look like
     valid HTML. On final failure, returns a styled error panel so the rest
@@ -216,39 +623,56 @@ def _generar_bloque(elemento: dict, idx: int) -> tuple[int, str]:
                   unidades). Both default to safe values if absent.
         idx: Original position in the elementos list. Preserved and returned
              so parallel results can be sorted back into document order.
+        verbose: If True, print pattern and justification to stdout.
 
     Returns:
-        (idx, html_block) where html_block is either the Sonnet-generated
-        HTML fragment or an error panel div.
+        (idx, html_block) where html_block is the Sonnet-generated HTML
+        fragment or an error panel div.
     """
     nombre = elemento.get("nombre", f"Elemento {idx + 1}")
-    latex = elemento.get("expresion", "")
-    contexto = elemento.get("contexto", "")
-    variables_entrada: list[dict] = elemento.get("variables_entrada", [])
-    variable_salida: dict = elemento.get(
-        "variable_salida", {"nombre": "resultado", "unidades": ""}
-    )
+    slug = _slug(nombre)
+    advertencia = elemento.get("advertencia")
 
-    user_msg = build_generador_message(
-        nombre=nombre,
-        latex=latex,
-        variables_entrada=variables_entrada,
-        variable_salida=variable_salida,
-        contexto=contexto,
-    )
+    if verbose and advertencia:
+        print(
+            f'[GENERADOR] Elemento "{nombre}" generado con advertencia: '
+            f"{advertencia}"
+        )
 
     last_exc: Exception | None = None
-    # Instantiate once per element call, not per retry attempt
     client = anthropic.Anthropic(
         api_key=ANTHROPIC_API_KEY,
         timeout=float(REQUEST_TIMEOUT_SECONDS),
     )
 
+    try:
+        visualizacion = _razonar_visualizacion(
+            elemento, client, verbose=verbose, texto_original=texto_original
+        )
+    except Exception as exc:  # noqa: BLE001
+        if verbose:
+            print(f"\n[{nombre}] Razonador falló: {exc} — usando CURVA_SIMPLE")
+        visualizacion = _fallback_visualizacion(elemento)
+
+    if visualizacion.get("VISUALIZABLE") == "NO":
+        visualizacion = _fallback_visualizacion(elemento)
+
+    rangos_raw = visualizacion.get("RANGO_VARIABLES", "")
+    if verbose:
+        print(
+            f"[GENERADOR] Rangos para {nombre}: "
+            f"{rangos_raw or 'NO ENCONTRADO'}"
+        )
+
+    user_msg = build_generador_message(elemento, visualizacion, slug)
+    rangos_esperados = _parse_rango_variables(rangos_raw)
+
+    bloque_incompleto = False
     for attempt in range(_MAX_RETRIES + 1):
         try:
             response = client.messages.create(
                 model=MODEL_SMART,
-                max_tokens=4096,
+                max_tokens=_MAX_TOKENS_HTML,
                 system=PROMPT_GENERADOR_HTML,
                 messages=[{"role": "user", "content": user_msg}],
             )
@@ -259,8 +683,34 @@ def _generar_bloque(elemento: dict, idx: int) -> tuple[int, str]:
                 raw = re.sub(r"^```[a-z]*\n?", "", raw)
                 raw = re.sub(r"\n?```$", "", raw).strip()
 
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                bloque_incompleto = True
+                print(
+                    f"[GENERADOR] Respuesta truncada (max_tokens) "
+                    f"para slug={slug!r} — intento {attempt + 1}"
+                )
+                last_exc = ValueError("Respuesta truncada por límite de tokens")
+                continue
+
             if _is_valid_html(raw):
-                return idx, raw
+                if rangos_esperados:
+                    raw = aplicar_rangos(raw, rangos_esperados, verbose=verbose)
+                if validar_bloque_html(raw, slug):
+                    if rangos_esperados:
+                        validar_rangos(raw, rangos_esperados, nombre)
+                    return idx, raw
+
+            if _is_valid_html(raw):
+                bloque_incompleto = True
+                print(
+                    f"[GENERADOR] Bloque incompleto para slug={slug!r} "
+                    f"(falta initBloque_{slug} o cierre de script) "
+                    f"— intento {attempt + 1}"
+                )
+                last_exc = ValueError(
+                    f"Bloque HTML incompleto para initBloque_{slug}"
+                )
+                continue
 
             last_exc = ValueError(
                 f"Intento {attempt + 1}: respuesta sin HTML valido "
@@ -270,8 +720,10 @@ def _generar_bloque(elemento: dict, idx: int) -> tuple[int, str]:
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
 
+    if bloque_incompleto:
+        return idx, _bloque_placeholder(slug, nombre)
+
     # All retries exhausted — return visible error panel
-    slug = _slug(nombre)
     nombre_esc = nombre.replace("<", "&lt;").replace(">", "&gt;")
     error_esc = str(last_exc).replace("<", "&lt;").replace(">", "&gt;")
     error_html = (
@@ -321,23 +773,25 @@ def _construir_pagina(bloques: list[tuple[str, str]], titulo: str) -> str:
 
         inputs_parts.append(
             f'<input class="tab-inputs" type="radio" name="tabs"'
-            f' id="{input_id}"{checked}>'
+            f' id="{input_id}" data-panel-id="{panel_id}"'
+            f' data-slug="{slug}"{checked}>'
         )
         labels_parts.append(
             f'    <label class="tab-label" for="{input_id}">{nombre_esc}</label>'
         )
         panels_parts.append(
-            f'  <section class="tab-panel" id="{panel_id}">\n'
+            f'  <section class="tab-panel" id="{panel_id}"'
+            f' data-slug="{slug}" data-initialized="false">\n'
             f"{html_block}\n"
             f"  </section>"
         )
 
-        # Active tab label
+        # Active tab label (pill style)
         css_parts.append(
             f'    #{input_id}:checked ~ .tabs-wrapper'
             f' .tab-label[for="{input_id}"] {{'
-            f" color: #185FA5; background: #E6F1FB; font-weight: 600;"
-            f" border-color: #D3D1C7 #D3D1C7 #F7F5F0; }}"
+            f" color: #1A1A1A; background: #FFFFFF;"
+            f" border: 0.5px solid rgba(0,0,0,0.08); border-radius: 10px; }}"
         )
         # Show matching panel
         css_parts.append(
@@ -362,12 +816,14 @@ def generar_html(
     elementos: list[dict],
     markdown_completo: str,
     titulo_tema: str = "Material interactivo",
+    verbose: bool = True,
+    texto_original: str | None = None,
 ) -> str:
     """Generate a self-contained interactive HTML page from selected elements.
 
-    Calls Sonnet (MODEL_SMART) in parallel — up to _MAX_WORKERS concurrent
-    requests — to generate one interactive HTML panel per element. Preserves
-    original element order regardless of API completion order.
+    Por cada elemento: primero razona el patrón de visualización, luego
+    genera el HTML adaptado. Las llamadas se ejecutan en paralelo — hasta
+    _MAX_WORKERS concurrent requests — preservando el orden original.
 
     The HTML container (head, tab navigation, page header, footer) is built
     from a fixed Python template. MathJax and Chart.js CDNs appear once in
@@ -382,6 +838,8 @@ def generar_html(
         markdown_completo: Full markdown source of the tema. Available for
                            future enrichment steps; not used in this version.
         titulo_tema: Text shown in the browser tab and the blue page header.
+        verbose: If True, print chosen pattern and justification per element.
+        texto_original: Optional text from professor's PDF/PPTX for razonador.
 
     Returns:
         Complete HTML string. Openable directly in any browser without a
@@ -404,13 +862,12 @@ def generar_html(
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(_generar_bloque, el, i): i
+            executor.submit(_generar_bloque, el, i, verbose, texto_original): i
             for i, el in enumerate(elementos)
         }
         for future in as_completed(futures):
             resultados.append(future.result())
 
-    # Restore document order
     resultados.sort(key=lambda t: t[0])
 
     bloques: list[tuple[str, str]] = [

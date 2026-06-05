@@ -8,7 +8,7 @@ from agente import ejecutar_agente
 from parser import clasificar_archivo, extraer_texto
 from prompts import construir_prompt, construir_prompt_refinamiento
 
-_HERO_ORG_HTML = """<!DOCTYPE html><html><head>
+_HERO_ORG_HTML = r"""<!DOCTYPE html><html><head>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}

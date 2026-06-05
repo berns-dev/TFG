@@ -1,48 +1,63 @@
 """Deteccion de secciones con contenido matematico en Markdown.
 
 Pipeline:
-  1. Detectar todos los elementos matematicos individuales (regex):
+  1. Detectar elementos matematicos individuales (regex):
      - Bloques LaTeX $$...$$
-     - Inline $...$ (con filtros de trivialidad)
+     - Inline $...$ (filtros de trivialidad + es_constante_pura)
      - Tablas Markdown con contenido numerico
-  2. Agrupar todos los elementos de la misma seccion (## / ###) en un
-     unico elemento. Nombre del elemento = titulo del encabezado.
-  3. Devolver un elemento por seccion con contenido matematico.
+  2. Agrupar por seccion (## / ###) — un elemento por seccion con contenido.
+  3. Filtrar con Haiku (PROMPT_DETECTOR_INTERACTIVIDAD): solo INTERACTIVO=true
+     y CONFIANZA ALTA o MEDIA. Las tablas omiten este filtro.
+  4. Evaluar advertencia (razonador Sonnet) sobre los supervivientes.
+
+Criterios actuales de deteccion regex (fase 1):
+  - Bloque $$...$$: cualquier expresion no vacia que no sea constante pura.
+  - Inline $...$: longitud >= MIN_LATEX_CHARS; descarta digitos sueltos,
+    letra aislada, unidades puras; descarta constantes puras (es_constante_pura).
+  - Tabla: >= 40 % celdas numericas.
+  - Clasificacion tipo: "relacion" si hay '=' y >= MIN_VARIABLES_FOR_RELACION
+    variables distintas; "ecuacion" en otro caso; "tabla" para tablas.
+  - Agrupacion: todas las expresiones de una seccion se fusionan; el nombre
+    es el encabezado ### mas cercano.
+
+Falsos positivos conocidos en Tema_3_curado.md (regex sin filtro Haiku):
+  - "Densidad de dislocaciones": $$10^8 \\text{ cm...}$$ — constante empirica.
+  - "Endurecimiento por deformacion plastica": $10^{11}$ — constante empirica.
+  - "Discrepancia entre teoria y experimentacion": $E/1000$ — ratio fijo.
+  - "Comportamiento elastico del vidrio...": cadena de derivaciones algebraicas
+    (sigma, W, gamma) sin relacion nueva explorable para el alumno.
+  - "Concentracion de tensiones", "Relacion con la tension teorica": contexto
+    cualitativo o sustituciones sin variables manipulables nuevas.
+  - "Temperatura y velocidad de carga": comparaciones $T_1$, $T_2$ puntuales.
 
 Cada elemento devuelto tiene:
-    id         (int)  — indice 0-based
-    tipo       (str)  — "relacion" | "ecuacion" | "tabla"
-                        "relacion" si la seccion contiene alguna relacion
-                        parametrica; "tabla" si todo son tablas; "ecuacion"
-                        en otro caso.
-    nombre     (str)  — titulo del encabezado de la seccion
-    expresion  (str)  — todas las expresiones de la seccion concatenadas,
-                        cada una envuelta en $$...$$ o $...$ segun tipo
-    contexto   (str)  — texto completo de la seccion (max 3000 chars)
-    seccion    (str)  — mismo que nombre
-    es_bloque  (bool) — True siempre (nivel de seccion)
-
-Nota sobre PROMPT_DETECTOR_INTERACTIVIDAD (prompts.py):
-  El prompt esta definido para una posible fase de desambiguacion Haiku
-  (clasificar tipo y nombre cuando la regex no puede determinarlo con
-  confianza). En el diseno actual la agrupacion por seccion hace que el
-  nombre venga siempre del encabezado Markdown, eliminando la ambiguedad.
-  La llamada a Haiku no esta cableada — la deteccion es 100% determinista.
-
-  TODO: integrar llamada a Haiku (PROMPT_DETECTOR_INTERACTIVIDAD) para
-  secciones sin encabezado o con nombre demasiado generico (< 3 palabras).
+    id, tipo, nombre, expresion, contexto, seccion, es_bloque, advertencia.
 """
 
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+import anthropic
+
 from config import (
+    ANTHROPIC_API_KEY,
     CONTEXTO_CHARS,
     MIN_LATEX_CHARS,
     MIN_VARIABLES_FOR_RELACION,
+    MODEL_FAST,
+    REQUEST_TIMEOUT_SECONDS,
 )
+from generador_html import evaluar_advertencia
+from prompts import (
+    PROMPT_DETECTOR_INTERACTIVIDAD,
+    build_detector_message,
+)
+
+_MAX_ADVERTENCIA_WORKERS = 4
+_MAX_HAIKU_WORKERS = 4
 
 # ---------------------------------------------------------------------------
 # Patrones de deteccion
@@ -112,6 +127,95 @@ def _classify_latex(expr: str) -> str:
     if has_equals and n_vars >= MIN_VARIABLES_FOR_RELACION:
         return "relacion"
     return "ecuacion"
+
+
+def es_constante_pura(expresion: str) -> bool:
+    """True si la expresion LaTeX es un valor numerico fijo sin variables explorables.
+
+    Ejemplos True: 10^8, 10^{11}, E/1000, E/10
+    Ejemplos False: sigma_y = sigma_0 + k_y/sqrt(d), F/A * cos^2 theta
+    """
+    expr = re.sub(r"^\$\$?|\$\$?$", "", expresion.strip())
+    expr_compact = re.sub(r"\s+", "", expr)
+
+    if re.match(
+        r"^[A-Z](?:_\{[^}]+\}|_[a-zA-Z0-9])?\s*[/\*]\s*\d+(?:\.\d+)?$",
+        expr_compact,
+    ):
+        return True
+    if re.match(r"^[A-Z]/\d+$", expr_compact):
+        return True
+
+    if _count_distinct_variables(expr) >= 1:
+        return False
+
+    unidades = r"cm|mm|μm|um|MPa|GPa|nm|kg|N|Pa|J|m|s|Hz"
+    expr_limpia = re.sub(r"\\text\{[^}]*\}", "", expr)
+    expr_limpia = re.sub(r"\\(?:mathrm|mathbf)\{[^}]*\}", "", expr_limpia)
+    expr_limpia = re.sub(r"\s+", "", expr_limpia)
+
+    if re.match(rf"^[\d\^\{{\}}\+\-\*\/\.\,\\]+(?:{unidades})?$", expr_limpia, re.I):
+        return True
+    if re.match(r"^[\d\^\{\}\.\,]+$", expr_limpia):
+        return True
+
+    expr_ratio = re.sub(r"[^A-Za-z0-9/*]", "", expr_limpia)
+    return bool(re.match(r"^[A-Z]/\d+$", expr_ratio))
+
+
+def _extract_xml_tag(raw: str, tag: str) -> str | None:
+    """Extrae el contenido de un tag XML del output de Haiku."""
+    match = re.search(
+        rf"<{tag}>(.*?)</{tag}>", raw, re.DOTALL | re.IGNORECASE
+    )
+    return match.group(1).strip() if match else None
+
+
+def _parse_detector_response(raw: str) -> dict[str, Any]:
+    """Parsea la respuesta XML de Haiku para el detector."""
+    interactivo_raw = (_extract_xml_tag(raw, "INTERACTIVO") or "").lower()
+    interactivo = interactivo_raw in ("true", "si", "sí", "yes", "1")
+    confianza = (_extract_xml_tag(raw, "CONFIANZA") or "BAJA").upper()
+    if confianza not in ("ALTA", "MEDIA", "BAJA"):
+        confianza = "BAJA"
+    return {
+        "interactivo": interactivo,
+        "confianza": confianza,
+        "tipo": _extract_xml_tag(raw, "TIPO") or "ninguno",
+        "nombre": _extract_xml_tag(raw, "NOMBRE") or "",
+        "variables": _extract_xml_tag(raw, "VARIABLES") or "ninguna",
+    }
+
+
+def _evaluar_interactividad_haiku(elemento: dict[str, Any]) -> bool:
+    """True si Haiku clasifica el elemento como interactivo con confianza ALTA/MEDIA."""
+    if not ANTHROPIC_API_KEY:
+        return True
+
+    fragmento = (
+        f"SECCION: {elemento.get('nombre', '')}\n\n"
+        f"EXPRESIONES:\n{elemento.get('expresion', '')}\n\n"
+        f"CONTEXTO:\n{elemento.get('contexto', '')}"
+    )
+    client = anthropic.Anthropic(
+        api_key=ANTHROPIC_API_KEY,
+        timeout=float(REQUEST_TIMEOUT_SECONDS),
+    )
+    try:
+        response = client.messages.create(
+            model=MODEL_FAST,
+            max_tokens=256,
+            system=PROMPT_DETECTOR_INTERACTIVIDAD,
+            messages=[{"role": "user", "content": build_detector_message(fragmento)}],
+        )
+        raw = response.content[0].text.strip()
+        parsed = _parse_detector_response(raw)
+        return (
+            parsed["interactivo"]
+            and parsed["confianza"] in ("ALTA", "MEDIA")
+        )
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _is_table_numeric(table_md: str) -> bool:
@@ -258,7 +362,7 @@ def detectar_elementos(markdown_text: str) -> list[dict[str, Any]]:
             seen_positions.add(p)
 
         expr = match.group(1).strip()
-        if not expr:
+        if not expr or es_constante_pura(expr):
             continue
 
         pre_start = max(0, match.start() - CONTEXTO_CHARS)
@@ -290,6 +394,8 @@ def detectar_elementos(markdown_text: str) -> list[dict[str, Any]]:
         if re.match(r"^[a-zA-Z]$", expr):
             continue
         if re.match(r"^[\d.]+\s*(?:/\s*[\d.]+)?\s*[a-zA-Z²³]+$", expr):
+            continue
+        if es_constante_pura(expr):
             continue
 
         for p in range(match.start(), match.end()):
@@ -387,6 +493,43 @@ def detectar_elementos(markdown_text: str) -> list[dict[str, Any]]:
             "contexto": contexto,
             "seccion": seccion,
             "es_bloque": True,
+            "advertencia": None,
         })
+
+    # ── Phase 5: filtro Haiku (interactividad + confianza) ─────────────────
+    if elementos:
+        candidatos = [el for el in elementos if el["tipo"] != "tabla"]
+        tablas = [el for el in elementos if el["tipo"] == "tabla"]
+        aprobados: list[dict[str, Any]] = list(tablas)
+
+        if candidatos:
+            workers = min(len(candidatos), _MAX_HAIKU_WORKERS)
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(_evaluar_interactividad_haiku, el): el
+                    for el in candidatos
+                }
+                for future in as_completed(futures):
+                    el = futures[future]
+                    if future.result():
+                        aprobados.append(el)
+
+            orden_doc = {el["nombre"]: idx for idx, el in enumerate(elementos)}
+            aprobados.sort(key=lambda el: orden_doc.get(el["nombre"], 0))
+            elementos = aprobados
+            for i, el in enumerate(elementos):
+                el["id"] = i
+
+    # ── Phase 6: valor pedagógico (razonador Sonnet, informativo) ─────────
+    if elementos:
+        workers = min(len(elementos), _MAX_ADVERTENCIA_WORKERS)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(evaluar_advertencia, el): el
+                for el in elementos
+            }
+            for future in as_completed(futures):
+                el = futures[future]
+                el["advertencia"] = future.result()
 
     return elementos
