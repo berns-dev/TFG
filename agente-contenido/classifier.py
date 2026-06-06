@@ -39,7 +39,7 @@ Tipo        | Seccion ES                  | Seccion EN
 ------------|-----------------------------|-----------------------
 teoria      | ## Contenido teorico        | ## Theory
 ejemplo_resuelto | ## Ejemplos resueltos       | ## Solved examples
-ejercicio   | ## Ejercicios propuestos    | ## Practice problems
+ejercicio_propuesto | ## Ejercicios propuestos    | ## Practice problems
 tabla       | ## Tablas de referencia     | ## Reference tables
 procedimiento | ## Procedimientos           | ## Procedures
 resumen     | ## Resumen                  | ## Summary
