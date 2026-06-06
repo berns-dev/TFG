@@ -48,7 +48,27 @@ prompts.py    — construir_prompt() y construir_prompt_refinamiento()
 | Input | Materiales de teoría (uno por tema) | PDF, PPTX |
 | Output | Distribución temática con bloques, subtemas y horas | Markdown (`.md`) |
 
-El Markdown generado sigue el formato `## Bloque N: Nombre · Xh` y puede usarse directamente como input del Agente Contenido.
+El Markdown generado sigue la plantilla definida en `prompts.py` (fuente de verdad):
+
+```markdown
+# DISTRIBUCIÓN TEMÁTICA — Nombre asignatura
+
+**Horas lectivas disponibles:** Xh (Yh TE + Zh PA) | **Prácticas de laboratorio:** Wh *(informativo)*
+
+---
+
+## Bloque 1 — Nombre del bloque · Xh
+
+| Subtema | Horas | Justificación |
+|---------|-------|---------------|
+| ... | ... | ... |
+
+---
+
+> 🔬 Prácticas de laboratorio: Wh (sesiones prácticas, no incluidas en la distribución temática)
+```
+
+Puede usarse directamente como input del Agente Contenido (`parse_organization_md()` espera encabezados `## Bloque N — … · Xh`).
 
 ---
 

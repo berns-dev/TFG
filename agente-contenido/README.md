@@ -27,7 +27,8 @@ cleaner.py      — normalización de artefactos de extracción
 assembler.py    — assemble_markdown(), assemble_multiple(), unified_download_filename()
 validator.py    — validate_items() — validador de fidelidad léxica (umbral 0.85)
 config.py       — constantes: modelos, thresholds, MAX_WORKERS
-validate_pdf.py — utilidad auxiliar de validación de PDF
+tools/validate_pdf.py — utilidad de debug CLI (extract → chunk, sin API; no es producto)
+fixtures/       — artefactos de validación (p. ej. Tema_3_curado.md)
 ```
 
 ---
@@ -74,6 +75,20 @@ streamlit run app.py --server.port 8501
 | `claude-sonnet-4-5` | Chunks con densidad de símbolos > 0.02, o con patrones `d/dt`, `d²`, `∫`, `Σ` |
 
 Validado: ecuaciones de Hollomon, Ramberg-Osgood, Weibull y Von Mises se enrutan correctamente a Sonnet.
+
+---
+
+## Herramientas de desarrollo
+
+**`tools/validate_pdf.py`** — script CLI para depurar el pipeline de extracción y chunking sin llamadas a la API. No forma parte del producto Streamlit ni del entregable del TFG.
+
+```bash
+cd agente-contenido
+python tools/validate_pdf.py "ruta/al/material.pdf"
+python tools/validate_pdf.py "ruta/al/material.pptx"
+```
+
+**`fixtures/Tema_3_curado.md`** — output real del agente sobre Tecnología de Materiales (Tema 3), conservado como caso de prueba para validación y memoria del TFG.
 
 ---
 

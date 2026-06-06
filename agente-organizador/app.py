@@ -333,11 +333,6 @@ def contar_bloques_output(markdown_text: str) -> int:
     return len(re.findall(r"^## Bloque\s+\d+", markdown_text, re.MULTILINE))
 
 
-def es_clave_bloque_reconocible(clave: str) -> bool:
-    clave_limpia = (clave or "").strip()
-    return bool(clave_limpia and re.search(r"[A-Za-zÁÉÍÓÚáéíóúÑñ0-9]", clave_limpia))
-
-
 def construir_nombre_descarga(texto_guia: str) -> str:
     # Se busca el patrón habitual "NOMBRE ... CÓDIGO" para extraer la asignatura.
     coincidencia = re.search(r"NOMBRE\s+(.+?)\s+C[ÓO]DIGO", texto_guia or "", flags=re.IGNORECASE | re.DOTALL)
@@ -412,8 +407,6 @@ section[data-testid="stMain"] > div {
 """, unsafe_allow_html=True)
 if "ultimo_output" not in st.session_state:
     st.session_state["ultimo_output"] = None
-if "ultimo_idioma" not in st.session_state:
-    st.session_state["ultimo_idioma"] = "spanish"
 if "historial_feedback" not in st.session_state:
     st.session_state["historial_feedback"] = []
 if "iteracion" not in st.session_state:
@@ -547,14 +540,12 @@ def generar_organizacion(
             st.session_state["ultimas_horas_totales"] = horas_totales if horas_totales > 0 else None
 
             st.write("🌐 Detectando idioma de los materiales...")
-            prompt, idioma = construir_prompt(
+            prompt, _idioma = construir_prompt(
                 texto_guia=texto_guia,
                 textos_teoria=textos_teoria,
                 textos_contexto=textos_contexto,
-                horas_teoria=None,
                 horas_totales=horas_totales if horas_totales > 0 else None,
                 horas_laboratorio=horas_laboratorio,
-                feedback_previo=None,
             )
 
             st.write("🤖 Consultando al agente (esto puede tardar ~15s)...")
@@ -565,7 +556,6 @@ def generar_organizacion(
                 n_esperados=len(textos_teoria),
                 nombre_descarga=construir_nombre_descarga(texto_guia),
             )
-            st.session_state["ultimo_idioma"] = idioma
             status.update(label="✅ Organización generada", state="complete")
             return True
         except Exception as error:

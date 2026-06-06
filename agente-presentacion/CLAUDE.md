@@ -26,8 +26,8 @@ El patrón de visualización no está fijado de antemano. Para cada sección, So
 app.py              — UI Streamlit; extracción de texto del PDF/PPTX opcional;
                       priorización de páginas por densidad numérica; triggers
                       de detección, PDF y HTML; checkboxes de selección
-detector.py         — Detección 100% regex de ecuaciones y tablas; agrupa
-                      por sección (un elemento por ##/###, no por ecuación)
+detector.py         — Regex + filtro Haiku + advertencias Sonnet (opt-in UI);
+                      agrupa por sección (un elemento por ##/###)
 generador_pdf.py    — Markdown → PDF: protege LaTeX, convierte a HTML,
                       parsea HTML a Flowables ReportLab; renderiza ecuaciones
                       con matplotlib mathtext
@@ -35,8 +35,9 @@ generador_html.py   — Pipeline por elemento: razonador Sonnet → generador So
                       post-procesado Python de rangos (aplicar_rangos);
                       ThreadPoolExecutor; plantilla HTML con pestañas CSS
 prompts.py          — PROMPT_RAZONADOR_VISUALIZACION, PROMPT_GENERADOR_HTML,
-                      PROMPT_DETECTOR_INTERACTIVIDAD (sin cablear);
-                      build_razonador_message, build_generador_message
+                      PROMPT_DETECTOR_INTERACTIVIDAD;
+                      build_razonador_message, build_generador_message,
+                      build_detector_message
 config.py           — Carga centralizada de .env; MODEL_FAST/MODEL_SMART;
                       MIN_LATEX_CHARS, MIN_VARIABLES_FOR_RELACION, CONTEXTO_CHARS
 requirements.txt    — anthropic, streamlit, reportlab, markdown,
@@ -52,16 +53,17 @@ requirements.txt    — anthropic, streamlit, reportlab, markdown,
 2. Opcionalmente sube un PDF o PPTX. `_extraer_texto_original()` extrae el texto y lo guarda en `session_state["texto_original"]`. Para PDF, `_extraer_texto_pdf_inteligente()` selecciona hasta 5 páginas: las 2 primeras siempre, más las de mayor densidad numérica (conteo de patrones `\d+\.?\d*\s*(?:MPa|GPa|mm|...)` por página). El texto queda truncado a 8.000 caracteres.
 
 **Detección:**
-3. El profesor pulsa "Detectar elementos" → `detectar_elementos(md_content)` en `detector.py`.
-4. La función aplica regex para encontrar bloques `$$...$$`, expresiones `$...$` y tablas Markdown con al menos 40% de celdas numéricas. Agrupa todos los elementos de la misma sección en uno, con tipo dominante (relación > ecuación > tabla) y nombre igual al título del encabezado. Devuelve un elemento por sección.
-5. La UI muestra los elementos como checkboxes agrupados por tipo (ecuación, relación paramétrica, tabla numérica).
+3. Opcional: checkbox «Analizar advertencias pedagógicas» (Sonnet por elemento; más créditos).
+4. El profesor pulsa "Detectar elementos" → `detectar_elementos(md_content, analizar_advertencias=...)`.
+5. Regex encuentra bloques `$$...$$`, `$...$` y tablas; agrupa por sección. Fase Haiku filtra candidatos no-tabla (fail-open si la API falla). Fase advertencias solo si opt-in.
+6. La UI muestra checkboxes agrupados por tipo.
 
 **Generación de PDF** (independiente de la selección):
 6. El botón "Generar PDF completo" en la barra lateral llama a `generar_pdf(md, titulo)`. El PDF se almacena en `session_state["pdf_bytes"]` y queda disponible para descarga inmediata.
 
 **Generación de HTML interactivo:**
 7. El profesor selecciona las secciones y pulsa "Generar HTML (N elementos)".
-8. `generar_html(elementos_sel, md, titulo, verbose, texto_original)` abre un `ThreadPoolExecutor` (máx. 4 workers) y llama a `_generar_bloque()` por elemento en paralelo.
+8. `generar_html(elementos_sel, titulo, verbose, texto_original)` abre un `ThreadPoolExecutor` (máx. 4 workers) y llama a `_generar_bloque()` por elemento en paralelo.
 9. Por cada elemento, en `_generar_bloque()`:
    - **Paso 1 — Razonador (Sonnet):** `_razonar_visualizacion()` llama a Sonnet con `PROMPT_RAZONADOR_VISUALIZACION` y `build_razonador_message()`. El mensaje incluye el texto del material original si está disponible. Sonnet devuelve XML con `VISUALIZABLE`, `PATRON`, ejes, sliders, `RANGO_VARIABLES` y `ZONA_VALIDEZ`.
    - Si el razonador devuelve `VISUALIZABLE=NO`, se aplica igualmente el fallback CURVA_SIMPLE. El elemento no se descarta porque el profesor lo seleccionó explícitamente.
@@ -77,11 +79,11 @@ requirements.txt    — anthropic, streamlit, reportlab, markdown,
 
 | Tarea | Modelo | Justificación |
 |---|---|---|
-| Detección de secciones | ninguno (regex) | El contenido matemático en Markdown con formato correcto es identificable sin ambigüedad |
-| Evaluación de valor pedagógico (`evaluar_advertencia`) | Sonnet (`MODEL_SMART`) | Llamada previa a la detección para rellenar el campo `advertencia`; reutiliza `_razonar_visualizacion` |
-| Razonador de visualización por elemento | Sonnet (`MODEL_SMART`) | Requiere razonar sobre contexto físico y elegir entre 6 patrones |
-| Generador de bloque HTML | Sonnet (`MODEL_SMART`) | Genera lógica JS compleja adaptada al patrón; 8.192 tokens de salida |
-| Desambiguación tipo/nombre (`PROMPT_DETECTOR_INTERACTIVIDAD`) | Haiku (`MODEL_FAST`) | Definido en `prompts.py`; **no está cableado en el flujo actual** |
+| Detección regex (fase 1) | ninguno | Contenido matemático en Markdown con formato correcto |
+| Filtro de interactividad (fase Haiku) | Haiku (`MODEL_FAST`) | Descarta constantes empíricas y contexto no manipulable; fail-open si API falla |
+| Evaluación de valor pedagógico (`evaluar_advertencia`) | Sonnet (`MODEL_SMART`) | Opt-in en UI; rellena campo `advertencia`; reutiliza `_razonar_visualizacion` |
+| Razonador de visualización por elemento | Sonnet (`MODEL_SMART`) | Contexto físico y elección entre 6 patrones |
+| Generador de bloque HTML | Sonnet (`MODEL_SMART`) | JS + Chart.js; 8.192 tokens de salida |
 
 ---
 
@@ -219,8 +221,4 @@ html_str = generar_html(elementos_sel, md, titulo, verbose=True, texto_original=
 
 ## 11. PENDIENTE
 
-**`PROMPT_DETECTOR_INTERACTIVIDAD` (Haiku) no está cableado.** El prompt y `build_detector_message()` están definidos en `prompts.py`. La detección actual es 100% regex. Hay un TODO en `detector.py` para integrar la llamada en secciones sin encabezado o con nombre de menos de 3 palabras; mientras tanto, esas secciones usan los primeros 6 tokens del contexto como nombre.
-
 **Tablas en el PDF sin layout de tabla.** Las celdas `td`/`th` se renderizan como párrafos indentados. `_MarkdownFlowableParser` no usa el Flowable `Table` de ReportLab.
-
-**`generar_html_academico()` no expuesta en la UI.** Existe en `generador_pdf.py` como fallback HTML sin ReportLab; `app.py` no la llama.

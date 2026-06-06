@@ -7,8 +7,10 @@ Pipeline:
      - Tablas Markdown con contenido numerico
   2. Agrupar por seccion (## / ###) — un elemento por seccion con contenido.
   3. Filtrar con Haiku (PROMPT_DETECTOR_INTERACTIVIDAD): solo INTERACTIVO=true
-     y CONFIANZA ALTA o MEDIA. Las tablas omiten este filtro.
-  4. Evaluar advertencia (razonador Sonnet) sobre los supervivientes.
+     y CONFIANZA ALTA o MEDIA. Las tablas omiten este filtro. Fail-open ante
+     error de API (decisión de diseño: no bloquear al profesor).
+  4. Evaluar advertencia (razonador Sonnet) solo si analizar_advertencias=True
+     (opt-in en la UI; consume más créditos).
 
 Criterios actuales de deteccion regex (fase 1):
   - Bloque $$...$$: cualquier expresion no vacia que no sea constante pura.
@@ -188,7 +190,11 @@ def _parse_detector_response(raw: str) -> dict[str, Any]:
 
 
 def _evaluar_interactividad_haiku(elemento: dict[str, Any]) -> bool:
-    """True si Haiku clasifica el elemento como interactivo con confianza ALTA/MEDIA."""
+    """True si Haiku clasifica el elemento como interactivo con confianza ALTA/MEDIA.
+
+    Fail-open: ante error de API o parseo devuelve True para no bloquear al profesor.
+    Es una decisión de diseño explícita — la detección regex previa ya filtró candidatos.
+    """
     if not ANTHROPIC_API_KEY:
         return True
 
@@ -330,7 +336,11 @@ def _nombre_sin_seccion(items: list[dict]) -> str:
 # Funcion principal
 # ---------------------------------------------------------------------------
 
-def detectar_elementos(markdown_text: str) -> list[dict[str, Any]]:
+def detectar_elementos(
+    markdown_text: str,
+    *,
+    analizar_advertencias: bool = False,
+) -> list[dict[str, Any]]:
     """Detect sections with mathematical content in a markdown document.
 
     Returns one element per section that contains at least one equation,
@@ -345,6 +355,8 @@ def detectar_elementos(markdown_text: str) -> list[dict[str, Any]]:
 
     Args:
         markdown_text: Full markdown content (typically from Agente Contenido).
+        analizar_advertencias: Si True, llama a Sonnet por elemento para rellenar
+            el campo ``advertencia`` (consume más créditos API).
 
     Returns:
         List of element dicts in document order. Each dict has:
@@ -520,8 +532,8 @@ def detectar_elementos(markdown_text: str) -> list[dict[str, Any]]:
             for i, el in enumerate(elementos):
                 el["id"] = i
 
-    # ── Phase 6: valor pedagógico (razonador Sonnet, informativo) ─────────
-    if elementos:
+    # ── Phase 6: valor pedagógico (razonador Sonnet, opt-in) ───────────────
+    if elementos and analizar_advertencias:
         workers = min(len(elementos), _MAX_ADVERTENCIA_WORKERS)
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {

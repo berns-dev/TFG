@@ -114,7 +114,10 @@ TFG/
 │   ├── cleaner.py
 │   ├── assembler.py
 │   ├── validator.py
-│   ├── validate_pdf.py
+│   ├── tools/
+│   │   └── validate_pdf.py       ← debug CLI (extract → chunk, sin API)
+│   ├── fixtures/
+│   │   └── Tema_3_curado.md      ← artefacto de validación
 │   ├── config.py
 │   ├── requirements.txt
 │   ├── .env.example

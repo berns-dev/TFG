@@ -1,11 +1,12 @@
 """
-Validación local del pipeline extract → clean → chunk (sin API).
+Utilidad de desarrollo: valida el pipeline extract → clean → chunk (sin API).
 
-Uso:
-  python validate_pdf.py "ruta/archivo.pdf"
-  python validate_pdf.py "ruta/archivo.pptx"
+No forma parte del producto Streamlit. Sirve para depurar extractor, cleaner y
+chunker sin consumir créditos de Anthropic.
 
-Requiere ejecutarse desde la raíz del proyecto o con PYTHONPATH apuntando a ella.
+Uso (desde agente-contenido/):
+  python tools/validate_pdf.py "ruta/archivo.pdf"
+  python tools/validate_pdf.py "ruta/archivo.pptx"
 """
 
 from __future__ import annotations
@@ -16,10 +17,10 @@ import re
 import sys
 from pathlib import Path
 
-# Raíz del proyecto = directorio de este script
-ROOT = Path(__file__).resolve().parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# Raíz del agente = directorio padre de tools/
+AGENT_ROOT = Path(__file__).resolve().parent.parent
+if str(AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(AGENT_ROOT))
 
 from chunker import split_into_chunks  # noqa: E402
 from extractor import extract_text  # noqa: E402
@@ -94,16 +95,12 @@ def main() -> int:
     list_handler = _ListHandler()
     fmt = logging.Formatter("%(levelname)s %(name)s: %(message)s")
     list_handler.setFormatter(fmt)
-    # Quitar handlers del cleaner (p. ej. StreamHandler del import) para que los INFO
-    # no vayan a stderr mezclados con stdout al usar 2>&1 en PowerShell.
     saved_handlers = list(cleaner_log.handlers)
     for h in saved_handlers:
         cleaner_log.removeHandler(h)
     cleaner_log.addHandler(list_handler)
 
     try:
-        # extract_text aplica clean_extracted_text internamente página/slide a página/slide.
-        # No hay un paso de limpieza separado: extracción y limpieza son una sola fase.
         print("=== 1) extractor.extract_text (extracción + limpieza integrada) ===")
         extracted = extract_text(str(path))
         print(f"(longitud total tras extracción y limpieza, chars: {len(extracted)})")

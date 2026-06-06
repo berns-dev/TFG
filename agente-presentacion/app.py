@@ -7,7 +7,6 @@ Flujo:
   4. El profesor selecciona los que quiere exportar.
   5. Pulsa "Generar PDF" -> generador_pdf.generar_pdf() -> descarga.
      Pulsa "Generar HTML interactivo" -> generador_html.generar_html()
-     (pendiente; boton deshabilitado con aviso).
 """
 
 from __future__ import annotations
@@ -416,6 +415,13 @@ section[data-testid="stMain"] > div {
             st.session_state["texto_original"] = None
 
         st.divider()
+        analizar_advertencias = st.checkbox(
+            "Analizar advertencias pedagógicas (consume más créditos)",
+            value=False,
+            help="Opcional. Llama a Sonnet por cada elemento detectado para señalar "
+            "posibles limitaciones interactivas antes de generar el HTML.",
+            key="analizar_advertencias",
+        )
         puede_detectar = uploaded_file is not None
         st.button(
             "Detectar elementos",
@@ -448,7 +454,12 @@ section[data-testid="stMain"] > div {
         with st.status("Analizando el documento...", expanded=True) as status:
             st.write("🔍 Detectando ecuaciones y tablas...")
             try:
-                elementos = detectar_elementos(st.session_state["md_content"])
+                elementos = detectar_elementos(
+                    st.session_state["md_content"],
+                    analizar_advertencias=st.session_state.get(
+                        "analizar_advertencias", False
+                    ),
+                )
                 st.session_state["elementos"] = elementos
                 st.session_state["pdf_bytes"] = None  # reset previous PDF
                 n = len(elementos)
@@ -604,13 +615,11 @@ section[data-testid="stMain"] > div {
             with st.status("Generando HTML interactivo...", expanded=True) as status:
                 try:
                     st.write("⚙️ Generando bloques con Sonnet (puede tardar ~30 s)...")
-                    md = st.session_state["md_content"] or ""
                     titulo = st.session_state.get("pdf_titulo", "Material interactivo")
                     seleccionados_set = set(seleccionados)
                     elementos_sel = [el for el in elementos if el["id"] in seleccionados_set]
                     html_str = generar_html(
                         elementos_sel,
-                        md,
                         titulo,
                         verbose=True,
                         texto_original=st.session_state.get("texto_original"),

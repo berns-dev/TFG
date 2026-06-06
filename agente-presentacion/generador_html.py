@@ -451,8 +451,52 @@ def normalizar_nombre(nombre: str) -> str:
     nombre_norm = nombre.strip()
     for orig, repl in sorted(replacements.items(), key=lambda item: -len(item[0])):
         nombre_norm = nombre_norm.replace(orig, repl)
-    nombre_norm = re.sub(r"[^a-z0-9_]", "", nombre_norm.lower())
-    return nombre_norm
+    nombre_norm = re.sub(r"[^a-zA-Z0-9_]", "", nombre_norm)
+    if len(nombre_norm) == 1 and nombre_norm.isalpha():
+        return nombre_norm
+    return nombre_norm.lower()
+
+
+def clave_variable(nombre: str) -> str:
+    """Clave única en dicts; preserva d/D y otros símbolos de una letra."""
+    return normalizar_nombre(nombre)
+
+
+_ALIASES_VARIABLE: dict[str, tuple[str, ...]] = {
+    "n": ("numero", "espiras", "espira", "turns", "coils", "activas"),
+    "N": ("numero", "espiras", "espira", "turns", "coils", "activas"),
+    "d": ("alambre", "wire", "varilla", "grosor", "diametro_alambre"),
+    "D": ("diametro_medio", "medio", "mean", "coil", "espira_exterior"),
+    "g": ("cizalla", "shear", "modulog", "modulo_g"),
+    "G": ("cizalla", "shear", "modulog", "modulo_g"),
+    "e": ("elastico", "young", "elastic", "moduloe", "modulo_e"),
+    "E": ("elastico", "young", "elastic", "moduloe", "modulo_e"),
+    "k": ("rigidez", "stiffness", "constante"),
+    "t": ("espesor", "thickness", "temperatura"),
+    "l": ("longitud", "length"),
+    "r": ("radio", "radius"),
+    "c": ("relacion", "indice", "compliance"),
+}
+
+
+def _parse_parametros_slider(texto: str) -> list[str]:
+    """Parsea la lista de parámetros con slider del razonador."""
+    if not texto:
+        return []
+    return [p.strip() for p in re.split(r"[,;]", texto) if p.strip()]
+
+
+def _filtrar_rangos_para_sliders(
+    rangos: dict[str, dict[str, float]],
+    parametros_slider: list[str],
+) -> dict[str, dict[str, float]]:
+    """Conserva solo rangos de variables que tienen slider (no ejes X/Y)."""
+    if not parametros_slider:
+        return rangos
+    param_norms = {clave_variable(p) for p in parametros_slider}
+    return {
+        k: v for k, v in rangos.items() if clave_variable(k) in param_norms
+    }
 
 
 def _format_rango_val(val: float) -> str:
@@ -493,16 +537,25 @@ def _ajustar_atributos_range(tag: str, rango: dict[str, float]) -> str:
     return tag
 
 
-def _id_coincide_variable(id_attr: str, var_norm: str) -> bool:
-    """True si el id del input corresponde a la variable normalizada."""
+def _id_coincide_variable(id_attr: str, var_key: str) -> bool:
+    """True si el id del input corresponde a la variable."""
     id_norm = re.sub(r"[^a-z0-9_]", "_", id_attr.lower())
-    if len(var_norm) <= 2:
-        return bool(
-            re.search(rf"(?:^|_){re.escape(var_norm)}(?:_|$)", id_norm)
-        )
     id_compact = re.sub(r"[^a-z0-9]", "", id_attr.lower())
-    return var_norm in id_compact
+    var_lower = var_key.lower()
+    if len(var_lower) <= 2:
+        if re.search(rf"(?:^|_){re.escape(var_lower)}(?:_|$)", id_norm):
+            return True
+    elif var_lower in id_compact:
+        return True
+    for alias in _ALIASES_VARIABLE.get(var_key, ()):
+        if alias in id_compact:
+            return True
+    return False
 
+
+_DATA_VAR_RE = re.compile(
+    r'\bdata-var\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE
+)
 
 _RANGE_INPUT_RE = re.compile(
     r"<input\b([^>]*?\btype\s*=\s*[\"']range[\"'][^>]*?)/?>",
@@ -510,40 +563,91 @@ _RANGE_INPUT_RE = re.compile(
 )
 
 
+def _variable_desde_input(
+    inner: str, rangos_por_clave: dict[str, dict[str, float]]
+) -> str | None:
+    """Empareja un input range con la variable del razonador, si es posible."""
+    data_match = _DATA_VAR_RE.search(inner)
+    if data_match:
+        var_key = clave_variable(data_match.group(1))
+        if var_key in rangos_por_clave:
+            return var_key
+
+    for attr in ("id", "name"):
+        attr_match = re.search(
+            rf'\b{attr}\s*=\s*["\']([^"\']+)["\']', inner, re.IGNORECASE
+        )
+        if not attr_match:
+            continue
+        attr_val = attr_match.group(1)
+        for var_key in sorted(rangos_por_clave, key=len, reverse=True):
+            if _id_coincide_variable(attr_val, var_key):
+                return var_key
+    return None
+
+
 def aplicar_rangos(
     html_bloque: str,
     rangos: dict[str, dict[str, float]],
     verbose: bool = False,
+    parametros_slider: str = "",
 ) -> str:
     """Corrige min/max/value de sliders según RANGO_VARIABLES del razonador."""
     if not rangos:
         return html_bloque
 
-    rangos_norm = {normalizar_nombre(k): v for k, v in rangos.items()}
-    orig_por_norm = {normalizar_nombre(k): k for k in rangos}
+    params_slider = _parse_parametros_slider(parametros_slider)
+    rangos_efectivos = _filtrar_rangos_para_sliders(rangos, params_slider)
+
+    rangos_por_clave = {clave_variable(k): v for k, v in rangos_efectivos.items()}
+    orig_por_clave = {clave_variable(k): k for k in rangos_efectivos}
     matched: set[str] = set()
 
-    def reemplazar_input(match: re.Match[str]) -> str:
-        inner = match.group(1)
-        id_match = re.search(
-            r'\bid\s*=\s*["\']([^"\']+)["\']', inner, re.IGNORECASE
-        )
-        if not id_match:
-            return match.group(0)
-        id_attr = id_match.group(1)
-        for var_norm, rango in sorted(
-            rangos_norm.items(), key=lambda item: -len(item[0])
-        ):
-            if _id_coincide_variable(id_attr, var_norm):
-                matched.add(var_norm)
-                return _ajustar_atributos_range(f"<input{inner}>", rango)
-        return match.group(0)
+    matches = list(_RANGE_INPUT_RE.finditer(html_bloque))
+    if not matches:
+        if verbose:
+            for var_key, nombre_orig in orig_por_clave.items():
+                print(
+                    f'[RANGOS] Variable "{nombre_orig}" no encontrada en el HTML '
+                    f"— slider no corregido"
+                )
+        return html_bloque
 
-    html_corregido = _RANGE_INPUT_RE.sub(reemplazar_input, html_bloque)
+    assignments: list[tuple[re.Match[str], str | None]] = []
+    for match in matches:
+        var_key = _variable_desde_input(match.group(1), rangos_por_clave)
+        if var_key:
+            matched.add(var_key)
+        assignments.append((match, var_key))
+
+    if params_slider:
+        pending_vars = [
+            clave_variable(p)
+            for p in params_slider
+            if clave_variable(p) in rangos_por_clave
+            and clave_variable(p) not in matched
+        ]
+        pending_idxs = [i for i, (_, var_key) in enumerate(assignments) if var_key is None]
+        for idx, var_key in zip(pending_idxs, pending_vars):
+            assignments[idx] = (assignments[idx][0], var_key)
+            matched.add(var_key)
+
+    html_corregido = html_bloque
+    for match, var_key in reversed(assignments):
+        if not var_key:
+            continue
+        new_tag = _ajustar_atributos_range(
+            f"<input{match.group(1)}>", rangos_por_clave[var_key]
+        )
+        html_corregido = (
+            html_corregido[: match.start()]
+            + new_tag
+            + html_corregido[match.end() :]
+        )
 
     if verbose:
-        for var_norm, nombre_orig in orig_por_norm.items():
-            if var_norm not in matched:
+        for var_key, nombre_orig in orig_por_clave.items():
+            if var_key not in matched:
                 print(
                     f'[RANGOS] Variable "{nombre_orig}" no encontrada en el HTML '
                     f"— slider no corregido"
@@ -556,8 +660,13 @@ def validar_rangos(
     html_bloque: str,
     rangos_esperados: dict[str, dict[str, float]],
     nombre: str = "",
+    parametros_slider: str = "",
 ) -> None:
     """Comprueba que los defaults del razonador aparecen en el HTML generado."""
+    params_slider = _parse_parametros_slider(parametros_slider)
+    rangos_esperados = _filtrar_rangos_para_sliders(
+        rangos_esperados, params_slider
+    )
     prefijo = f"[ADVERTENCIA] {nombre}: " if nombre else "[ADVERTENCIA] "
     for variable, rango in rangos_esperados.items():
         default = rango.get("default")
@@ -666,6 +775,7 @@ def _generar_bloque(
 
     user_msg = build_generador_message(elemento, visualizacion, slug)
     rangos_esperados = _parse_rango_variables(rangos_raw)
+    parametros_slider = visualizacion.get("PARAMETROS_SLIDER", "")
 
     bloque_incompleto = False
     for attempt in range(_MAX_RETRIES + 1):
@@ -694,10 +804,20 @@ def _generar_bloque(
 
             if _is_valid_html(raw):
                 if rangos_esperados:
-                    raw = aplicar_rangos(raw, rangos_esperados, verbose=verbose)
+                    raw = aplicar_rangos(
+                        raw,
+                        rangos_esperados,
+                        verbose=verbose,
+                        parametros_slider=parametros_slider,
+                    )
                 if validar_bloque_html(raw, slug):
                     if rangos_esperados:
-                        validar_rangos(raw, rangos_esperados, nombre)
+                        validar_rangos(
+                            raw,
+                            rangos_esperados,
+                            nombre,
+                            parametros_slider=parametros_slider,
+                        )
                     return idx, raw
 
             if _is_valid_html(raw):
@@ -814,7 +934,6 @@ def _construir_pagina(bloques: list[tuple[str, str]], titulo: str) -> str:
 
 def generar_html(
     elementos: list[dict],
-    markdown_completo: str,
     titulo_tema: str = "Material interactivo",
     verbose: bool = True,
     texto_original: str | None = None,
@@ -835,8 +954,6 @@ def generar_html(
                    contexto. Optional: variables_entrada (list[dict] with
                    nombre, unidades, min, max), variable_salida (dict with
                    nombre, unidades). Missing optional fields use safe defaults.
-        markdown_completo: Full markdown source of the tema. Available for
-                           future enrichment steps; not used in this version.
         titulo_tema: Text shown in the browser tab and the blue page header.
         verbose: If True, print chosen pattern and justification per element.
         texto_original: Optional text from professor's PDF/PPTX for razonador.

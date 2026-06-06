@@ -22,10 +22,15 @@ from validator import validate_items
 def parse_organization_md(content: str) -> list[dict]:
     """Extrae bloques y horas de un .md generado por el Agente Organizador.
 
-    Detecta líneas con el patrón:  ## Nombre del bloque · Xh
-    Devuelve lista de dicts con 'nombre' y 'horas'.
+    Formato canónico (prompts.py del Organizador):
+      ## Bloque N — Nombre del bloque · Xh
+
+    Devuelve lista de dicts con 'nombre' (sin prefijo «Bloque N —») y 'horas'.
     """
-    pattern = re.compile(r"^#{1,3}\s+(.+?)\s*·\s*([\d,.]+)h", re.MULTILINE)
+    pattern = re.compile(
+        r"^##\s+Bloque\s+\d+\s+—\s+(.+?)\s*·\s*([\d,.]+)h",
+        re.MULTILINE,
+    )
     bloques = []
     for m in pattern.finditer(content):
         nombre = m.group(1).strip()
@@ -276,7 +281,8 @@ section[data-testid="stMain"] > div {
                 bloque_seleccionado = bloques[idx]["nombre"]
             else:
                 st.warning(
-                    "No se detectaron bloques con formato '· Xh' en el archivo. "
+                    "No se detectaron bloques con formato "
+                    "'## Bloque N — Nombre · Xh' en el archivo. "
                     "Comprueba que es un output del Agente Organizador."
                 )
         else:

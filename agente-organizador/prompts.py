@@ -35,10 +35,8 @@ def construir_prompt(
     texto_guia: str,
     textos_teoria: list[str],
     textos_contexto: list[str],
-    horas_teoria: dict = None,
     horas_totales: int = None,
     horas_laboratorio: int = 0,
-    feedback_previo: list[str] = None,
 ) -> tuple[str, str]:
     materiales_teoria_formateados = []
     for indice, texto in enumerate(textos_teoria, start=1):
@@ -51,21 +49,7 @@ def construir_prompt(
     bloque_teoria = "\n\n".join(materiales_teoria_formateados).strip()
     bloque_contexto = "\n\n".join(materiales_contexto_formateados).strip() or "[VACÍO]"
 
-    if horas_teoria:
-        horas_lineas = []
-        for bloque, horas in horas_teoria.items():
-            horas_lineas.append(f"{bloque}: {horas}h expositivas")
-        instruccion_horas = (
-            "HORAS DE CLASE EXPOSITIVA (teoría) POR BLOQUE — extraídas de la \n"
-            "columna 'Clase Expositiva' de la tabla de plan de trabajo de la guía \n"
-            "docente. Estas son las ÚNICAS horas que debes usar para el reparto. \n"
-            "NO uses horas totales, horas de prácticas ni horas no presenciales:\n"
-            f"{', '.join(horas_lineas)}\n\n"
-            "VERIFICACIÓN OBLIGATORIA: La suma de horas de los subtemas de cada \n"
-            "bloque debe ser EXACTAMENTE igual a las horas expositivas de ese bloque. \n"
-            "Redistribuye si no cuadra antes de responder."
-        )
-    elif horas_totales is not None:
+    if horas_totales is not None:
         instruccion_horas = (
             "DISTRIBUCIÓN DE HORAS: La guía docente de esta asignatura indica\n"
             f"{horas_totales}h lectivas totales (clases expositivas + prácticas de aula), pero no especifica\n"
@@ -144,37 +128,6 @@ def construir_prompt(
             "Debes escribir toda tu respuesta en español."
         )
 
-    bloque_feedback = ""
-    if feedback_previo:
-        if horas_totales is not None:
-            instruccion_ajuste_pedagogico = (
-                "\n\nINSTRUCCIÓN SOBRE AJUSTES PEDAGÓGICOS:\n"
-                "El profesor puede solicitar aumentar o reducir las horas de bloques\n"
-                "o subtemas específicos basándose en su experiencia docente\n"
-                "(por ejemplo, porque sabe que ciertos temas son más difíciles para\n"
-                "los alumnos). Cuando el profesor pida este tipo de ajuste:\n"
-                "1. Aplica el cambio solicitado exactamente\n"
-                "2. Redistribuye las horas restantes entre los demás bloques/subtemas\n"
-                "   de forma proporcional para que la suma total siga siendo\n"
-                f"   exactamente {horas_totales}h\n"
-                "3. Indica en la columna de justificación qué cambio aplicaste y\n"
-                "   por qué (ej: 'Incrementado por indicación del profesor —\n"
-                "   tema de mayor dificultad para los alumnos')\n"
-                f"La restricción de {horas_totales}h totales sigue siendo absoluta\n"
-                "incluso con ajustes pedagógicos."
-            )
-        else:
-            instruccion_ajuste_pedagogico = ""
-
-        lineas_feedback = [f"{indice}. {texto}" for indice, texto in enumerate(feedback_previo, start=1)]
-        bloque_feedback = (
-            f"{instruccion_ajuste_pedagogico}\n\n"
-            "FEEDBACK DEL PROFESOR SOBRE VERSIONES ANTERIORES:\n"
-            f"{chr(10).join(lineas_feedback)}\n\n"
-            "Aplica este feedback en la nueva versión. Mantén las restricciones \n"
-            "de no inventar contenido y respetar las horas de teoría exactas."
-        )
-
     prompt = f"""
 {instruccion_idioma}
 
@@ -245,8 +198,6 @@ Texto de la guía docente:
 ## MATERIALES DE CONTEXTO/OUTLINE (solo para orientación general, 
 NO usar para extraer subtemas ni horas):
 {bloque_contexto}
-
-{bloque_feedback}
 
 NOTA INFORMATIVA (PL): La guía docente indica {horas_laboratorio}h de prácticas de laboratorio.
 Estas horas NO se incluyen en la distribución temática de bloques y subtemas.

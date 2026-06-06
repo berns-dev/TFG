@@ -129,18 +129,29 @@ Componente iframe con:
 
 ## Output format
 
+Fuente de verdad: plantilla en `prompts.py` → `construir_prompt()`.
+
 ```markdown
-# [Nombre asignatura] — Distribución temática
+# DISTRIBUCIÓN TEMÁTICA — {{NOMBRE_ASIGNATURA}}
 
-## Bloque 1: [Nombre] · Xh
-### [Subtema 1.1] · X.Xh
-| Contenido | Horas |
-...
-**Justificación:** frase descriptiva
+**Horas lectivas disponibles:** {{TOTAL}}h ({{TE}}h TE + {{PA}}h PA) | **Prácticas de laboratorio:** {{PL}}h *(informativo)*
 
-## Bloque 2: [Nombre] · Xh
-...
+---
+
+## Bloque {{N}} — {{NOMBRE_BLOQUE}} · {{HORAS_BLOQUE}}h
+
+| Subtema | Horas | Justificación |
+|---------|-------|---------------|
+| {{subtema}} | {{horas}} | {{una frase corta}} |
+
+*(repetir por bloque)*
+
+---
+
+> 🔬 Prácticas de laboratorio: {{PL}}h (sesiones prácticas, no incluidas en la distribución temática)
 ```
+
+El Agente Contenido parsea bloques con `## Bloque N — … · Xh` (`parse_organization_md()` en `agente-contenido/app.py`).
 
 El nombre del archivo de descarga se extrae de la guía docente con regex (`NOMBRE ... CÓDIGO`) → `Propuesta_[AsignaturaNombre].md`.
 

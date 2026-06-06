@@ -5,6 +5,8 @@ Separados de la logica de negocio siguiendo el patron de la suite.
 
 from __future__ import annotations
 
+import re
+
 
 # ---------------------------------------------------------------------------
 # Sistema: detector de interactividad
@@ -208,6 +210,13 @@ Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
        - Label: 13px, #6B6860, variable con unidades
        - Valor actual: 15px, weight 500, #185FA5
      - Slider: width 100%, margin-top 8px, accent-color #185FA5
+   Un slider SOLO por cada variable listada en PARÁMETROS SLIDER (no crear
+   sliders para EJE_X ni EJE_Y salvo que también figuren en PARÁMETROS SLIDER).
+   Cada input[type=range] DEBE incluir:
+     - id="bloque_{slug}_slider_{var}" donde {var} conserva mayúsculas en
+       símbolos de una letra (d ≠ D, n ≠ N) — ej. slider_d, slider_D
+     - data-var="{símbolo exacto}" (ej. data-var="N", data-var="d")
+   El JS puede referenciar el id; data-var es para post-procesado fiable.
 
 6. GRÁFICA (según patrón — ver abajo)
    Contenedor: background #F0EEE9, border-radius 12px, padding
@@ -290,9 +299,12 @@ INICIALIZACIÓN LAZY (obligatorio — pestañas del contenedor):
 
 RANGOS DE SLIDERS (obligatorio si se proporcionan en RANGO_VARIABLES):
   Los atributos min, max y value de cada input[type=range] DEBEN ser
-  exactamente los valores de RANGO_VARIABLES. No usar otros valores.
-  Si RANGO_VARIABLES no especifica un rango para una variable, usar:
-  min=0, max=100, value=50 como fallback neutro.
+  exactamente los valores de RANGO_VARIABLES para esa variable.
+  Aplica SOLO a variables de PARÁMETROS SLIDER — no inventar sliders extra.
+  Convención de identificación (obligatoria):
+    id="bloque_{slug}_slider_{var}" y data-var="{símbolo}" por slider.
+  No usar otros valores (min=0, max=100, value=50) salvo fallback explícito
+  para variables sin entrada en RANGO_VARIABLES.
   Si ZONA_VALIDEZ no es "ninguna", reflejarla en la interpretación dinámica.
 
 RESTRICCIONES TÉCNICAS:
@@ -483,6 +495,28 @@ def build_generador_message(
             "INSTRUCCIÓN DE RANGOS (no negociable):",
             "Los atributos min, max y value de cada input[type=range] DEBEN",
             "coincidir con RANGO_VARIABLES. No inferir ni ajustar otros valores.",
-            "Si una variable no aparece en RANGO_VARIABLES: min=0, max=100, value=50.",
+            "Crear un slider solo por cada variable de PARÁMETROS SLIDER.",
         ]
+        params_slider = [
+            p.strip()
+            for p in re.split(
+                r"[,;]", visualizacion.get("PARAMETROS_SLIDER", "")
+            )
+            if p.strip()
+        ]
+        if params_slider:
+            lines += [
+                "",
+                "IDs DE SLIDER OBLIGATORIOS (una entrada por variable):",
+            ]
+            for param in params_slider:
+                var_id = (
+                    param.strip()
+                    if len(param.strip()) == 1
+                    else re.sub(r"[^a-z0-9]", "", param.lower()) or param.lower()
+                )
+                lines.append(
+                    f'  - {param}: id="bloque_{slug}_slider_{var_id}" '
+                    f'data-var="{param}"'
+                )
     return "\n".join(lines)

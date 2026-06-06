@@ -37,7 +37,7 @@ except ImportError:
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
@@ -67,8 +67,6 @@ _GRIS_BORDE = colors.HexColor("#D3D1C7")
 # ---------------------------------------------------------------------------
 # Estilos de párrafo
 # ---------------------------------------------------------------------------
-
-_base = getSampleStyleSheet()
 
 _ESTILOS: dict[str, ParagraphStyle] = {
     "h1": ParagraphStyle(
@@ -724,57 +722,3 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
 
     buf.seek(0)
     return buf.read()
-
-
-def generar_html_academico(markdown_text: str, titulo: str = "Material docente") -> str:
-    """Fallback: return a simple HTML rendering of the markdown (no PDF).
-
-    Uses the same preprocessing (frontmatter strip, LaTeX placeholder) but
-    emits HTML instead of PDF. Provided for environments where even ReportLab
-    is unavailable; not normally called since ReportLab is pure Python.
-
-    Args:
-        markdown_text: Full markdown content.
-        titulo: Document title for the <title> tag.
-
-    Returns:
-        Complete HTML string.
-    """
-    if not _MD_AVAILABLE or _md_lib is None:
-        raise RuntimeError("La libreria 'markdown' no esta disponible.")
-
-    processed, subs = _preprocess_md(markdown_text)
-    # Re-expand latex placeholders as monospace spans in HTML output
-    def expand_block(m: re.Match) -> str:
-        key = m.group(0)
-        expr = subs.get(key, key)
-        return (
-            f'<div style="font-family:monospace;background:#F7F5F0;'
-            f'border-left:3px solid #185FA5;padding:6px 12px;margin:8px 0;">'
-            f'$$ {expr} $$</div>'
-        )
-    def expand_inline(m: re.Match) -> str:
-        key = m.group(0)
-        expr = subs.get(key, key)
-        return f'<code>${expr}$</code>'
-
-    html_body = _md_lib.markdown(processed, extensions=["tables", "fenced_code"])
-    blk_pat = rf"{re.escape(_BLOCK_PLACEHOLDER)}\d+{re.escape(_BLOCK_PLACEHOLDER)}"
-    inl_pat = (rf"{re.escape(_INLINE_PLACEHOLDER_START)}\d+"
-               rf"{re.escape(_INLINE_PLACEHOLDER_END)}")
-    html_body = re.sub(blk_pat, expand_block, html_body)
-    html_body = re.sub(inl_pat, expand_inline, html_body)
-
-    esc_titulo = titulo.replace("<", "&lt;").replace(">", "&gt;")
-    return (
-        "<!DOCTYPE html><html lang='es'><head>"
-        f"<meta charset='UTF-8'><title>{esc_titulo}</title>"
-        "<style>body{font-family:sans-serif;max-width:860px;margin:2rem auto;"
-        "padding:0 1.5rem;color:#2C2C2A;line-height:1.6}"
-        "h1{color:#185FA5}h2,h3{color:#2C2C2A}"
-        "code{background:#F7F5F0;padding:2px 4px;font-size:.9em}"
-        "table{border-collapse:collapse;width:100%}"
-        "th{background:#185FA5;color:#fff;padding:4px 8px}"
-        "td{padding:4px 8px;border-bottom:1px solid #D3D1C7}</style>"
-        f"</head><body><h1>{esc_titulo}</h1>{html_body}</body></html>"
-    )

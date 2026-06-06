@@ -48,6 +48,8 @@ extractor.py    — extract_text() para PDF y PPTX
 assembler.py    — assemble_markdown(), assemble_multiple(), unified_download_filename()
 validator.py    — validate_items() — validador de fidelidad léxica
 config.py       — constantes: modelos, thresholds, MAX_WORKERS
+tools/validate_pdf.py — debug CLI extract → chunk (no producto)
+fixtures/       — artefactos de validación (Tema_3_curado.md)
 ```
 
 ---
