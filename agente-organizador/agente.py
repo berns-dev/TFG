@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
@@ -11,7 +12,7 @@ SYSTEM_PROMPT = (
     "presente en los materiales."
 )
 
-load_dotenv()
+load_dotenv(Path(__file__).parent / ".env")
 # La API key se carga desde .env en la variable ANTHROPIC_API_KEY.
 _api_key = os.getenv("ANTHROPIC_API_KEY")
 
