@@ -4,6 +4,8 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv
 
+MODEL = "claude-sonnet-4-5"
+
 SYSTEM_PROMPT = (
     "Eres un asistente especializado en organización docente para asignaturas "
     "de ingeniería universitaria. Tu única función es extraer y organizar "
@@ -24,7 +26,7 @@ client = anthropic.Anthropic(api_key=_api_key)
 
 def ejecutar_agente(prompt: str) -> str:
     message = client.messages.create(
-        model="claude-sonnet-4-5",
+        model=MODEL,
         max_tokens=4096,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
