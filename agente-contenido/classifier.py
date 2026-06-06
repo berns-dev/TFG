@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -14,6 +15,8 @@ from config import (
     MODEL_SMART,
     REQUEST_TIMEOUT_SECONDS,
 )
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """Eres un procesador especializado de material docente universitario.
 Recibes fragmentos de texto extraidos de documentos academicos (PDF o PPTX).
@@ -218,7 +221,7 @@ def _call_anthropic(chunk_text: str, tema_horas: float | None = None) -> dict[st
             razon = "markdown vacio"
             if not tipo_tag_presente:
                 razon = "markdown vacio o TIPO ausente"
-            print(f"Advertencia: {razon}, reintentando intento {attempt + 1}")
+            logger.warning("Advertencia: %s, reintentando intento %s", razon, attempt + 1)
             continue
         break
     raise RuntimeError(

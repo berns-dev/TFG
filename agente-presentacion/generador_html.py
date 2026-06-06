@@ -28,6 +28,7 @@ Restricciones de diseno (no negociables):
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -46,6 +47,7 @@ from prompts import (
     build_razonador_message,
 )
 
+logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 2
 _MAX_WORKERS = 4  # llamadas Sonnet simultaneas maximas
@@ -366,15 +368,14 @@ def _razonar_visualizacion(
     visualizacion = _parse_visualizacion(raw, elemento)
 
     if verbose and visualizacion.get("VISUALIZABLE") != "NO":
-        print(f"\n[{nombre}]")
-        print(f"  Patrón: {visualizacion['PATRON']}")
-        print(f"  Eje X: {visualizacion['EJE_X']}")
-        print(f"  Eje Y: {visualizacion['EJE_Y']}")
-        print(f"  Justificación: {visualizacion['JUSTIFICACION']}")
+        logger.debug("[%s] Patrón: %s", nombre, visualizacion["PATRON"])
+        logger.debug("[%s] Eje X: %s", nombre, visualizacion["EJE_X"])
+        logger.debug("[%s] Eje Y: %s", nombre, visualizacion["EJE_Y"])
+        logger.debug("[%s] Justificación: %s", nombre, visualizacion["JUSTIFICACION"])
         if visualizacion.get("RANGO_VARIABLES"):
-            print(f"  Rangos: {visualizacion['RANGO_VARIABLES']}")
+            logger.debug("[%s] Rangos: %s", nombre, visualizacion["RANGO_VARIABLES"])
         if visualizacion.get("ZONA_VALIDEZ"):
-            print(f"  Zona validez: {visualizacion['ZONA_VALIDEZ']}")
+            logger.debug("[%s] Zona validez: %s", nombre, visualizacion["ZONA_VALIDEZ"])
 
     return visualizacion
 
@@ -607,9 +608,9 @@ def aplicar_rangos(
     if not matches:
         if verbose:
             for var_key, nombre_orig in orig_por_clave.items():
-                print(
-                    f'[RANGOS] Variable "{nombre_orig}" no encontrada en el HTML '
-                    f"— slider no corregido"
+                logger.warning(
+                    '[RANGOS] Variable "%s" no encontrada en el HTML — slider no corregido',
+                    nombre_orig,
                 )
         return html_bloque
 
@@ -648,9 +649,9 @@ def aplicar_rangos(
     if verbose:
         for var_key, nombre_orig in orig_por_clave.items():
             if var_key not in matched:
-                print(
-                    f'[RANGOS] Variable "{nombre_orig}" no encontrada en el HTML '
-                    f"— slider no corregido"
+                logger.warning(
+                    '[RANGOS] Variable "%s" no encontrada en el HTML — slider no corregido',
+                    nombre_orig,
                 )
 
     return html_corregido
@@ -677,9 +678,11 @@ def validar_rangos(
         )
         patron = rf'value=["\']?{re.escape(default_str)}["\']?'
         if not re.search(patron, html_bloque):
-            print(
-                f"{prefijo}Rango incorrecto para {variable}: "
-                f"esperado default={default_str}"
+            logger.warning(
+                "%sRango incorrecto para %s: esperado default=%s",
+                prefijo,
+                variable,
+                default_str,
             )
 
 
@@ -743,9 +746,10 @@ def _generar_bloque(
     advertencia = elemento.get("advertencia")
 
     if verbose and advertencia:
-        print(
-            f'[GENERADOR] Elemento "{nombre}" generado con advertencia: '
-            f"{advertencia}"
+        logger.debug(
+            '[GENERADOR] Elemento "%s" generado con advertencia: %s',
+            nombre,
+            advertencia,
         )
 
     last_exc: Exception | None = None
@@ -760,7 +764,7 @@ def _generar_bloque(
         )
     except Exception as exc:  # noqa: BLE001
         if verbose:
-            print(f"\n[{nombre}] Razonador falló: {exc} — usando CURVA_SIMPLE")
+            logger.warning("[%s] Razonador falló: %s — usando CURVA_SIMPLE", nombre, exc)
         visualizacion = _fallback_visualizacion(elemento)
 
     if visualizacion.get("VISUALIZABLE") == "NO":
@@ -768,9 +772,10 @@ def _generar_bloque(
 
     rangos_raw = visualizacion.get("RANGO_VARIABLES", "")
     if verbose:
-        print(
-            f"[GENERADOR] Rangos para {nombre}: "
-            f"{rangos_raw or 'NO ENCONTRADO'}"
+        logger.debug(
+            "[GENERADOR] Rangos para %s: %s",
+            nombre,
+            rangos_raw or "NO ENCONTRADO",
         )
 
     user_msg = build_generador_message(elemento, visualizacion, slug)
@@ -795,9 +800,10 @@ def _generar_bloque(
 
             if getattr(response, "stop_reason", None) == "max_tokens":
                 bloque_incompleto = True
-                print(
-                    f"[GENERADOR] Respuesta truncada (max_tokens) "
-                    f"para slug={slug!r} — intento {attempt + 1}"
+                logger.warning(
+                    "[GENERADOR] Respuesta truncada (max_tokens) para slug=%r — intento %s",
+                    slug,
+                    attempt + 1,
                 )
                 last_exc = ValueError("Respuesta truncada por límite de tokens")
                 continue
@@ -822,10 +828,12 @@ def _generar_bloque(
 
             if _is_valid_html(raw):
                 bloque_incompleto = True
-                print(
-                    f"[GENERADOR] Bloque incompleto para slug={slug!r} "
-                    f"(falta initBloque_{slug} o cierre de script) "
-                    f"— intento {attempt + 1}"
+                logger.warning(
+                    "[GENERADOR] Bloque incompleto para slug=%r "
+                    "(falta initBloque_%s o cierre de script) — intento %s",
+                    slug,
+                    slug,
+                    attempt + 1,
                 )
                 last_exc = ValueError(
                     f"Bloque HTML incompleto para initBloque_{slug}"
