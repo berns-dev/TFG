@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import re
+import sys
 import tempfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import streamlit as st
-import streamlit.components.v1 as components
+
+_SUITE_ROOT = Path(__file__).resolve().parent.parent
+if str(_SUITE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SUITE_ROOT))
+
+from shared.ui_hero import render_hero
 
 from assembler import assemble_markdown, assemble_multiple, unified_download_filename
 from chunker import split_into_chunks
@@ -43,94 +49,6 @@ def parse_organization_md(content: str) -> list[dict]:
     return bloques
 
 
-_HERO_CONT_HTML = """<!DOCTYPE html><html><head>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
-<style>
-*{margin:0;padding:0;box-sizing:border-box;}
-:root{
-  --text1:#2C2C2A;--text2:#5F5E5A;--text3:#888780;
-  --card:rgba(0,0,0,0.03);--border:rgba(0,0,0,0.1);--arrow:rgba(0,0,0,0.2);
-}
-:root.dark{
-  --text1:#FAFAFA;--text2:rgba(255,255,255,0.65);--text3:rgba(255,255,255,0.4);
-  --card:rgba(255,255,255,0.06);--border:rgba(255,255,255,0.1);--arrow:rgba(255,255,255,0.22);
-}
-@media(prefers-color-scheme:dark){:root:not(.light){
-  --text1:#FAFAFA;--text2:rgba(255,255,255,0.65);--text3:rgba(255,255,255,0.4);
-  --card:rgba(255,255,255,0.06);--border:rgba(255,255,255,0.1);--arrow:rgba(255,255,255,0.22);
-}}
-body{background:transparent;font-family:'DM Sans',sans-serif;overflow:hidden;padding:0 2px;}
-.hero{padding:32px 0 16px 0;}
-.eyebrow{font-size:11px;font-weight:500;color:#185FA5;letter-spacing:.14em;
-  text-transform:uppercase;margin-bottom:12px;}
-.title{font-family:'Playfair Display',serif;font-size:38px;font-weight:500;
-  color:var(--text1);line-height:1.15;margin-bottom:14px;}
-.title .accent{color:#185FA5;}
-.desc{font-size:15px;font-weight:400;color:var(--text2);line-height:1.6;max-width:560px;}
-.workflow{display:flex;align-items:center;margin-top:28px;padding:18px 24px;
-  background:var(--card);border:.5px solid var(--border);border-radius:10px;}
-.step{display:flex;align-items:center;gap:12px;flex:1;}
-.num{width:30px;height:30px;border-radius:50%;background:#185FA5;color:#FFF;
-  font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;
-  flex-shrink:0;box-shadow:0 2px 8px rgba(24,95,165,.25);}
-.lbl{font-size:10px;font-weight:500;color:var(--text3);text-transform:uppercase;
-  letter-spacing:.08em;margin-bottom:3px;}
-.sdesc{font-size:13px;font-weight:500;color:var(--text1);}
-.arrow{flex-shrink:0;margin:0 8px;color:var(--arrow);}
-</style>
-<script>
-(function(){
-  function sync(){
-    try{
-      var p=window.parent,doc=p.document;
-      var els=[doc.body,doc.documentElement];
-      for(var i=0;i<els.length;i++){
-        var cs=p.getComputedStyle(els[i]);
-        var bg=cs.backgroundColor;
-        var m=bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
-        if(!m) continue;
-        var alpha=m[4]===undefined?1:parseFloat(m[4]);
-        if(alpha<0.1) continue;
-        var lum=(0.299*+m[1]+0.587*+m[2]+0.114*+m[3])/255;
-        document.documentElement.classList.toggle('dark',lum<0.5);
-        document.documentElement.classList.toggle('light',lum>=0.5);
-        document.body.style.backgroundColor=bg;
-        return;
-      }
-    }catch(e){}
-  }
-  sync();setInterval(sync,800);
-})();
-</script>
-</head><body>
-<div class="hero">
-  <div class="eyebrow">Agente 02</div>
-  <div class="title">Generaci&#243;n de <span class="accent">contenido</span></div>
-  <div class="desc">Convierte tus PDFs y PPTXs en Markdown estructurado, fiel al original y listo para reutilizar.</div>
-  <div class="workflow">
-    <div class="step">
-      <div class="num">1</div>
-      <div><div class="lbl">Paso 1</div><div class="sdesc">Organizaci&#243;n</div></div>
-    </div>
-    <svg class="arrow" width="20" height="12" viewBox="0 0 20 12" fill="none">
-      <path d="M0 6h16M12 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-    <div class="step">
-      <div class="num">2</div>
-      <div><div class="lbl">Paso 2</div><div class="sdesc">Material</div></div>
-    </div>
-    <svg class="arrow" width="20" height="12" viewBox="0 0 20 12" fill="none">
-      <path d="M0 6h16M12 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-    <div class="step">
-      <div class="num">3</div>
-      <div><div class="lbl">Paso 3</div><div class="sdesc">Procesar</div></div>
-    </div>
-  </div>
-</div>
-</body></html>"""
-
-
 def main() -> None:
     if "resultados" not in st.session_state:
         st.session_state["resultados"] = []
@@ -140,64 +58,6 @@ def main() -> None:
         st.session_state["org_bloques"] = []
 
     st.set_page_config(page_title="Agente contenido", layout="wide")
-
-    st.markdown(
-        """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500&family=DM+Sans:wght@400;500&display=swap');
-
-[data-testid="stAppViewContainer"] > .main,
-[data-testid="stMain"] {
-    background-color: var(--background-color) !important;
-}
-section[data-testid="stMain"] > div {
-    background-color: var(--background-color) !important;
-}
-[data-testid="stSidebar"] {
-    background-color: var(--secondary-background-color) !important;
-    border-right: 1px solid rgba(128,128,128,0.2) !important;
-}
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
-    background-color: var(--secondary-background-color) !important;
-    border-radius: 10px !important;
-    border: 1px solid rgba(128,128,128,0.2) !important;
-}
-[data-testid="stFileUploaderDropzone"] {
-    border-radius: 10px !important;
-    border: 1px solid rgba(128,128,128,0.2) !important;
-    background-color: var(--secondary-background-color) !important;
-}
-.stButton > button {
-    background-color: #185FA5 !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 12px !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-weight: 500 !important;
-    letter-spacing: 0.01em;
-}
-.stButton > button:hover {
-    background-color: #0C447C !important;
-}
-.stDownloadButton > button {
-    border-radius: 12px !important;
-    border: 1px solid rgba(128,128,128,0.2) !important;
-    color: #185FA5 !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-weight: 500 !important;
-}
-.stDownloadButton > button:hover {
-    background-color: rgba(24,95,165,0.05) !important;
-}
-[data-testid="stExpander"] {
-    background-color: var(--secondary-background-color) !important;
-    border: 0.5px solid rgba(128,128,128,0.2) !important;
-    border-radius: 10px !important;
-}
-</style>
-""",
-        unsafe_allow_html=True,
-    )
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
@@ -320,7 +180,17 @@ section[data-testid="stMain"] > div {
         st.button("Procesar", key="procesar_btn", disabled=not bool(files), use_container_width=True)
 
     # ── Área principal ────────────────────────────────────────────────────────
-    components.html(_HERO_CONT_HTML, height=340, scrolling=False)
+    render_hero(
+        agent_number="02",
+        title_keyword="contenido",
+        steps=["Organizaci&#243;n", "Material", "Procesar"],
+        title_before="Generaci&#243;n de ",
+        description=(
+            "Convierte tus PDFs y PPTXs en Markdown estructurado, fiel al original "
+            "y listo para reutilizar."
+        ),
+        upload_zone_background=True,
+    )
 
     if files and any(Path(f.name).suffix.lower() == ".pdf" for f in files):
         st.warning(
