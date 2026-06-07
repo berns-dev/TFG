@@ -40,6 +40,21 @@ densidad horaria del material que está procesando. Es técnicamente opcional pe
 necesario para que el output esté calibrado por tema. El Agente Presentación necesita
 el `.md` curado del Contenido — es su único input requerido.
 
+## Contrato de formato entre agentes
+
+El Agente Organizador produce un Markdown con la distribución temática. El encabezado
+canónico de cada bloque es:
+
+```
+## Bloque N — Nombre del bloque · Xh
+```
+
+Este es el contrato que el Agente Contenido lee con `parse_organization_md()` (patrón
+`^##\s+Bloque\s+\d+\s+—\s+(.+?)\s*·\s*([\d,.]+)h`). Un archivo que no siga este
+formato exacto no será parseado correctamente por el Agente Contenido.
+
+---
+
 ## Workflow entre agentes
 
 ```
@@ -93,6 +108,8 @@ el `.md` curado del Contenido — es su único input requerido.
 TFG/
 ├── README.md                     ← README principal del proyecto
 ├── CLAUDE.md                     ← este archivo — contexto global para Claude Code
+├── shared/
+│   └── ui_hero.py                ← render_hero() compartido entre los tres agentes
 ├── agente-organizador/
 │   ├── CLAUDE.md                 ← contexto específico del Agente Organizador
 │   ├── README.md
@@ -146,4 +163,4 @@ TFG/
 |--------|--------|-------------|
 | Organizador | Funcional | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
 | Contenido | Funcional — validado con PDF y PPTX | Temas 1 y 2 de Tecnología de Materiales (PDF) |
-| Presentación | Funcional — pendiente renderizado LaTeX en PDF | Tema 1_curado.md (Tecnología de Materiales) |
+| Presentación | Funcional — renderizado LaTeX con matplotlib mathtext | Tema 1_curado.md (Tecnología de Materiales) |

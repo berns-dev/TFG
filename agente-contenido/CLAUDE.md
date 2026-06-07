@@ -1,7 +1,7 @@
 # Agente Contenido — Estado del proyecto
 
-**Repositorio:** `berns-dev/agente-contenido-tfg`
-**Última actualización:** 2026-06-03
+**Monorepo:** `berns-dev/TFG`
+**Última actualización:** 2026-06-07
 
 ---
 
@@ -109,8 +109,8 @@ Implementado en `_DENSITY_CONTEXT_TMPL` + `_build_user_message(chunk_text, tema_
 El usuario puede subir el `.md` generado por el Agente Organizador.
 
 **`parse_organization_md(content: str) -> list[dict]`** en `app.py`:
-- Patrón: `^#{1,3}\s+(.+?)\s*·\s*([\d,.]+)h` (re.MULTILINE)
-- Devuelve lista de dicts `{"nombre": str, "horas": float}`
+- Patrón: `^##\s+Bloque\s+\d+\s+—\s+(.+?)\s*·\s*([\d,.]+)h` (re.MULTILINE)
+- Devuelve lista de dicts `{"nombre": str, "horas": float}` — el nombre no incluye el prefijo «Bloque N —»
 
 Si se detectan bloques, aparece un `st.selectbox` con las opciones `"Nombre (Xh)"` para que el usuario seleccione manualmente cuál corresponde al material que está subiendo. No hay matching automático por nombre de archivo — la selección manual evita errores silenciosos.
 
@@ -135,11 +135,11 @@ Uno o varios PDF/PPTX. Sin cambios respecto a la versión anterior.
 
 El botón "Procesar" usa `key="procesar_btn"`. El trigger en el área principal es `st.session_state.get("procesar_btn")` (True solo en el run en que se pulsó).
 
-### Hero (`_HERO_CONT_HTML`)
-Componente iframe con:
-- Eyebrow "Agente 02", título "Generación de *contenido*", descripción
-- Workflow de tres pasos (Organización → Material → Procesar)
-- **Compatibilidad dark/light:** JS `sync()` lee luminancia del fondo del padre cada 800ms; aplica `.dark`/`.light` en `:root`; `@media(prefers-color-scheme:dark)` como fallback. `body{background:transparent}` hereda el color del padre.
+### Hero
+`render_hero()` desde `shared/ui_hero.py`. Parámetros:
+- `agent_number="02"`, `title_before="Generación de "`, `title_keyword="contenido"`
+- `steps=["Organización", "Material", "Procesar"]`, `upload_zone_background=True`
+- **Compatibilidad dark/light:** JS `sync()` en el iframe lee la luminancia del fondo del padre cada 800ms; aplica `.dark`/`.light` en `:root`; `@media(prefers-color-scheme:dark)` como fallback.
 
 ### Dark/light mode
 - Iframes: detección JS de luminancia del padre + CSS custom properties (`:root` / `:root.dark`)

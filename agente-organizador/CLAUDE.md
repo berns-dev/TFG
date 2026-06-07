@@ -1,7 +1,7 @@
 # Agente Organizador — Estado del proyecto
 
-**Repositorio:** `berns-dev/agente-organizador-tfg`
-**Última actualización:** 2026-05-30
+**Monorepo:** `berns-dev/TFG`
+**Última actualización:** 2026-06-07
 
 ---
 
@@ -99,11 +99,11 @@ Sonnet para toda la generación y refinamiento. El razonamiento curricular requi
 - **Sidebar:** branding (Suite de Agentes / Agente Organizador) + steps 1-2-3 + file uploaders + botón "Generar organización"
 - **Área principal:** hero `st.components.v1.html()` + expanders de validación + output + feedback loop
 
-### Hero (`_HERO_ORG_HTML`)
-Componente iframe con:
-- Eyebrow "Agente 01", título "Organización *curricular*", descripción
-- Workflow de tres pasos (Guía docente → Materiales → Propuesta)
-- **Compatibilidad dark/light:** JS `sync()` lee luminancia del fondo del padre cada 800ms; aplica `.dark`/`.light` en `:root`; `@media(prefers-color-scheme:dark)` como fallback. `body{background:transparent}` hereda el color del padre.
+### Hero
+`render_hero()` desde `shared/ui_hero.py`. Parámetros:
+- `agent_number="01"`, `title_before="Organización "`, `title_keyword="curricular"`
+- `steps=["Guía docente", "Materiales", "Propuesta"]`, `button_full_width=True`
+- **Compatibilidad dark/light:** JS `sync()` en el iframe lee la luminancia del fondo del padre cada 800ms; aplica `.dark`/`.light` en `:root`; `@media(prefers-color-scheme:dark)` como fallback.
 
 ### Dark/light mode
 - Iframes: detección JS de luminancia del padre + CSS custom properties (`:root` / `:root.dark`)

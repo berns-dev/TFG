@@ -23,17 +23,20 @@ El patrón de visualización no está fijado de antemano. Para cada sección, So
 ## 2. ARQUITECTURA DE ARCHIVOS
 
 ```
-app.py              — UI Streamlit; extracción de texto del PDF/PPTX opcional;
-                      priorización de páginas por densidad numérica; triggers
-                      de detección, PDF y HTML; checkboxes de selección
-detector.py         — Regex + filtro Haiku + advertencias Sonnet (opt-in UI);
-                      agrupa por sección (un elemento por ##/###)
+app.py              — UI Streamlit; importa render_hero desde shared/ui_hero.py
+                      (compact=True, disabled_button_styles=True,
+                      upload_zone_background=True); extracción de texto del
+                      PDF/PPTX opcional; priorización de páginas por densidad
+                      numérica; triggers de detección, PDF y HTML; checkboxes
+detector.py         — Regex + filtro Haiku + evaluar_advertencia() Sonnet
+                      (opt-in UI); agrupa por sección (un elemento por ##/###)
 generador_pdf.py    — Markdown → PDF: protege LaTeX, convierte a HTML,
                       parsea HTML a Flowables ReportLab; renderiza ecuaciones
                       con matplotlib mathtext
 generador_html.py   — Pipeline por elemento: razonador Sonnet → generador Sonnet;
                       post-procesado Python de rangos (aplicar_rangos);
-                      ThreadPoolExecutor; plantilla HTML con pestañas CSS
+                      ThreadPoolExecutor; plantilla HTML con pestañas CSS;
+                      logging con logger.debug() / logger.warning()
 prompts.py          — PROMPT_RAZONADOR_VISUALIZACION, PROMPT_GENERADOR_HTML,
                       PROMPT_DETECTOR_INTERACTIVIDAD;
                       build_razonador_message, build_generador_message,
@@ -193,9 +196,13 @@ MathJax y Chart.js se cargan en el `<head>` de `_HTML_TEMPLATE`. Los bloques gen
 
 **Activar verbose:**
 ```python
-html_str = generar_html(elementos_sel, md, titulo, verbose=True, texto_original=texto)
+html_str = generar_html(elementos_sel, titulo, verbose=True, texto_original=texto)
 ```
-`verbose=True` es el valor por defecto en `generar_html()`.
+`verbose=True` es el valor por defecto en `generar_html()`. Los logs internos usan `logging`; para verlos en Streamlit:
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
 
 **Qué imprime en cada fase:**
 
