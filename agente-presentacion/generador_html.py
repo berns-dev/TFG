@@ -380,29 +380,6 @@ def _razonar_visualizacion(
     return visualizacion
 
 
-def evaluar_advertencia(elemento: dict) -> str | None:
-    """Evalúa valor pedagógico en detección; retorna RAZON o None.
-
-    Usado por detector.py para rellenar el campo ``advertencia`` del
-    elemento antes de mostrarlo al profesor. No descarta ni genera HTML.
-    """
-    if not ANTHROPIC_API_KEY:
-        return None
-
-    client = anthropic.Anthropic(
-        api_key=ANTHROPIC_API_KEY,
-        timeout=float(REQUEST_TIMEOUT_SECONDS),
-    )
-    try:
-        visualizacion = _razonar_visualizacion(elemento, client, verbose=False)
-    except Exception:  # noqa: BLE001
-        return None
-
-    if visualizacion.get("VISUALIZABLE") == "NO":
-        return visualizacion.get("RAZON") or "Sin valor pedagógico interactivo."
-    return None
-
-
 # ---------------------------------------------------------------------------
 # API call: generate one HTML block
 # ---------------------------------------------------------------------------

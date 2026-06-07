@@ -50,16 +50,27 @@ from config import (
     MIN_LATEX_CHARS,
     MIN_VARIABLES_FOR_RELACION,
     MODEL_FAST,
+    MODEL_SMART,
     REQUEST_TIMEOUT_SECONDS,
 )
-from generador_html import evaluar_advertencia
 from prompts import (
     PROMPT_DETECTOR_INTERACTIVIDAD,
+    PROMPT_RAZONADOR_VISUALIZACION,
     build_detector_message,
+    build_razonador_message,
 )
 
 _MAX_ADVERTENCIA_WORKERS = 4
 _MAX_HAIKU_WORKERS = 4
+
+_PATRONES_VALIDOS = frozenset({
+    "CURVA_SIMPLE",
+    "FAMILIA_CURVAS",
+    "REGION_CRITERIO",
+    "MAPA_2D",
+    "TRAYECTORIA",
+    "RESPUESTA_FRECUENCIAL",
+})
 
 # ---------------------------------------------------------------------------
 # Patrones de deteccion
@@ -330,6 +341,125 @@ def _nombre_sin_seccion(items: list[dict]) -> str:
     ctx = items[0].get("contexto", "") if items else ""
     words = ctx.split()[:6]
     return " ".join(words) if words else "Introducción"
+
+
+# ---------------------------------------------------------------------------
+# Valor pedagógico (razonador Sonnet, opt-in desde la UI)
+# ---------------------------------------------------------------------------
+
+def _extract_xml_tag(raw: str, tag: str) -> str | None:
+    """Extrae el contenido entre <TAG> y </TAG>, tolerando espacios y saltos."""
+    match = re.search(
+        rf"<{tag}>\s*(.*?)\s*</{tag}>",
+        raw,
+        re.DOTALL | re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else None
+
+
+def _fallback_visualizacion(
+    elemento: dict,
+    patron_invalido: str | None = None,
+) -> dict:
+    """Dict de visualización por defecto cuando el parsing falla."""
+    variables_entrada: list[dict] = elemento.get("variables_entrada", [])
+    variable_salida: dict = elemento.get(
+        "variable_salida", {"nombre": "Y", "unidades": ""}
+    )
+    params = ", ".join(
+        v.get("nombre", "") for v in variables_entrada if v.get("nombre")
+    )
+    eje_x = (
+        variables_entrada[0].get("nombre", "X")
+        if variables_entrada
+        else "X"
+    )
+    justificacion = (
+        f"Fallback: patrón '{patron_invalido}' no reconocido."
+        if patron_invalido
+        else "Fallback: no se pudo parsear la respuesta del razonador."
+    )
+    return {
+        "VISUALIZABLE": "SI",
+        "PATRON": "CURVA_SIMPLE",
+        "EJE_X": eje_x,
+        "EJE_Y": variable_salida.get("nombre", "Y"),
+        "PARAMETROS_SLIDER": params,
+        "ESCALA_LOG_X": "NO",
+        "ESCALA_LOG_Y": "NO",
+        "JUSTIFICACION": justificacion,
+        "RANGO_VARIABLES": "",
+        "ZONA_VALIDEZ": "",
+    }
+
+
+def _parse_visualizacion(raw: str, elemento: dict) -> dict:
+    """Parsea la respuesta XML del razonador (visualizable o patrón)."""
+    visualizable = _extract_xml_tag(raw, "VISUALIZABLE")
+    if visualizable and visualizable.upper() == "NO":
+        return {
+            "VISUALIZABLE": "NO",
+            "RAZON": _extract_xml_tag(raw, "RAZON") or "Sin valor pedagógico interactivo.",
+        }
+
+    patron = _extract_xml_tag(raw, "PATRON")
+    if not patron or patron not in _PATRONES_VALIDOS:
+        return _fallback_visualizacion(elemento, patron)
+
+    return {
+        "VISUALIZABLE": "SI",
+        "PATRON": patron,
+        "EJE_X": _extract_xml_tag(raw, "EJE_X") or "",
+        "EJE_Y": _extract_xml_tag(raw, "EJE_Y") or "",
+        "PARAMETROS_SLIDER": _extract_xml_tag(raw, "PARAMETROS_SLIDER") or "",
+        "ESCALA_LOG_X": _extract_xml_tag(raw, "ESCALA_LOG_X") or "NO",
+        "ESCALA_LOG_Y": _extract_xml_tag(raw, "ESCALA_LOG_Y") or "NO",
+        "JUSTIFICACION": _extract_xml_tag(raw, "JUSTIFICACION") or "",
+        "RANGO_VARIABLES": _extract_xml_tag(raw, "RANGO_VARIABLES") or "",
+        "ZONA_VALIDEZ": _extract_xml_tag(raw, "ZONA_VALIDEZ") or "",
+    }
+
+
+def _razonar_visualizacion(
+    elemento: dict,
+    client: anthropic.Anthropic,
+    verbose: bool = False,
+    texto_original: str | None = None,
+) -> dict:
+    """Llama al razonador Sonnet y devuelve el dict de visualización parseado."""
+    user_msg = build_razonador_message(elemento, texto_original)
+
+    response = client.messages.create(
+        model=MODEL_SMART,
+        max_tokens=1024,
+        system=PROMPT_RAZONADOR_VISUALIZACION,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    raw = response.content[0].text.strip()
+    return _parse_visualizacion(raw, elemento)
+
+
+def evaluar_advertencia(elemento: dict) -> str | None:
+    """Evalúa valor pedagógico en detección; retorna RAZON o None.
+
+    Usado por detectar_elementos() para rellenar el campo ``advertencia`` del
+    elemento antes de mostrarlo al profesor. No descarta ni genera HTML.
+    """
+    if not ANTHROPIC_API_KEY:
+        return None
+
+    client = anthropic.Anthropic(
+        api_key=ANTHROPIC_API_KEY,
+        timeout=float(REQUEST_TIMEOUT_SECONDS),
+    )
+    try:
+        visualizacion = _razonar_visualizacion(elemento, client, verbose=False)
+    except Exception:  # noqa: BLE001
+        return None
+
+    if visualizacion.get("VISUALIZABLE") == "NO":
+        return visualizacion.get("RAZON") or "Sin valor pedagógico interactivo."
+    return None
 
 
 # ---------------------------------------------------------------------------
