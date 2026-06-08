@@ -21,9 +21,7 @@ Funcional. Validado con:
 - Temas 1 y 2 de Tecnología de Materiales (PDFs con texto extraíble)
 - Validación con PPTX reales: pendiente
 
-Limitación documentada: PDFs exportados desde PPTX destruyen la estructura semántica
-irreversiblemente. Decisión adoptada: tratar como formato degradado con aviso visible
-en UI, preferir PPTX nativo. Ver datos empíricos en sección Limitaciones documentadas.
+Limitación documentada: Los PDFs exportados desde PowerPoint contienen texto extraíble, pero sin orden de lectura coherente — los cuadros de texto de cada diapositiva se depositan en el PDF en orden de edición, no visual. Decisión adoptada: aviso visible en UI cuando el nombre del archivo sugiere origen PowerPoint, recomendar PPTX nativo.
 
 ---
 
@@ -178,7 +176,7 @@ El campo `compatible_agente_organizador: true` en el frontmatter indica que el A
 
 ## Limitaciones documentadas
 
-1. **PDFs exportados desde PPTX:** estructura semántica destruida irreversiblemente. Aviso en UI. Preferir PPTX nativo.
+1. **PDFs exportados desde PowerPoint:** texto extraíble pero sin orden de lectura coherente (cuadros depositados en orden de edición, no visual). Aviso en UI. Preferir PPTX nativo.
 2. **Subíndices químicos:** `pdfplumber` pierde subíndices (ZrO₂ → "ZrO"). Limitación de la biblioteca.
 3. **Chunking en posición no ideal:** `[TEXTO_ILEGIBLE]` puede aparecer por partición a mitad de contexto, no por fallo de extracción.
 4. **Rate limit 429 Haiku:** concurrencia puede agotar el límite de 10.000 tokens output/min de Haiku con muchos chunks. No es bug del agente.

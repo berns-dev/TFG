@@ -20,7 +20,7 @@ Extrae temas, subtemas y distribución horaria de una asignatura a partir de la 
 - Elementos de Máquinas
 - Tecnología de Materiales
 
-**Limitación documentada:** No detecta PDFs rasterizados exportados desde PowerPoint. El texto extraído es mínimo pero el agente no lo descarta ni avisa al usuario — la guía docente actúa como ancla estructural y compensa parcialmente.
+**Limitación documentada:** Los PDFs exportados desde PowerPoint contienen texto extraíble, pero sin orden de lectura coherente. PowerPoint deposita los cuadros de texto de cada diapositiva en el orden en que se crearon durante la edición, no en el orden visual. pdfplumber los extrae en ese orden interno y devuelve un flujo mezclado donde el agente no puede distinguir título de cuerpo. La guía docente no tiene este problema porque es un documento de flujo lineal. No hay aviso implementado para este caso en el Agente Organizador.
 
 ---
 
