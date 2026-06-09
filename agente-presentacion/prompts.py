@@ -91,25 +91,56 @@ INSTRUCCIONES:
 
 1. Lee la expresión matemática y el contexto físico del fragmento de Markdown original.
 
-2. Clasifica la visualización más adecuada eligiendo UNO de estos patrones genéricos:
+2. Antes de elegir patrón, responde internamente estas dos preguntas:
+   a) ¿Cuál es la variable independiente principal — la que el alumno querría
+      explorar en el eje X para ver cómo cambia el resultado?
+   b) ¿Hay algún parámetro que modula la forma o posición de esa curva?
+      (propiedad del material, condición de contorno, geometría, etc.)
 
-   - CURVA_SIMPLE: una variable dependiente, una independiente, sin parámetros adicionales de peso. La gráfica Y=f(X) es suficiente.
+   Si la respuesta a (b) es sí, FAMILIA_CURVAS casi siempre enseña más que
+   CURVA_SIMPLE con slider: ver cuatro curvas simultáneas para valores distintos
+   del parámetro permite comparar directamente, mientras que un slider que
+   desplaza una sola curva obliga al alumno a recordar la posición anterior.
+   Usa CURVA_SIMPLE solo cuando no hay parámetro secundario relevante.
 
-   - FAMILIA_CURVAS: una variable dependiente, una independiente, más uno o dos parámetros que modulan la respuesta (propiedad del material, geometría, configuración del sistema). La representación adecuada es múltiples curvas simultáneas para valores representativos del parámetro, no una sola curva que se desplaza.
+3. Clasifica la visualización eligiendo UNO de estos patrones:
 
-   - REGION_CRITERIO: la expresión define una frontera entre dos estados (seguro/falla, estable/inestable, válido/inválido). La representación adecuada es un plano dividido en zonas con el estado actual del usuario como punto móvil. Aplica a cualquier criterio de falla, estabilidad o validez en cualquier dominio de ingeniería.
+   - CURVA_SIMPLE: una variable dependiente, una independiente, sin parámetros
+     secundarios de peso. Usa este patrón solo cuando la relación tenga
+     exactamente dos variables y ningún parámetro que module la curva.
 
-   - MAPA_2D: tres o más variables con peso comparable. La representación adecuada es un heatmap donde X e Y son las dos variables de mayor peso y el color es el resultado. Las variables restantes son sliders auxiliares.
+   - FAMILIA_CURVAS: una variable dependiente, una independiente, más uno o dos
+     parámetros que modulan la respuesta. Muestra 4 curvas simultáneas para
+     valores representativos del parámetro (mín, 33%, 66%, máx). El alumno ve
+     de golpe cómo cambia la relación al variar el parámetro, sin tener que
+     mover un slider y recordar. Preferir este patrón sobre CURVA_SIMPLE siempre
+     que exista un parámetro secundario físicamente significativo.
 
-   - TRAYECTORIA: la expresión describe un proceso o ciclo en un espacio de estados (P-V, T-S, tensión-deformación cíclica, etc.). La representación adecuada es la trayectoria animada o interactiva sobre el espacio de estados.
+   - REGION_CRITERIO: la expresión define una frontera entre dos estados
+     (seguro/falla, estable/inestable, válido/inválido). Plano dividido en zonas
+     con el estado actual del usuario como punto móvil. Aplica a cualquier
+     criterio de falla, estabilidad o validez en cualquier dominio de ingeniería.
 
-   - RESPUESTA_FRECUENCIAL: la variable independiente es la frecuencia o el tiempo y la expresión describe una respuesta dinámica. La representación adecuada es magnitud y fase (o similar) en escala logarítmica.
+   - MAPA_2D: tres o más variables con peso comparable. Heatmap donde X e Y son
+     las dos variables de mayor peso y el color es el resultado. Las variables
+     restantes son sliders auxiliares.
 
-3. Identifica qué variables son los ejes principales (X, Y) y cuáles son parámetros secundarios (sliders auxiliares).
+   - TRAYECTORIA: la expresión describe un proceso o ciclo en un espacio de
+     estados (P-V, T-S, tensión-deformación cíclica, etc.). Trayectoria animada
+     o interactiva sobre el espacio de estados.
 
-4. Indica si algún eje requiere escala logarítmica (cuando los valores varían más de 2 órdenes de magnitud en el rango físico habitual).
+   - RESPUESTA_FRECUENCIAL: la variable independiente es la frecuencia o el
+     tiempo y la expresión describe una respuesta dinámica. Magnitud y fase en
+     escala logarítmica.
 
-5. Si <VISUALIZABLE>SI</VISUALIZABLE>, devuelve SOLO el siguiente XML, sin texto adicional:
+4. Identifica qué variables son los ejes principales (X, Y) y cuáles son
+   parámetros secundarios. Para FAMILIA_CURVAS, el parámetro secundario define
+   las 4 curvas — no va como slider individual sino como familia de líneas.
+
+5. Indica si algún eje requiere escala logarítmica (cuando los valores varían
+   más de 2 órdenes de magnitud en el rango físico habitual).
+
+6. Si <VISUALIZABLE>SI</VISUALIZABLE>, devuelve SOLO el siguiente XML, sin texto adicional:
 
 <VISUALIZACION>
   <VISUALIZABLE>SI</VISUALIZABLE>
@@ -139,6 +170,16 @@ realistas aunque el contexto no los mencione explícitamente. Un rango que permi
 explorar el comportamiento de interés vale más que "no tengo datos". Si el material
 del profesor proporciona valores concretos, priorízalos; si no, inferir rangos
 razonables para la asignatura (ingeniería mecánica, nivel universitario).
+
+VERIFICACIÓN DE UNIDADES (obligatoria antes de fijar RANGO_VARIABLES):
+Elige una unidad para cada variable y comprueba que TODAS las constantes de la
+ecuación son numéricamente consistentes con esas unidades. Luego evalúa mentalmente
+el resultado en los dos extremos del rango: si la variable de salida varía menos del
+20% entre el mínimo y el máximo de la variable independiente principal, es muy probable
+que haya un error de unidades — revisa y corrige antes de responder.
+Ejemplo: si d está en µm y k_y es una constante de Hall-Petch, el valor numérico de
+k_y en MPa·µm^0.5 es ~1000× mayor que en MPa·m^0.5. Usar el valor SI con d en µm
+produce una curva plana.
 
 Si no hay suficiente información para determinar el patrón con confianza, usar CURVA_SIMPLE como fallback e indicarlo en JUSTIFICACION."""
 
