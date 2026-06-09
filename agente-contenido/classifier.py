@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 import anthropic
@@ -184,12 +185,22 @@ def _call_anthropic(chunk_text: str, tema_horas: float | None = None) -> dict[st
 
     last_raw = ""
     for attempt in range(3):
-        message = client.messages.create(
-            model=model,
-            max_tokens=2048,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
+        try:
+            message = client.messages.create(
+                model=model,
+                max_tokens=2048,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_message}],
+            )
+        except (
+            anthropic.APIConnectionError,
+            anthropic.RateLimitError,
+            anthropic.APIError,
+        ):
+            if attempt < 2:
+                time.sleep(2**attempt)
+                continue
+            raise
         raw = message.content[0].text
         last_raw = raw
         parsed = _parse_delimited_response(raw)

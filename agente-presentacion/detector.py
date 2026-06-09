@@ -176,14 +176,6 @@ def es_constante_pura(expresion: str) -> bool:
     return bool(re.match(r"^[A-Z]/\d+$", expr_ratio))
 
 
-def _extract_xml_tag(raw: str, tag: str) -> str | None:
-    """Extrae el contenido de un tag XML del output de Haiku."""
-    match = re.search(
-        rf"<{tag}>(.*?)</{tag}>", raw, re.DOTALL | re.IGNORECASE
-    )
-    return match.group(1).strip() if match else None
-
-
 def _parse_detector_response(raw: str) -> dict[str, Any]:
     """Parsea la respuesta XML de Haiku para el detector."""
     interactivo_raw = (_extract_xml_tag(raw, "INTERACTIVO") or "").lower()

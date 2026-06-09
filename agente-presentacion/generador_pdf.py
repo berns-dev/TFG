@@ -806,10 +806,10 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
     Raises:
         RuntimeError: If the markdown library is not available.
     """
-    if not _MD_AVAILABLE or _md_lib is None:
+    if not _MD_AVAILABLE:
         raise RuntimeError(
-            "La libreria 'markdown' no esta disponible. "
-            "Instalala con: pip install markdown"
+            "El paquete 'markdown' no está disponible. "
+            "Verifica que está incluido en requirements.txt e instalado en el entorno."
         )
 
     # 1. Pre-process markdown

@@ -20,7 +20,7 @@ from shared.ui_hero import render_hero
 from assembler import assemble_markdown, assemble_multiple, unified_download_filename
 from chunker import split_into_chunks
 from classifier import classify_and_format
-from config import MAX_WORKERS
+from config import FIDELITY_THRESHOLD, MAX_WORKERS
 from extractor import extract_text
 from validator import validate_items
 
@@ -272,6 +272,22 @@ def main() -> None:
 
                         status.write("Validación…")
                         report = validate_items(items, original_chunks=chunks)
+
+                        if not report.get("ok"):
+                            failed_fidelity = [
+                                r
+                                for r in (report.get("fidelity") or [])
+                                if not r.get("passed", True)
+                            ]
+                            if failed_fidelity:
+                                min_score = min(
+                                    r["coverage_score"] for r in failed_fidelity
+                                )
+                                st.warning(
+                                    f"⚠️ Fidelidad léxica por debajo del umbral "
+                                    f"(score: {min_score:.2f} < {FIDELITY_THRESHOLD}). "
+                                    f"Revisa el output antes de usar."
+                                )
 
                         st.session_state["resultados"].append(
                             {
