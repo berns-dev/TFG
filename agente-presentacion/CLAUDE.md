@@ -135,7 +135,7 @@ Función pública: `generar_pdf(markdown_text, titulo)` en `generador_pdf.py`.
 2. **`_protect_latex()`:** reemplaza `$$...$$` e `$...$` con tokens placeholder para que el parser de Markdown no los altere.
 3. **Marcadores del Agente Contenido:** `[FIGURA: ...]` → caption en cursiva; `[TEXTO_ILEGIBLE]` → blockquote italic que indica la laguna al profesor.
 4. **Markdown → HTML** con la biblioteca `markdown` (extensiones `tables`, `fenced_code`).
-5. **`_MarkdownFlowableParser`** (HTMLParser custom): H1-H4 → estilos jerárquicos en azul/negro/gris; párrafos justificados; listas `ul`/`ol` con contador; `blockquote` en cursiva; `pre` en Courier monoespaciado; celdas `td`/`th` como párrafos indentados (sin layout de tabla real).
+5. **`_MarkdownFlowableParser`** (HTMLParser custom): H1-H4 → estilos jerárquicos en azul/negro/gris; párrafos justificados; listas `ul`/`ol` con contador; `blockquote` en cursiva; `pre` en Courier monoespaciado; tablas Markdown → `Table` Flowable de ReportLab con cabecera en azul (`#185FA5`) sobre fondo blanco, filas alternas en `#F7F5F0`, cuadrícula `#D3D1C7` a 0.5pt, ancho de columna distribuido uniformemente.
 6. **Ecuaciones en bloque** (`$$...$$`): `render_latex_to_image()` renderiza la expresión con `matplotlib.mathtext` (`usetex=False`, sin LaTeX del sistema) como PNG en memoria. La imagen se escala para no superar el 80% del ancho de página. Si el renderizado falla, fallback a texto Courier en `_LeftBorderBox`.
 7. **Ecuaciones inline** (`$...$`): renderizadas como `<img>` inline escaladas a 12pt de altura; fallback a `<font name="Courier">`.
 8. **`_LeftBorderBox`:** Flowable custom con fondo `#F7F5F0` y borde izquierdo `#185FA5` (3pt). Envuelve código y ecuaciones en fallback.
@@ -230,4 +230,4 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## 11. PENDIENTE
 
-**Tablas en el PDF sin layout de tabla.** Las celdas `td`/`th` se renderizan como párrafos indentados. `_MarkdownFlowableParser` no usa el Flowable `Table` de ReportLab.
+Sin items pendientes en el pipeline principal. Las tablas en el PDF están implementadas con `Table` de ReportLab desde 2026-06-09.

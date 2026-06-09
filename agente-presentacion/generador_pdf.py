@@ -49,8 +49,10 @@ from reportlab.platypus import (
     Paragraph,
     Preformatted,
     Spacer,
+    Table as _Table,
 )
 from reportlab.platypus.flowables import Flowable
+from reportlab.platypus.tables import TableStyle as _TableStyle
 
 _LATEX_DPI = 150
 
@@ -352,6 +354,15 @@ class _MarkdownFlowableParser(HTMLParser):
         self._list_stack: list[str] = []       # "ul" / "ol" item tracking
         self._ol_counters: list[int] = []
         self._skip_tags = {"html", "body", "head"}
+
+        # Table state
+        self._in_table = False
+        self._table_data: list[list[str]] = []
+        self._table_has_header: list[bool] = []
+        self._current_row_cells: list[str] = []
+        self._current_row_is_header = False
+        self._current_cell_parts: list[str] = []
+        self._in_cell = False
         self._block_latex_pattern = (
             rf"{re.escape(_BLOCK_PLACEHOLDER)}\d+"
             rf"{re.escape(_BLOCK_PLACEHOLDER)}"
@@ -405,10 +416,9 @@ class _MarkdownFlowableParser(HTMLParser):
         elif block == "blockquote":
             self.flowables.append(Paragraph(text, _ESTILOS["blockquote"]))
 
-        elif block == "td" or block == "th":
-            # Tables: just render as indented paragraphs for now
-            style = _ESTILOS["p"]
-            self.flowables.append(Paragraph(text, style))
+        elif block in ("td", "th"):
+            if self._in_cell and text:
+                self._current_cell_parts.append(text)
 
         else:
             stripped = text.strip()
@@ -473,6 +483,71 @@ class _MarkdownFlowableParser(HTMLParser):
                 if expanded.strip():
                     self.flowables.append(Paragraph(expanded, style))
 
+    def _build_table(self) -> None:
+        """Build a ReportLab Table from accumulated rows and add to flowables."""
+        if not self._table_data:
+            return
+
+        num_cols = max(len(row) for row in self._table_data)
+        if num_cols == 0:
+            return
+
+        # _max_eq_width is 80% of the content width; reverse to get full width
+        full_width = self._max_eq_width / 0.8
+        col_width = full_width / num_cols
+        col_widths = [col_width] * num_cols
+
+        _hdr_style = ParagraphStyle(
+            "TblHdr",
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            textColor=colors.white,
+            leading=12,
+        )
+        _cell_style = ParagraphStyle(
+            "TblCell",
+            fontName="Helvetica",
+            fontSize=9,
+            textColor=_NEGRO,
+            leading=12,
+        )
+
+        table_content = []
+        for row_idx, row in enumerate(self._table_data):
+            is_hdr = (row_idx < len(self._table_has_header)
+                      and self._table_has_header[row_idx])
+            style = _hdr_style if is_hdr else _cell_style
+            padded = list(row) + [""] * (num_cols - len(row))
+            table_content.append(
+                [Paragraph(cell or "&nbsp;", style) for cell in padded[:num_cols]]
+            )
+
+        style_cmds: list = [
+            ("GRID", (0, 0), (-1, -1), 0.5, _GRIS_BORDE),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]
+        for row_idx, is_hdr in enumerate(self._table_has_header):
+            if is_hdr:
+                style_cmds.append(
+                    ("BACKGROUND", (0, row_idx), (-1, row_idx), _AZUL)
+                )
+            elif row_idx % 2 == 1:
+                style_cmds.append(
+                    ("BACKGROUND", (0, row_idx), (-1, row_idx), _GRIS_FONDO)
+                )
+
+        num_header_rows = sum(1 for h in self._table_has_header if h)
+        tbl = _Table(table_content, colWidths=col_widths,
+                     repeatRows=num_header_rows)
+        tbl.setStyle(_TableStyle(style_cmds))
+        self.flowables.append(Spacer(1, 8))
+        self.flowables.append(tbl)
+        self.flowables.append(Spacer(1, 8))
+
     def _add_block_equation(self, expr: str) -> None:
         buf = render_latex_to_image(expr)
         self.flowables.append(Spacer(1, 6))
@@ -528,6 +603,31 @@ class _MarkdownFlowableParser(HTMLParser):
             self._tag_stack.append(tag)
             return
 
+        # Table-specific handlers — must come before the generic _BLOCK_TAGS branch
+        if tag == "table":
+            self._flush()
+            self._in_table = True
+            self._table_data = []
+            self._table_has_header = []
+            self._tag_stack.append(tag)
+            return
+
+        if tag == "tr":
+            self._flush()
+            self._current_row_cells = []
+            self._current_row_is_header = False
+            self._tag_stack.append(tag)
+            return
+
+        if tag in ("th", "td"):
+            self._flush()
+            self._in_cell = True
+            self._current_cell_parts = []
+            if tag == "th":
+                self._current_row_is_header = True
+            self._tag_stack.append(tag)
+            return
+
         if tag in self._BLOCK_TAGS:
             self._flush()
             self._tag_stack.append(tag)
@@ -566,6 +666,38 @@ class _MarkdownFlowableParser(HTMLParser):
             if self._tag_stack and self._tag_stack[-1] == tag:
                 self._tag_stack.pop()
             self.flowables.append(Spacer(1, 3))
+            return
+
+        # Table-specific handlers — must come before the generic _BLOCK_TAGS branch
+        if tag in ("td", "th"):
+            self._flush()
+            cell_text = " ".join(self._current_cell_parts).strip()
+            self._current_row_cells.append(cell_text)
+            self._current_cell_parts = []
+            self._in_cell = False
+            if self._tag_stack and self._tag_stack[-1] == tag:
+                self._tag_stack.pop()
+            return
+
+        if tag == "tr":
+            self._flush()
+            if self._current_row_cells:
+                self._table_data.append(list(self._current_row_cells))
+                self._table_has_header.append(self._current_row_is_header)
+            self._current_row_cells = []
+            if self._tag_stack and self._tag_stack[-1] == tag:
+                self._tag_stack.pop()
+            return
+
+        if tag == "table":
+            self._flush()
+            self._in_table = False
+            if self._table_data:
+                self._build_table()
+            self._table_data = []
+            self._table_has_header = []
+            if self._tag_stack and self._tag_stack[-1] == tag:
+                self._tag_stack.pop()
             return
 
         if tag in self._BLOCK_TAGS:
