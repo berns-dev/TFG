@@ -12,7 +12,9 @@ produce un Markdown que alimenta al siguiente, pero sin acoplamiento de código.
 agente puede ejecutarse de forma independiente si el profesor ya dispone del input en
 el formato correcto.
 
-**Principio rector (los tres agentes):** Transforman, nunca inventan. El output de cada agente solo puede contener información explícitamente presente en el material de entrada.
+**Principio rector (Organizador y Contenido):** Transforman, nunca inventan. El output solo puede contener información explícitamente presente en el material de entrada.
+
+**Excepción documentada (Presentación — HTML interactivo):** el texto descriptivo y los insights provienen del Markdown, pero la implementación de las ecuaciones en el código de visualización usa el conocimiento de ingeniería del modelo libremente. La distinción es: el modelo puede saber física, no puede saber qué dijo el profesor.
 
 ---
 
@@ -97,7 +99,7 @@ formato exacto no será parseado correctamente por el Agente Contenido.
 - Los modelos válidos son `claude-haiku-4-5-20251001` y `claude-sonnet-4-5`.
 - Cada agente tiene su `.cursorrules` con restricciones específicas de ese agente. Léelas antes de modificar cualquier archivo de código.
 - No modificar `SYSTEM_PROMPT` en `agente-contenido/classifier.py` sin consenso explícito del usuario.
-- No modificar `PROMPT_GENERADOR_HTML` ni `PROMPT_DETECTOR_INTERACTIVIDAD` en `agente-presentacion/prompts.py` sin consenso explícito.
+- No modificar `PROMPT_GENERADOR_HTML`, `PROMPT_RAZONADOR_VISUALIZACION` ni `PROMPT_DETECTOR_INTERACTIVIDAD` en `agente-presentacion/prompts.py` sin consenso explícito.
 - El código determinista (extracción de horas, clasificación de archivos, detección de ecuaciones) no se reemplaza por LLM sin justificación documentada.
 
 ---
@@ -157,7 +159,7 @@ TFG/
 
 ---
 
-## Estado del proyecto (2026-06-03)
+## Estado del proyecto (2026-06-09)
 
 | Agente | Estado | Validado con |
 |--------|--------|-------------|

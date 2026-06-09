@@ -134,6 +134,12 @@ del material o del ejemplo del profesor, no el punto medio del rango.
 Si se proporciona MATERIAL ORIGINAL DEL PROFESOR, prioriza los valores numéricos
 que aparecen ahí para min, max y default.
 
+RANGOS FÍSICOS: usa tu conocimiento de ingeniería para fijar rangos pedagógicos
+realistas aunque el contexto no los mencione explícitamente. Un rango que permita
+explorar el comportamiento de interés vale más que "no tengo datos". Si el material
+del profesor proporciona valores concretos, priorízalos; si no, inferir rangos
+razonables para la asignatura (ingeniería mecánica, nivel universitario).
+
 Si no hay suficiente información para determinar el patrón con confianza, usar CURVA_SIMPLE como fallback e indicarlo en JUSTIFICACION."""
 
 
@@ -220,11 +226,33 @@ Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
 
 6. GRÁFICA (según patrón — ver abajo)
    Contenedor: background #F0EEE9, border-radius 12px, padding
-   1rem 1.25rem 2rem 2.5rem, position relative, height 240px,
+   1rem 1.25rem 2.5rem 3rem, position relative, height 380px,
    margin 1.25rem 0.
-   Etiquetas de ejes: position absolute, 11px, #9A9890.
-   Eje Y: rotado -90deg, anclado izquierda. Eje X: centrado abajo.
+   NO usar etiquetas span absolutas para los ejes. Usar SOLO las escalas
+   built-in de Chart.js para los títulos de eje:
+     scales.x.title.display: true, scales.x.title.text: '...', scales.x.title.font.size: 12, scales.x.title.color: '#6B6860'
+     scales.y.title.display: true, scales.y.title.text: '...', scales.y.title.font.size: 12, scales.y.title.color: '#6B6860'
+     scales.x.ticks.font.size: 11, scales.x.ticks.color: '#6B6860'
+     scales.y.ticks.font.size: 11, scales.y.ticks.color: '#6B6860'
    Canvas Chart.js dentro sin padding propio.
+   REGLA DE SLIDERS (obligatoria, sin excepciones):
+     Cada input[type=range] DEBE tener el atributo oninput="update_{slug}()"
+     directamente en el elemento HTML — no event listeners añadidos con
+     addEventListener en el JS. Si hay 3 sliders, los 3 tienen oninput.
+     update_{slug}() debe leer TODOS los sliders del bloque cada vez que
+     se llama, no solo el que disparó el evento.
+   CURSOR INTERACTIVO (obligatorio en todos los patrones Chart.js):
+     Cuando el usuario mueva un slider, actualizar un punto resaltado sobre
+     la curva activa en la posición X actual. Implementar como dataset
+     adicional tipo 'scatter': pointRadius 7, backgroundColor '#185FA5',
+     al final del array de datasets. Si el eje X es fijo y el slider modula
+     la curva, mantener el punto en el valor X del punto medio del rango.
+   ANOTACIONES DE UMBRAL (cuando las curvas se crucen o ZONA_VALIDEZ lo indique):
+     Dibujar mediante afterDraw hook en Chart.js: línea vertical o horizontal
+     punteada en #9A9890. Para intersecciones de curvas (ej. σ_ys = σ_f),
+     calcular el punto de cruce con búsqueda lineal sobre los arrays de datos
+     y marcarlo con un punto distinto (color #C0392B, radius 6) en un dataset
+     scatter separado, con label en el RESULTADO ACTUAL.
 
 7. RESULTADO ACTUAL
    Strip horizontal: border-left 3px solid #185FA5, border-radius 0 10px 10px 0,
@@ -249,6 +277,9 @@ Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
 CURVA_SIMPLE:
   Chart.js línea. Escala logarítmica si ESCALA_LOG_X/Y = SI.
   Sin leyenda Chart.js si hay una sola serie.
+  Añadir el dataset de cursor interactivo descrito en la sección 6.
+  Si el rango de X tiene >50 puntos, usar 80 puntos de muestreo para
+  que la curva sea suave pero la actualización sea fluida.
 
 FAMILIA_CURVAS:
   Chart.js multilínea, 4 curvas por parámetro (mín, 33%, 66%, máx).
@@ -258,10 +289,16 @@ FAMILIA_CURVAS:
   Div contenedor position:relative sobre el canvas.
   Máximo 2 familias de curvas, máximo 8 datasets.
   Slider principal: curvas activas #185FA5, resto #CCCCCC borderDash [4,4].
+  Añadir dataset de cursor sobre la curva activa (la del valor actual del slider).
 
 REGION_CRITERIO:
-  Chart.js scatter. Zonas fill verde/rojo, frontera como línea, punto móvil.
+  Chart.js scatter. Zonas fill verde/rojo con opacidad 0.12, frontera como línea
+  continua #185FA5, punto móvil controlado por los sliders.
+  Punto móvil: radius 9, borde blanco 2px, relleno según zona (verde si seguro,
+  rojo si falla). Mostrar el estado actual en texto sobre el punto (14px, bold).
   Leyenda mínima si aplica: 12px, bottom-left, sin borde.
+  Calcular y marcar el punto de cruce de la frontera si hay dos curvas que se
+  intersectan (ver instrucción ANOTACIONES DE UMBRAL en sección 6).
 
 MAPA_2D:
   Canvas HTML5 nativo, grid 80×80, escala #185FA5 → blanco → #C0392B.
@@ -315,8 +352,23 @@ RESTRICCIONES TÉCNICAS:
 - Sin gradientes, box-shadow, blur ni glow
 
 RESTRICCIÓN DE CONTENIDO:
-Descripción e insight solo desde el contexto. Si falta información, omitir
-rangos antes que inventar.
+Esta es una visualización interactiva, no un documento de contenido. Aplican
+dos reglas distintas según el tipo de información:
+
+1. TEXTO (descripción, insight): solo desde el contexto proporcionado.
+   No añadir afirmaciones sobre el material que no aparezcan en el contexto.
+
+2. CÁLCULO Y FÍSICA (implementación de la fórmula en JS, forma de la curva,
+   rangos físicos razonables, comportamiento esperado de la relación):
+   usa tu conocimiento de ingeniería libremente. Si la ecuación es Hall-Petch,
+   implementa σ = σ₀ + k_y/√d correctamente aunque el contexto no explique
+   la forma de la curva. Si una curva debe ser hiperbólica, que lo sea.
+   Si el modelo físico implica una asíntota o una transición, reprodúcela.
+   El objetivo es que la visualización sea físicamente correcta y pedagógicamente
+   útil, no que sea una transcripción literal del texto del contexto.
+
+Si falta información de texto para la descripción o el insight, omitir antes
+que inventar afirmaciones sobre el material del profesor.
 
 Devuelve ÚNICAMENTE el HTML del bloque, sin explicaciones, sin backticks.
 

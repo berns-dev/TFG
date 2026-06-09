@@ -1,6 +1,6 @@
 # Agente Presentación — Estado del proyecto
 
-**Última actualización:** 2026-06-05
+**Última actualización:** 2026-06-09
 
 ---
 
@@ -10,7 +10,7 @@ Genera dos salidas desde el Markdown producido por el Agente Contenido: un PDF a
 
 **Inputs:**
 - `[obligatorio]` Archivo `.md` del Agente Contenido.
-- `[opcional]` PDF o PPTX del material original del profesor. Si se sube, el razonador lo usa para determinar rangos físicos realistas de las variables y ajustar el patrón de visualización. Sin este archivo el agente funciona igual, pero los rangos de los sliders se infieren solo del contexto del Markdown.
+- `[opcional]` PDF o PPTX del material original del profesor. Si se sube, el razonador lo usa para determinar rangos físicos realistas y ajustar el patrón. Sin este archivo el agente funciona igual: los rangos se infieren del contexto del Markdown y del conocimiento de ingeniería del modelo (ver sección 5).
 
 **Outputs:**
 - PDF con ReportLab: ecuaciones como imágenes PNG (matplotlib mathtext), tablas, headings, pie de página.
@@ -68,7 +68,7 @@ requirements.txt    — anthropic, streamlit, reportlab, markdown,
 7. El profesor selecciona las secciones y pulsa "Generar HTML (N elementos)".
 8. `generar_html(elementos_sel, titulo, verbose, texto_original)` abre un `ThreadPoolExecutor` (máx. 4 workers) y llama a `_generar_bloque()` por elemento en paralelo.
 9. Por cada elemento, en `_generar_bloque()`:
-   - **Paso 1 — Razonador (Sonnet):** `_razonar_visualizacion()` llama a Sonnet con `PROMPT_RAZONADOR_VISUALIZACION` y `build_razonador_message()`. El mensaje incluye el texto del material original si está disponible. Sonnet devuelve XML con `VISUALIZABLE`, `PATRON`, ejes, sliders, `RANGO_VARIABLES` y `ZONA_VALIDEZ`.
+   - **Paso 1 — Razonador (Sonnet):** `_razonar_visualizacion()` llama a Sonnet con `PROMPT_RAZONADOR_VISUALIZACION` y `build_razonador_message()`. El mensaje incluye el texto del material original si está disponible. Sonnet devuelve XML con `VISUALIZABLE`, `PATRON`, ejes, sliders, `RANGO_VARIABLES` y `ZONA_VALIDEZ`. Los rangos pueden venir del material del profesor, del contexto del Markdown o del conocimiento de ingeniería del modelo — en ese orden de prioridad.
    - Si el razonador devuelve `VISUALIZABLE=NO`, se aplica igualmente el fallback CURVA_SIMPLE. El elemento no se descarta porque el profesor lo seleccionó explícitamente.
    - **Paso 2 — Generador (Sonnet):** `build_generador_message()` pasa el elemento, la decisión del razonador y el `slug` exacto. Sonnet genera el bloque HTML (máx. 8.192 tokens).
    - **Post-procesado — `aplicar_rangos()`:** antes de validar, Python sobreescribe los atributos `min`, `max` y `value` de cada `input[type=range]` con los valores de `RANGO_VARIABLES`. Esto corrige los casos donde Sonnet recibe los rangos correctos del razonador pero los ignora en la generación (ver sección 7).
@@ -93,6 +93,8 @@ requirements.txt    — anthropic, streamlit, reportlab, markdown,
 ## 5. SISTEMA DE RAZONAMIENTO DE VISUALIZACIÓN
 
 El razonador evalúa primero el valor pedagógico del elemento antes de elegir patrón.
+
+**Régimen dual de fuentes (decisión de diseño):** el razonador y el generador aplican reglas distintas según el tipo de información. El texto descriptivo y los insights solo pueden venir del contexto del Markdown. La implementación de la ecuación en JS —forma de la curva, rangos de sliders, comportamiento esperado— usa el conocimiento de ingeniería del modelo libremente. Esto es deliberado: la física de una ecuación es objetiva y el modelo no puede "alucinar" que Hall-Petch es hiperbólica, mientras que afirmar algo sobre el material del profesor sí requeriría fuente explícita.
 
 **Criterio VISUALIZABLE SI/NO:** Sonnet lee el texto completo del fragmento y responde internamente: "¿Qué comprensión nueva obtiene el alumno al mover un slider que no pueda obtener leyendo el texto?" Si la respuesta es "ninguna", devuelve `<VISUALIZABLE>NO</VISUALIZABLE>` con una razón. Casos típicos de NO: observaciones empíricas con factor fijo (E/10), definiciones con una variable sin rango útil, descripciones cualitativas con algún símbolo pero sin relación funcional explorable.
 
