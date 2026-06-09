@@ -243,6 +243,110 @@ def extraer_horas_docencia(texto_guia: str) -> dict[str, int]:
     }
 
 
+def normalizar_horas_output(markdown: str, total_horas: float) -> tuple[str, dict | None]:
+    """
+    Verifica y normaliza la suma de horas de subtemas en el markdown generado.
+
+    Si sum(horas_subtemas) != total_horas, redistribuye proporcionalmente (redondeo a
+    0.5h) y actualiza también los encabezados ## Bloque N · Xh. Si la suma ya es
+    correcta, devuelve el markdown sin modificar y None como diagnóstico.
+
+    Returns:
+        (markdown_corregido, info_ajuste) si se aplicó corrección
+        (markdown, None) si la suma era exacta
+    """
+    if not total_horas or total_horas <= 0:
+        return markdown, None
+
+    FILA_RE = re.compile(r"^\| (.+?) \| ([\d]+(?:[.,]\d+)?)h? \| (.+?) \|\s*$")
+    HDR_RE = re.compile(r"^(## Bloque \d+ — .+? · )([\d.]+)(h.*)$")
+    _CABECERAS = {
+        "subtema", "topic", "horas", "hours",
+        "justificación", "justificacion", "justification",
+    }
+
+    lineas = markdown.splitlines(keepends=True)
+
+    # -- Primera pasada: recoger (índice_línea, hora_original) de filas de datos --
+    indices_filas: list[tuple[int, float]] = []
+    for i, linea in enumerate(lineas):
+        m = FILA_RE.match(linea.rstrip("\r\n"))
+        if not m:
+            continue
+        col1 = m.group(1).strip().lower()
+        col2_val = m.group(2).strip()
+        if col1 in _CABECERAS or re.match(r"^-+$", col1) or re.match(r"^-+$", col2_val):
+            continue
+        try:
+            indices_filas.append((i, float(col2_val.replace(",", "."))))
+        except ValueError:
+            pass
+
+    if not indices_filas:
+        return markdown, None
+
+    horas_originales = [h for _, h in indices_filas]
+    suma_actual = sum(horas_originales)
+
+    if abs(suma_actual - total_horas) < 0.01:
+        return markdown, None
+
+    diferencia = suma_actual - total_horas
+
+    # -- Escalar proporcionalmente a 0.5h --
+    factor = total_horas / suma_actual
+    horas_nuevas = [round(h * factor * 2) / 2 for h in horas_originales]
+    # Compensar residuo de redondeo en el subtema con más horas
+    residuo = total_horas - sum(horas_nuevas)
+    if abs(residuo) >= 0.01:
+        idx_max = horas_nuevas.index(max(horas_nuevas))
+        horas_nuevas[idx_max] = round((horas_nuevas[idx_max] + residuo) * 2) / 2
+
+    def fmt(v: float) -> str:
+        return str(int(v)) if v == int(v) else f"{v:.1f}"
+
+    # -- Segunda pasada: reconstruir líneas con nuevas horas de subtema --
+    ajustes: dict[str, dict] = {}
+    nuevas_lineas = list(lineas)
+
+    for (idx_linea, h_antes), h_nueva in zip(indices_filas, horas_nuevas):
+        linea_orig = lineas[idx_linea]
+        m = FILA_RE.match(linea_orig.rstrip("\r\n"))
+        if not m:
+            continue
+        if abs(h_antes - h_nueva) >= 0.05:
+            nombre_sub = m.group(1).strip()
+            ajustes[nombre_sub] = {"antes": h_antes, "despues": h_nueva}
+        ending = linea_orig[len(linea_orig.rstrip("\r\n")):]
+        nuevas_lineas[idx_linea] = f"| {m.group(1)} | {fmt(h_nueva)}h | {m.group(3)} |{ending}"
+
+    # -- Actualizar encabezados de bloque con la suma de sus subtemas --
+    indices_hdrs = [i for i, l in enumerate(nuevas_lineas) if HDR_RE.match(l.rstrip("\r\n"))]
+    indices_hdrs.append(len(nuevas_lineas))  # sentinel
+
+    for k in range(len(indices_hdrs) - 1):
+        inicio_bloque = indices_hdrs[k]
+        fin_bloque = indices_hdrs[k + 1]
+        horas_bloque = [
+            horas_nuevas[sub_idx]
+            for sub_idx, (idx_linea, _) in enumerate(indices_filas)
+            if inicio_bloque < idx_linea < fin_bloque
+        ]
+        if not horas_bloque:
+            continue
+        linea_hdr = nuevas_lineas[inicio_bloque]
+        m = HDR_RE.match(linea_hdr.rstrip("\r\n"))
+        if m:
+            ending = linea_hdr[len(linea_hdr.rstrip("\r\n")):]
+            nuevas_lineas[inicio_bloque] = m.group(1) + fmt(sum(horas_bloque)) + m.group(3) + ending
+
+    return "".join(nuevas_lineas), {
+        "diferencia": diferencia,
+        "suma_antes": suma_actual,
+        "ajustes": ajustes,
+    }
+
+
 def contar_bloques_output(markdown_text: str) -> int:
     """Cuenta encabezados ## Bloque N en el markdown generado.
 
@@ -291,6 +395,8 @@ if "ultimo_nombre_descarga" not in st.session_state:
     st.session_state["ultimo_nombre_descarga"] = "Propuesta_asignatura.md"
 if "warning_cardinalidad" not in st.session_state:
     st.session_state["warning_cardinalidad"] = None
+if "warning_normalizacion" not in st.session_state:
+    st.session_state["warning_normalizacion"] = None
 
 
 def _validar_y_persistir(resultado: str, n_esperados: int, nombre_descarga: str | None = None) -> None:
@@ -332,6 +438,11 @@ def generar_organizacion(
 
                 st.write("🤖 Aplicando ajuste sobre la organización actual...")
                 resultado = ejecutar_agente(prompt)
+
+                resultado, info_norm = normalizar_horas_output(
+                    resultado, horas_totales or 0
+                )
+                st.session_state["warning_normalizacion"] = info_norm
 
                 _validar_y_persistir(resultado, n_esperados)
                 status.update(label="✅ Ajuste aplicado", state="complete")
@@ -417,6 +528,11 @@ def generar_organizacion(
             st.write("🤖 Consultando al agente (esto puede tardar ~15s)...")
             resultado = ejecutar_agente(prompt)
 
+            resultado, info_norm = normalizar_horas_output(
+                resultado, horas_totales if horas_totales else 0
+            )
+            st.session_state["warning_normalizacion"] = info_norm
+
             _validar_y_persistir(
                 resultado,
                 n_esperados=len(textos_teoria),
@@ -492,6 +608,7 @@ with st.sidebar:
         st.session_state["historial_feedback"] = []
         st.session_state["iteracion"] = 1
         st.session_state["warning_cardinalidad"] = None
+        st.session_state["warning_normalizacion"] = None
         st.session_state["session_id_archivos"] = session_id_actual
 
     puede_generar = guia_docente is not None and len(materiales_teoria or []) > 0
@@ -569,6 +686,22 @@ if st.session_state["ultimo_output"]:
             f"El modelo probablemente elevó una subsección a bloque independiente. "
             f"Usa el campo de feedback para indicar qué bloque debe reintegrarse como subtema "
             f"y pulsa Regenerar."
+        )
+
+    wn = st.session_state.get("warning_normalizacion")
+    if wn:
+        diferencia = wn["diferencia"]
+        suma_antes = wn["suma_antes"]
+        total_obj = suma_antes - diferencia
+        bloques_ajustados = ", ".join(
+            f"**{nombre}** ({v['antes']}h → {v['despues']}h)"
+            for nombre, v in list(wn["ajustes"].items())[:6]
+        )
+        st.warning(
+            f"⚠️ **Normalización de horas aplicada:** el modelo asignó **{suma_antes:.1f}h** "
+            f"en lugar de **{total_obj:.0f}h** (diferencia: {diferencia:+.1f}h). "
+            f"Las horas se redistribuyeron proporcionalmente. "
+            + (f"Subtemas ajustados: {bloques_ajustados}." if bloques_ajustados else "")
         )
 
     st.markdown("### Propuesta generada")
