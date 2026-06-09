@@ -1,99 +1,45 @@
-# Agente Organizador — Agente 01 de la suite TFG
+# Organiser Agent
 
-Extrae la distribución temática y las horas lectivas de una asignatura a partir de la guía docente y los materiales de teoría, y produce un Markdown con bloques y subtemas con horas proporcionales.
+Extracts the thematic structure and teaching hours from a course guide and theory materials, and produces a Markdown file with topic blocks, subtopics, and proportional hour allocations.
 
----
-
-## Qué hace
-
-Recibe una guía docente en PDF y uno o varios materiales de teoría (PDF o PPTX). Detecta automáticamente las horas lectivas (teoría, prácticas de aula y laboratorio) mediante heurísticas deterministas sobre la guía docente. Con esos datos construye un prompt que envía a Sonnet, que genera una propuesta de organización curricular con bloques temáticos, subtemas y distribución de horas. El profesor puede revisar la propuesta, introducir observaciones en lenguaje natural y solicitar hasta cinco regeneraciones antes de descargar el resultado final en formato Markdown.
+**Part of:** [AI Teaching Suite](../README.md) — Agent 1 of 3
 
 ---
 
-## Principio de fidelidad
+## What it does
 
-El agente extrae y estructura. No inventa. Si un tema no aparece en los materiales aportados por el profesor, no aparece en el output.
+Receives a course guide (PDF) and one or more theory files (PDF or PPTX). Deterministic heuristics extract lecture, seminar, and lab hours from the guide. Those hours feed a prompt sent to Claude Sonnet, which produces a curricular organisation with topic blocks and subtopics. The professor can review the proposal, provide feedback in natural language, and request up to five regenerations before downloading the final Markdown. A cardinality check verifies that the number of generated blocks matches the number of uploaded theory files, and surfaces a warning in the UI if they diverge.
 
----
+## Input
 
-## Arquitectura
+- Course guide: PDF
+- Theory materials (one file per topic): PDF or PPTX
 
-```
-app.py        — UI Streamlit, extracción de horas, validación de cardinalidad, loop de refinamiento
-agente.py     — cliente Anthropic, ejecutar_agente()
-parser.py     — extraer_texto() y clasificar_archivo() para PDF y PPTX
-prompts.py    — construir_prompt() y construir_prompt_refinamiento()
-```
+## Output
 
----
+- Thematic distribution with blocks, subtopics, and hours: Markdown (`.md`)
 
-## Flujo de trabajo
+The output follows a fixed template defined in `prompts.py` and can be used directly as input to the Content Agent. The Content Agent's parser expects block headings in the form `## Bloque N — Name · Xh`.
 
-1. El profesor sube la guía docente (PDF) y los materiales de teoría (PDF/PPTX).
-2. `extraer_texto()` obtiene el texto de cada documento.
-3. `clasificar_archivo()` separa los archivos en "teoría" y "contexto/outline".
-4. `extraer_horas_docencia()` detecta las horas TE/PA/PL de la guía mediante heurísticas deterministas (tablas MODALIDADES primero, texto libre como fallback).
-5. `construir_prompt()` ensambla el prompt completo con los textos, las horas y la plantilla de output.
-6. `ejecutar_agente()` llama a Sonnet y obtiene la propuesta.
-7. `contar_bloques_output()` verifica que el número de bloques generados coincida con el número de archivos de teoría subidos; si no coincide, muestra un aviso visible.
-8. El profesor puede refinar con feedback en lenguaje natural hasta cinco iteraciones; cada refinamiento usa `construir_prompt_refinamiento()` sin re-extraer los documentos.
+## Key design decisions
 
----
+- **Deterministic hour extraction over LLM:** `extraer_horas_docencia()` extracts TE/PA/PL hours from the course guide with Python heuristics (table detection first, free-text fallback), not via API. This avoids hallucinated hour counts and keeps the extraction auditable.
+- **Sonnet only, no Haiku:** curricular organisation requires strict cardinality and semantic consistency across blocks. Haiku was evaluated and discarded because it did not reliably respect the block-count constraint when prompts were strict.
+- **Refinement without re-extraction:** `construir_prompt_refinamiento()` is a lightweight prompt that takes the previous output as base and applies only the latest feedback, without re-extracting documents or re-detecting hours.
 
-## Inputs y outputs
-
-| Tipo | Descripción | Formato |
-|------|-------------|---------|
-| Input | Guía docente de la asignatura | PDF |
-| Input | Materiales de teoría (uno por tema) | PDF, PPTX |
-| Output | Distribución temática con bloques, subtemas y horas | Markdown (`.md`) |
-
-El Markdown generado sigue la plantilla definida en `prompts.py` (fuente de verdad):
-
-```markdown
-# DISTRIBUCIÓN TEMÁTICA — Nombre asignatura
-
-**Horas lectivas disponibles:** Xh (Yh TE + Zh PA) | **Prácticas de laboratorio:** Wh *(informativo)*
-
----
-
-## Bloque 1 — Nombre del bloque · Xh
-
-| Subtema | Horas | Justificación |
-|---------|-------|---------------|
-| ... | ... | ... |
-
----
-
-> 🔬 Prácticas de laboratorio: Wh (sesiones prácticas, no incluidas en la distribución temática)
-```
-
-Puede usarse directamente como input del Agente Contenido (`parse_organization_md()` espera encabezados `## Bloque N — … · Xh`).
-
----
-
-## Instalación y uso
+## Running locally
 
 ```bash
+cd agente-organizador
 pip install -r requirements.txt
-cp .env.example .env   # añadir ANTHROPIC_API_KEY en .env
+cp .env.example .env   # add your ANTHROPIC_API_KEY
 streamlit run app.py --server.port 8502
 ```
 
----
+## Dependencies
 
-## Selección de modelo
-
-| Modelo | Tarea |
-|--------|-------|
-| `claude-sonnet-4-5` | Toda la generación y refinamiento |
-
-Haiku fue descartado para este agente: la restricción de cardinalidad y la distribución horaria requieren consistencia semántica que Haiku no garantiza con prompts estrictos.
-
----
-
-## Limitaciones conocidas
-
-- **PDFs rasterizados desde PowerPoint:** el texto extraído es mínimo. La guía docente actúa como ancla estructural y compensa parcialmente, pero el resultado puede requerir más revisión.
-- **Tablas complejas o escaneos en la guía:** la detección de horas puede devolver 0 si el formato no es reconocible por las heurísticas. Se muestra un aviso en la UI.
-- **Cardinalidad:** si el agente genera más bloques de los esperados (subsecciones elevadas a bloque independiente), el warning de cardinalidad indica cuántos bloques se generaron frente a cuántos se esperaban y guía al profesor para corregirlo con feedback.
+- `anthropic` — Claude Sonnet API calls
+- `streamlit` — UI
+- `pdfplumber` — PDF text extraction
+- `python-pptx` — PPTX text extraction
+- `python-dotenv` — credential loading

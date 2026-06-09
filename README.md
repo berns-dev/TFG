@@ -1,81 +1,92 @@
-# Metodologías de Ingeniería Aumentada — Suite de Agentes Docentes
+# AI Teaching Suite — Augmented Engineering Methodologies
 
-TFG · Universidad de Oviedo · Escuela Politécnica de Ingeniería de Gijón · Grado en Ingeniería Mecánica
+![Python](https://img.shields.io/badge/python-3.10+-blue) ![Anthropic](https://img.shields.io/badge/Anthropic-Claude-orange) ![University](https://img.shields.io/badge/University_of_Oviedo-Final_Project-darkblue)
 
-Este proyecto construye una suite de tres agentes de IA que transforma el material docente universitario — presentaciones, PDFs y guías docentes — en recursos estructurados, calibrados horariamente e interactivos, sin inventar ningún contenido que no esté en el original.
-
----
-
-## El problema
-
-Los profesores universitarios acumulan años de material docente en presentaciones de PowerPoint y documentos PDF. Ese material existe en formatos no reutilizables, sin estructura pedagógica explícita, sin distribución de carga horaria por subtema, y sin formatos interactivos para los alumnos. Reorganizarlo manualmente es costoso y requiere dedicación que compite con otras tareas del profesor.
+A suite of three AI agents that transforms university teaching materials — PDFs, PowerPoint files, and course guides — into structured, hour-calibrated, and interactive resources without adding any content not present in the originals.
 
 ---
 
-## La solución — workflow entre agentes
+## The Problem
+
+University professors accumulate years of teaching material in PowerPoint and PDF formats. That material exists in non-reusable formats, with no explicit pedagogical structure, no per-topic hour distribution, and no interactive formats for students. Reorganising it manually is expensive and competes with everything else on a professor's plate.
+
+---
+
+## Solution — Agent Workflow
 
 ```
-[Guía docente PDF] ──┐
-                     ├──► Agente Organizador ──► [Distribución temática .md]
-[Materiales PDF/PPTX]┘                                        │
-                                                              │
-                     ┌────────────────────────────────────────┘
-                     │    + [Material del tema PDF/PPTX]
+[Course guide PDF] ──┐
+                     ├──► Organiser Agent ──► [Thematic distribution .md]
+[Materials PDF/PPTX]┘                                     │
+                                                          │
+                     ┌────────────────────────────────────┘
+                     │    + [Topic material PDF/PPTX]
                      ▼
-              Agente Contenido ──► [Markdown curado por tema]
-                                                │
-                                                ▼
-                                    Agente Presentación
-                                    ├──► [PDF estructurado]
-                                    └──► [HTML interactivo]
+              Content Agent ──► [Curated Markdown by topic]
+                                              │
+                                              ▼
+                                  Presentation Agent
+                                  ├──► [Structured PDF]
+                                  └──► [Interactive HTML]
 ```
 
-**Agente Organizador** recibe la guía docente y los materiales de teoría, detecta las horas lectivas (TE/PA/PL) y genera una distribución temática con bloques y subtemas proporcionales al tiempo disponible. Su output es un archivo `.md` con la estructura curricular de la asignatura.
+**Organiser Agent** receives the course guide and theory materials, detects teaching hours (lectures, seminars, lab sessions), and produces a thematic distribution with blocks, subtopics, and hours proportional to the available time. Output: a `.md` file with the subject's curricular structure.
 
-**Agente Contenido** recibe ese `.md` opcional como contexto de densidad y uno o varios PDF/PPTX del tema. Convierte el material en Markdown estructurado y fiel al original, clasificando cada bloque como teoría, ejemplo resuelto, ejercicio propuesto, tabla o procedimiento. Su output es un `.md` curado por tema.
+**Content Agent** receives that `.md` as optional density context plus one or more PDF/PPTX files for the topic. It converts the material into structured Markdown faithful to the original, classifying each block as theory, worked example, exercise, table, or procedure. Output: a curated `.md` per topic.
 
-**Agente Presentación** recibe el Markdown curado y detecta las secciones con contenido matemático. El profesor selecciona qué secciones incluir y el agente genera un PDF académico (ReportLab) o una página HTML interactiva con sliders y gráficas Chart.js.
-
----
-
-## Principio rector
-
-Los tres agentes transforman, nunca inventan. El output de cada agente solo puede contener información explícitamente presente en el material de entrada. No se añade, infiere ni completa ningún contenido.
+**Presentation Agent** receives the curated Markdown, detects sections with mathematical content, and lets the professor select which sections to include. It then generates an academic PDF (ReportLab) or an interactive HTML page with sliders and Chart.js graphs.
 
 ---
 
-## Estructura del repositorio
+## Core Principle
 
-| Agente | Función | Subcarpeta |
-|--------|---------|------------|
-| Organizador | Extrae distribución temática y horas de la guía docente | [`agente-organizador/`](agente-organizador/) |
-| Contenido | Convierte PDF/PPTX a Markdown estructurado por tema | [`agente-contenido/`](agente-contenido/) |
-| Presentación | Genera PDF académico o HTML interactivo desde Markdown | [`agente-presentacion/`](agente-presentacion/) |
+The three agents transform — they never invent. The output of each agent can only contain information explicitly present in the input material. Nothing is added, inferred, or completed. If a topic does not appear in the materials the professor uploaded, it does not appear in the output.
 
 ---
 
-## Requisitos e instalación
+## Architecture
 
-Cada agente tiene sus propias dependencias y se instala de forma independiente. Python 3.10+ recomendado.
+| Agent | Input | Output | Module |
+|-------|-------|--------|--------|
+| Organiser | Course guide (PDF) + theory materials (PDF/PPTX) | Thematic distribution with blocks and hours | [`agente-organizador/`](agente-organizador/) |
+| Content | Topic materials (PDF/PPTX) + optional organiser `.md` | Structured and curated Markdown by topic | [`agente-contenido/`](agente-contenido/) |
+| Presentation | Curated Markdown from Content Agent | Academic PDF + interactive HTML page | [`agente-presentacion/`](agente-presentacion/) |
+
+---
+
+## Tech Stack
+
+- **API:** Anthropic — `claude-haiku-4-5-20251001` and `claude-sonnet-4-5`
+- **UI:** Streamlit
+- **Extraction:** `pdfplumber` (PDF), `python-pptx` (PPTX)
+- **Generated PDF:** `reportlab` (pure Python, no system dependencies)
+- **Interactive HTML:** Chart.js + MathJax (CDN)
+- **Credentials:** `.env` per agent + `python-dotenv`
+
+---
+
+## Installation
+
+Each agent has its own dependencies and is installed independently. Python 3.10+ recommended.
 
 ```bash
-# Agente Organizador
+# Organiser Agent
 cd agente-organizador
 pip install -r requirements.txt
-cp .env.example .env   # o copy en Windows
+cp .env.example .env   # use 'copy' on Windows
 
-# Agente Contenido
+# Content Agent
 cd agente-contenido
 pip install -r requirements.txt
 cp .env.example .env
 
-# Agente Presentación
+# Presentation Agent
 cd agente-presentacion
 pip install -r requirements.txt
 cp .env.example .env
 ```
 
-En cada `.env`, añade tu clave de API de Anthropic:
+In each `.env`, add your Anthropic API key:
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
@@ -83,33 +94,28 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ---
 
-## Cómo ejecutar la suite completa
+## Running the Suite
 
-Se recomienda lanzar los tres agentes en puertos distintos para poder usarlos en paralelo:
+Run each agent on a separate port to use them in parallel:
 
 ```bash
-# Terminal 1 — Agente Organizador
+# Terminal 1 — Organiser Agent
 cd agente-organizador
 streamlit run app.py --server.port 8502
 
-# Terminal 2 — Agente Contenido
+# Terminal 2 — Content Agent
 cd agente-contenido
 streamlit run app.py --server.port 8501
 
-# Terminal 3 — Agente Presentación
+# Terminal 3 — Presentation Agent
 cd agente-presentacion
 streamlit run app.py --server.port 8500
 ```
 
-Cada agente puede usarse de forma independiente. El workflow completo sigue el orden Organizador → Contenido → Presentación, pero ningún agente requiere el output de los anteriores para funcionar.
+Each agent can be used independently. The full workflow follows the order Organiser → Content → Presentation, but no agent requires the output of the previous one to function.
 
 ---
 
-## Stack tecnológico
+## Project Status
 
-- **API:** Anthropic — `claude-haiku-4-5-20251001` y `claude-sonnet-4-5`
-- **UI:** Streamlit
-- **Extracción:** `pdfplumber` (PDF), `python-pptx` (PPTX)
-- **PDF generado:** `reportlab` (puro Python, sin dependencias del sistema)
-- **HTML interactivo:** Chart.js + MathJax (CDN)
-- **Credenciales:** `.env` + `python-dotenv`
+Built as a university final project (Bachelor's in Mechanical Engineering, University of Oviedo, 2026). Core pipeline is functional end-to-end. Not production-hardened — error handling and edge cases are intentionally minimal for academic scope.

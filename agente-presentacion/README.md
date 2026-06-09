@@ -1,81 +1,49 @@
-# Agente Presentación — Agente 03 de la suite TFG
+# Presentation Agent
 
-Detecta el contenido matemático del Markdown curado por el Agente Contenido y genera dos formatos de presentación: un PDF académico con tipografía y paginación estructurada, o una página HTML interactiva con sliders y gráficas en tiempo real.
+Detects mathematical content in curated Markdown and generates two output formats: an academic PDF with rendered equations, or an interactive HTML page with sliders and real-time graphs.
 
----
-
-## Qué hace
-
-Recibe el Markdown estructurado producido por el Agente Contenido. Detecta secciones con ecuaciones LaTeX, relaciones paramétricas y tablas numéricas (regex + filtro Haiku opcional fail-open). El profesor selecciona qué secciones exportar. Genera PDF académico (ReportLab + ecuaciones como imágenes matplotlib) o HTML interactivo con sliders y Chart.js.
+**Part of:** [AI Teaching Suite](../README.md) — Agent 3 of 3
 
 ---
 
-## Principio de fidelidad
+## What it does
 
-El agente extrae y reformatea. No inventa. La explicación y la interpretación de cada panel interactivo se construyen exclusivamente a partir del contexto proporcionado en el Markdown de entrada.
+Receives the structured Markdown produced by the Content Agent. A regex pass detects LaTeX blocks, parametric relations, and numeric tables, grouping candidates by section. An optional Haiku filter discards non-interactive candidates (fail-open: if the API is unavailable, all regex matches are kept). The professor selects which sections to export. For PDF, ReportLab renders the full document with equations as matplotlib mathtext images. For interactive HTML, a two-step Sonnet pipeline — reasoner then generator — produces one self-contained panel per section, with Chart.js or canvas visualisations and MathJax-rendered equations.
 
----
+## Input
 
-## Arquitectura
+- Curated Markdown from the Content Agent: `.md`
+- Original PDF or PPTX material (optional): used by the reasoner to determine realistic parameter ranges
 
-```
-app.py              — UI Streamlit, sidebar con PDF, área principal con detección y HTML
-detector.py         — regex + filtro Haiku (fail-open) + advertencias Sonnet (opt-in)
-generador_pdf.py    — pipeline Markdown → PDF con ReportLab (ecuaciones vía matplotlib)
-generador_html.py   — pipeline elementos → HTML interactivo con Sonnet + ThreadPoolExecutor
-prompts.py          — prompts del sistema y constructores de mensajes
-config.py           — constantes y carga de variables de entorno desde .env
-```
+## Output
 
----
+- Academic paginated document: PDF (`.pdf`)
+- Self-contained interactive web page: HTML (`.html`)
 
-## Flujo de trabajo
+## Key design decisions
 
-1. El profesor sube el `.md` generado por el Agente Contenido.
-2. Opcional: marca «Analizar advertencias pedagógicas» si quiere avisos Sonnet antes del HTML (más créditos).
-3. Pulsa **Detectar elementos**: regex agrupa por sección; Haiku filtra candidatos no interactivos (si la API falla, se conservan todos — fail-open).
-4. El profesor selecciona las secciones con checkboxes.
-5. Elige el formato de salida:
-   - **PDF completo** (sidebar): `generar_pdf()` con ReportLab y ecuaciones renderizadas como PNG (matplotlib mathtext).
-   - **HTML interactivo** (área principal): `generar_html()` genera un bloque por sección seleccionada.
+- **Two-step HTML generation (reasoner + generator):** a first Sonnet call decides whether a section is worth visualising and which of six visualisation patterns fits (curve, family of curves, criterion region, 2D map, trajectory, frequency response). A second Sonnet call generates the HTML for that specific pattern. Separating the reasoning step from the generation step produces more consistent output than a single prompt.
+- **`aplicar_rangos()` post-processing:** Sonnet receives correct slider ranges from the reasoner but occasionally ignores them during generation. A Python post-processing step overwrites `min`, `max`, and `value` attributes on all `input[type=range]` elements before the HTML is validated, correcting this inconsistency without retrying the API call.
+- **PDF generation without system LaTeX:** equations are rendered as PNG images via `matplotlib.mathtext` (`usetex=False`), eliminating the need for a system LaTeX installation. If rendering fails, the equation falls back to monospace text inside a bordered box.
 
----
-
-## Inputs y outputs
-
-| Tipo | Descripción | Formato |
-|------|-------------|---------|
-| Input | Markdown curado del Agente Contenido | Markdown (`.md`) |
-| Output | Documento académico paginado | PDF (`.pdf`) |
-| Output | Página web interactiva con sliders y gráficas | HTML (`.html`) |
-
----
-
-## Instalación y uso
+## Running locally
 
 ```bash
+cd agente-presentacion
 pip install -r requirements.txt
-cp .env.example .env   # añadir ANTHROPIC_API_KEY en .env
+cp .env.example .env   # add your ANTHROPIC_API_KEY
 streamlit run app.py --server.port 8500
 ```
 
-La `ANTHROPIC_API_KEY` es necesaria únicamente para generar el HTML interactivo (llamadas a Sonnet). El PDF se genera sin llamadas a la API.
+The `ANTHROPIC_API_KEY` is required only for interactive HTML generation (Sonnet calls). PDF generation runs entirely without API calls.
 
----
+## Dependencies
 
-## Selección de modelo
-
-| Modelo | Tarea |
-|--------|-------|
-| `claude-sonnet-4-5` | Bloques HTML, razonador de visualización, advertencias pedagógicas (opt-in) |
-| `claude-haiku-4-5-20251001` | Filtro de interactividad tras regex (fail-open si la API falla) |
-
----
-
-## Limitaciones conocidas
-
-- **Ecuaciones en PDF:** renderizadas como imágenes PNG vía matplotlib mathtext (no LaTeX del sistema). Si falla el render, fallback a texto monospace con borde.
-- **Haiku fail-open:** si el filtro Haiku falla (timeout, rate limit), se conservan todos los candidatos regex para no bloquear al profesor.
-- **Advertencias pedagógicas:** desactivadas por defecto; activar la checkbox implica una llamada Sonnet por elemento detectado.
-- **Rate limit en HTML interactivo:** con muchos elementos seleccionados, las llamadas paralelas a Sonnet pueden agotar el rate limit. El panel de error por elemento hace el fallo visible sin abortar el resto de la página.
-- **Detección de tablas:** el umbral del 40% de celdas numéricas puede excluir tablas mixtas (texto + números).
+- `anthropic` — Claude Haiku (interactivity filter) and Sonnet (reasoner, HTML generator)
+- `streamlit` — UI
+- `reportlab` — PDF generation
+- `markdown` — Markdown-to-HTML conversion for PDF pipeline
+- `matplotlib` — equation rendering as PNG images
+- `pdfplumber` — optional extraction of professor's original PDF for range context
+- `python-pptx` — optional extraction of professor's original PPTX for range context
+- `python-dotenv` — credential loading
