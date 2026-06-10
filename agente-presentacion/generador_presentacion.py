@@ -950,12 +950,27 @@ def generar_presentacion(
     figuras_html = _generar_figuras(secciones, asignaciones)
 
     titulo_esc = html_lib.escape(titulo)
+
+    # Desambiguación de títulos repetidos SOLO en el texto visible de la
+    # sidebar: "Contenido teórico", "Contenido teórico (2)", ... Los IDs de
+    # sección y el contenido del documento no cambian.
+    veces_visto: dict[str, int] = {}
+    etiquetas_indice: list[str] = []
+    for seccion in secciones:
+        titulo_sec = seccion["titulo"]
+        veces_visto[titulo_sec] = veces_visto.get(titulo_sec, 0) + 1
+        n = veces_visto[titulo_sec]
+        etiquetas_indice.append(
+            titulo_sec if n == 1 else f"{titulo_sec} ({n})"
+        )
+
     indice_parts: list[str] = []
     secciones_parts: list[str] = []
     for i, seccion in enumerate(secciones):
         titulo_sec = html_lib.escape(seccion["titulo"])
+        etiqueta = html_lib.escape(etiquetas_indice[i])
         indice_parts.append(
-            f'    <a class="indice-link" href="#seccion-{i}">{titulo_sec}</a>'
+            f'    <a class="indice-link" href="#seccion-{i}">{etiqueta}</a>'
         )
         cuerpo = _render_seccion(
             seccion, asignaciones.get(i, []), bloques_html, figuras_html

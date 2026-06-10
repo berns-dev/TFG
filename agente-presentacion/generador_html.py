@@ -655,11 +655,17 @@ def construir_tabla_variables(
             if info and info.get("descripcion"):
                 fila["descripcion"] = info["descripcion"]
                 fila["unidades"] = info.get("unidades") or "?"
-            else:
-                fila["descripcion"] = "Descripción no disponible"
-                fila["unidades"] = "?"
 
-    return tabla
+    # Filtrar filas sin descripción útil (degradación de Haiku): son ruido
+    # visual en el output. Si no queda ninguna fila, la lista vacía hace que
+    # el generador omita la tabla por completo (regla de la sección 6 de
+    # PROMPT_GENERADOR_HTML). Aplica a ambos outputs HTML, que comparten
+    # esta función.
+    return [
+        fila for fila in tabla
+        if fila.get("descripcion")
+        and fila["descripcion"] != "Descripción no disponible"
+    ]
 
 
 _ALIASES_VARIABLE: dict[str, tuple[str, ...]] = {

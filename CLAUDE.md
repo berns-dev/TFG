@@ -24,7 +24,7 @@ el formato correcto.
 |--------|-----------|---------|
 | Organizador | `agente-organizador/` | Extrae distribución temática y horas lectivas de la guía docente |
 | Contenido | `agente-contenido/` | Convierte PDF/PPTX a Markdown estructurado y curado por tema; calibra extensión y profundidad según las horas del bloque (output del Organizador, opcional) |
-| Presentación | `agente-presentacion/` | Genera PDF académico o HTML interactivo desde el Markdown curado |
+| Presentación | `agente-presentacion/` | Genera tres salidas desde el Markdown curado: PDF con plantilla institucional UO, HTML interactivo por pestañas, y HTML de presentación completa del tema |
 
 Cada subcarpeta tiene su propio `CLAUDE.md` con el contexto específico de ese agente, su arquitectura de módulos, decisiones de implementación y limitaciones documentadas. **Lee siempre el `CLAUDE.md` del agente correspondiente antes de modificar su código.**
 
@@ -71,8 +71,9 @@ formato exacto no será parseado correctamente por el Agente Contenido.
                                               │
                                               ▼
                                   agente-presentacion
-                                  ├──► [PDF estructurado]
-                                  └──► [HTML interactivo]
+                                  ├──► [PDF institucional UO]
+                                  ├──► [HTML interactivo por pestañas]
+                                  └──► [HTML presentación completa]
 ```
 
 ---
@@ -165,4 +166,4 @@ TFG/
 |--------|--------|-------------|
 | Organizador | Funcional | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
 | Contenido | Funcional — validado con PDF y PPTX | Temas 1 y 2 de Tecnología de Materiales (PDF) |
-| Presentación | Funcional — renderizado LaTeX con matplotlib mathtext | Tema 1_curado.md (Tecnología de Materiales) |
+| Presentación | Funcional — 3 outputs (PDF institucional UO, HTML interactivo, HTML presentación completa); LaTeX con matplotlib mathtext | Tema 1 (Tec. Materiales), TEMA7 (Elementos de Máquinas) |

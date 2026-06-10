@@ -39,12 +39,16 @@ from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
-from reportlab.lib.utils import ImageReader
+from reportlab.lib.utils import ImageReader, simpleSplit
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas as _pdf_canvas
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
     HRFlowable,
     Image,
+    PageBreak,
     PageTemplate,
     Paragraph,
     Preformatted,
@@ -57,14 +61,83 @@ from reportlab.platypus.tables import TableStyle as _TableStyle
 _LATEX_DPI = 150
 
 # ---------------------------------------------------------------------------
-# Colores de la paleta
+# Colores de la plantilla institucional
 # ---------------------------------------------------------------------------
 
-_AZUL = colors.HexColor("#185FA5")
-_NEGRO = colors.HexColor("#2C2C2A")
-_GRIS_OSCURO = colors.HexColor("#444441")
-_GRIS_FONDO = colors.HexColor("#F7F5F0")
+_AZUL = colors.HexColor("#003366")          # acento institucional UO
+_NEGRO = colors.HexColor("#1A1A1A")         # cuerpo de texto
+_GRIS_OSCURO = colors.HexColor("#333333")   # H4 y niveles inferiores
+_GRIS_FONDO = colors.HexColor("#F7F5F0")    # fondo de código/ecuación fallback
 _GRIS_BORDE = colors.HexColor("#D3D1C7")
+_GRIS_PIE = colors.HexColor("#666666")
+_GRIS_LINEA_PIE = colors.HexColor("#CCCCCC")
+_TABLA_FILA_PAR = colors.HexColor("#F5F7FA")
+_FIG_FONDO = colors.HexColor("#F0F0F0")
+_FIG_TEXTO = colors.HexColor("#888888")
+
+# ---------------------------------------------------------------------------
+# Fuentes: Arial del sistema si está disponible; Helvetica como fallback
+# (Helvetica viene incluida en ReportLab sin dependencias)
+# ---------------------------------------------------------------------------
+
+_FUENTES = {
+    "base": "Helvetica",
+    "bold": "Helvetica-Bold",
+    "italic": "Helvetica-Oblique",
+    "bolditalic": "Helvetica-BoldOblique",
+}
+
+
+def _registrar_arial() -> None:
+    """Registra Arial desde el sistema si las cuatro variantes existen."""
+    rutas = {
+        "base": ("Arial", r"C:\Windows\Fonts\arial.ttf"),
+        "bold": ("Arial-Bold", r"C:\Windows\Fonts\arialbd.ttf"),
+        "italic": ("Arial-Italic", r"C:\Windows\Fonts\ariali.ttf"),
+        "bolditalic": ("Arial-BoldItalic", r"C:\Windows\Fonts\arialbi.ttf"),
+    }
+    if not all(os.path.exists(ruta) for _, ruta in rutas.values()):
+        return
+    try:
+        for clave, (nombre, ruta) in rutas.items():
+            pdfmetrics.registerFont(TTFont(nombre, ruta))
+            _FUENTES[clave] = nombre
+    except Exception:
+        # Cualquier problema con las TTF → Helvetica, sin bloquear
+        _FUENTES.update({
+            "base": "Helvetica",
+            "bold": "Helvetica-Bold",
+            "italic": "Helvetica-Oblique",
+            "bolditalic": "Helvetica-BoldOblique",
+        })
+
+
+_registrar_arial()
+
+# ---------------------------------------------------------------------------
+# Logo de la Universidad de Oviedo (assets/logo_uniovi.png)
+# ---------------------------------------------------------------------------
+
+_LOGO_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "assets", "logo_uniovi.png"
+)
+_LOGO_FALLBACK_TEXTO = "Universidad de Oviedo | EPI Gijón"
+
+
+def _cargar_logo() -> ImageReader | None:
+    """ImageReader del logo si existe y es legible; None en caso contrario.
+
+    Nunca lanza: si el logo falta o está corrupto se usa el fallback de
+    texto en la cabecera. No bloquear el pipeline por este motivo.
+    """
+    try:
+        if os.path.exists(_LOGO_PATH):
+            reader = ImageReader(_LOGO_PATH)
+            reader.getSize()  # valida que el PNG es legible
+            return reader
+    except Exception:
+        pass
+    return None
 
 # ---------------------------------------------------------------------------
 # Estilos de párrafo
@@ -73,63 +146,63 @@ _GRIS_BORDE = colors.HexColor("#D3D1C7")
 _ESTILOS: dict[str, ParagraphStyle] = {
     "h1": ParagraphStyle(
         "H1",
-        fontName="Helvetica-Bold",
-        fontSize=18,
+        fontName=_FUENTES["bold"],
+        fontSize=20,
         textColor=_AZUL,
-        leading=24,
-        spaceBefore=20,
-        spaceAfter=6,
+        leading=26,
+        spaceBefore=0,
+        spaceAfter=16,
         alignment=TA_LEFT,
     ),
     "h2": ParagraphStyle(
         "H2",
-        fontName="Helvetica-Bold",
+        fontName=_FUENTES["bold"],
         fontSize=14,
-        textColor=_NEGRO,
+        textColor=_AZUL,
         leading=18,
-        spaceBefore=14,
-        spaceAfter=4,
+        spaceBefore=20,
+        spaceAfter=2,  # la línea separadora aporta los 8pt restantes
         alignment=TA_LEFT,
     ),
     "h3": ParagraphStyle(
         "H3",
-        fontName="Helvetica-Bold",
-        fontSize=12,
-        textColor=_GRIS_OSCURO,
-        leading=16,
-        spaceBefore=10,
-        spaceAfter=3,
+        fontName=_FUENTES["bold"],
+        fontSize=11.5,
+        textColor=_NEGRO,
+        leading=15,
+        spaceBefore=14,
+        spaceAfter=6,
         alignment=TA_LEFT,
     ),
     "h4": ParagraphStyle(
         "H4",
-        fontName="Helvetica-Bold",
-        fontSize=11,
+        fontName=_FUENTES["bolditalic"],
+        fontSize=10.5,
         textColor=_GRIS_OSCURO,
-        leading=14,
-        spaceBefore=8,
-        spaceAfter=2,
+        leading=13,
+        spaceBefore=10,
+        spaceAfter=4,
         alignment=TA_LEFT,
     ),
     "p": ParagraphStyle(
         "Normal",
-        fontName="Helvetica",
-        fontSize=10,
+        fontName=_FUENTES["base"],
+        fontSize=10.5,
         textColor=_NEGRO,
-        leading=14,
+        leading=14.7,  # interlineado 1.4
         spaceBefore=0,
-        spaceAfter=5,
+        spaceAfter=8,
         alignment=TA_JUSTIFY,
     ),
     "li": ParagraphStyle(
         "ListItem",
-        fontName="Helvetica",
-        fontSize=10,
+        fontName=_FUENTES["base"],
+        fontSize=10.5,
         textColor=_NEGRO,
-        leading=14,
+        leading=14.7,
         spaceBefore=0,
-        spaceAfter=2,
-        leftIndent=16,
+        spaceAfter=3,
+        leftIndent=0.5 * cm,
         bulletIndent=6,
         alignment=TA_LEFT,
     ),
@@ -169,7 +242,7 @@ _ESTILOS: dict[str, ParagraphStyle] = {
     ),
     "blockquote": ParagraphStyle(
         "Blockquote",
-        fontName="Helvetica-Oblique",
+        fontName=_FUENTES["italic"],
         fontSize=10,
         textColor=_GRIS_OSCURO,
         leading=14,
@@ -179,7 +252,7 @@ _ESTILOS: dict[str, ParagraphStyle] = {
     ),
     "figura": ParagraphStyle(
         "Figura",
-        fontName="Helvetica-Oblique",
+        fontName=_FUENTES["italic"],
         fontSize=9,
         textColor=_GRIS_OSCURO,
         leading=12,
@@ -188,6 +261,47 @@ _ESTILOS: dict[str, ParagraphStyle] = {
         alignment=TA_CENTER,
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Placeholder de figura ([FIGURA: ...])
+# ---------------------------------------------------------------------------
+
+class _FiguraPlaceholder(Flowable):
+    """Rectángulo gris con la descripción de la figura del material original."""
+
+    _ALTURA = 60
+
+    def __init__(self, descripcion: str):
+        super().__init__()
+        self._descripcion = descripcion.strip()
+        self.height = self._ALTURA
+
+    def wrap(self, avail_w: float, avail_h: float):
+        self.width = avail_w
+        return self.width, self.height
+
+    def draw(self):
+        c = self.canv
+        c.setFillColor(_FIG_FONDO)
+        c.setStrokeColor(_GRIS_LINEA_PIE)
+        c.setLineWidth(0.5)
+        c.rect(0, 0, self.width, self.height, fill=1, stroke=1)
+
+        c.setFillColor(_GRIS_PIE)
+        c.setFont(_FUENTES["italic"], 9)
+        c.drawCentredString(self.width / 2, self.height - 18, "[Figura]")
+
+        if self._descripcion:
+            c.setFillColor(_FIG_TEXTO)
+            c.setFont(_FUENTES["base"], 8.5)
+            lineas = simpleSplit(
+                self._descripcion, _FUENTES["base"], 8.5, self.width - 24
+            )[:2]
+            y = self.height - 34
+            for linea in lineas:
+                c.drawCentredString(self.width / 2, y, linea)
+                y -= 12
 
 
 # ---------------------------------------------------------------------------
@@ -293,8 +407,31 @@ def _scale_equation_image(img: Image, max_width: float) -> None:
 
 _BLOCK_LATEX_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
 _INLINE_LATEX_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
-_FIGURA_RE = re.compile(r"\[FIGURA:[^\]]*\]")
+_FIGURA_RE = re.compile(r"\[FIGURA:\s*([^\]]*)\]")
 _TEXTO_ILEGIBLE_RE = re.compile(r"\[TEXTO_ILEGIBLE\]")
+_FRONTMATTER_RE = re.compile(r"^---\n([\s\S]*?)\n---\n")
+_TEMA_DETECTADO_RE = re.compile(r"^tema_detectado:\s*(.+)$", re.MULTILINE)
+_H1_MD_RE = re.compile(r"^#\s+(?!#)(.+)$", re.MULTILINE)
+
+_FIGURA_PLACEHOLDER = "XXFIGPLHXX"
+
+
+def _extraer_asignatura(markdown_text: str, fallback: str) -> str:
+    """Nombre de la asignatura: tema_detectado del frontmatter, o el H1.
+
+    Args:
+        markdown_text: Markdown completo, con frontmatter si existe.
+        fallback: Valor si no hay ni frontmatter ni H1 (p. ej. el título).
+    """
+    m_fm = _FRONTMATTER_RE.match(markdown_text.lstrip())
+    if m_fm:
+        m = _TEMA_DETECTADO_RE.search(m_fm.group(1))
+        if m:
+            return m.group(1).strip()
+    m = _H1_MD_RE.search(markdown_text)
+    if m:
+        return m.group(1).strip()
+    return fallback
 
 # Placeholder tokens that won't be mangled by the markdown parser
 _BLOCK_PLACEHOLDER = "XXLATEXBLKXX"
@@ -341,10 +478,19 @@ class _MarkdownFlowableParser(HTMLParser):
                    "hr", "table", "thead", "tbody", "tr", "th", "td",
                    "div", "section"}
 
-    def __init__(self, latex_subs: dict[str, str], max_eq_width: float):
+    def __init__(
+        self,
+        latex_subs: dict[str, str],
+        content_width: float,
+        figura_subs: dict[str, str] | None = None,
+    ):
         super().__init__()
         self._subs = latex_subs
-        self._max_eq_width = max_eq_width
+        self._figura_subs = figura_subs or {}
+        self._content_width = content_width
+        # Ecuaciones display: máximo 70% de la columna de texto, centradas
+        self._max_eq_width = 0.7 * content_width
+        self._h2_visto = False
         self.flowables: list[Flowable] = []
         self.temp_image_paths: list[str] = []
 
@@ -370,6 +516,10 @@ class _MarkdownFlowableParser(HTMLParser):
         self._inline_latex_pattern = (
             rf"{re.escape(_INLINE_PLACEHOLDER_START)}\d+"
             rf"{re.escape(_INLINE_PLACEHOLDER_END)}"
+        )
+        self._figura_pattern = (
+            rf"{re.escape(_FIGURA_PLACEHOLDER)}\d+"
+            rf"{re.escape(_FIGURA_PLACEHOLDER)}"
         )
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -399,16 +549,33 @@ class _MarkdownFlowableParser(HTMLParser):
         text = self._expand_inline_latex(text)
 
         if block in ("h1", "h2", "h3", "h4"):
-            style = _ESTILOS.get(block, _ESTILOS["p"])
-            self.flowables.append(Paragraph(text, style))
+            if block == "h2":
+                # Salto de página antes de cada H2 excepto el primero,
+                # y línea separadora institucional debajo del título.
+                if self._h2_visto:
+                    self.flowables.append(PageBreak())
+                self._h2_visto = True
+                self.flowables.append(Paragraph(text, _ESTILOS["h2"]))
+                self.flowables.append(
+                    HRFlowable(
+                        width="100%",
+                        thickness=1,
+                        color=_AZUL,
+                        spaceBefore=0,
+                        spaceAfter=8,
+                    )
+                )
+            else:
+                style = _ESTILOS.get(block, _ESTILOS["p"])
+                self.flowables.append(Paragraph(text, style))
 
         elif block == "li":
             in_ol = self._list_stack and self._list_stack[-1] == "ol"
             if in_ol:
                 n = self._ol_counters[-1] if self._ol_counters else 1
-                bullet = f"{n}."
+                bullet = f'<font color="#003366">{n}.</font>'
             else:
-                bullet = "•"
+                bullet = '<font color="#003366">•</font>'
             self.flowables.append(
                 Paragraph(f"{bullet}&nbsp;&nbsp;{text}", _ESTILOS["li"])
             )
@@ -422,7 +589,12 @@ class _MarkdownFlowableParser(HTMLParser):
 
         else:
             stripped = text.strip()
-            if re.fullmatch(self._block_latex_pattern, stripped):
+            if re.fullmatch(self._figura_pattern, stripped):
+                descripcion = self._figura_subs.get(stripped, "")
+                self.flowables.append(Spacer(1, 10))
+                self.flowables.append(_FiguraPlaceholder(descripcion))
+                self.flowables.append(Spacer(1, 10))
+            elif re.fullmatch(self._block_latex_pattern, stripped):
                 expr = self._subs.get(stripped, stripped)
                 self._add_block_equation(expr)
             elif re.search(self._block_latex_pattern, text):
@@ -492,22 +664,21 @@ class _MarkdownFlowableParser(HTMLParser):
         if num_cols == 0:
             return
 
-        # _max_eq_width is 80% of the content width; reverse to get full width
-        full_width = self._max_eq_width / 0.8
-        col_width = full_width / num_cols
+        # Ancho: 100% de la columna de texto disponible
+        col_width = self._content_width / num_cols
         col_widths = [col_width] * num_cols
 
         _hdr_style = ParagraphStyle(
             "TblHdr",
-            fontName="Helvetica-Bold",
-            fontSize=9,
+            fontName=_FUENTES["bold"],
+            fontSize=9.5,
             textColor=colors.white,
             leading=12,
         )
         _cell_style = ParagraphStyle(
             "TblCell",
-            fontName="Helvetica",
-            fontSize=9,
+            fontName=_FUENTES["base"],
+            fontSize=9.5,
             textColor=_NEGRO,
             leading=12,
         )
@@ -523,23 +694,30 @@ class _MarkdownFlowableParser(HTMLParser):
             )
 
         style_cmds: list = [
-            ("GRID", (0, 0), (-1, -1), 0.5, _GRIS_BORDE),
+            ("INNERGRID", (0, 0), (-1, -1), 0.4, _GRIS_LINEA_PIE),
+            ("BOX", (0, 0), (-1, -1), 0.75, _AZUL),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ]
+        fila_datos = 0
         for row_idx, is_hdr in enumerate(self._table_has_header):
             if is_hdr:
                 style_cmds.append(
                     ("BACKGROUND", (0, row_idx), (-1, row_idx), _AZUL)
                 )
-            elif row_idx % 2 == 1:
-                style_cmds.append(
-                    ("BACKGROUND", (0, row_idx), (-1, row_idx), _GRIS_FONDO)
-                )
+            else:
+                fila_datos += 1
+                if fila_datos % 2 == 0:  # filas pares: #F5F7FA
+                    style_cmds.append(
+                        ("BACKGROUND", (0, row_idx), (-1, row_idx),
+                         _TABLA_FILA_PAR)
+                    )
 
+        # repeatRows: la cabecera se repite en cada página (cubre el caso
+        # exigido de tablas con más de 15 filas)
         num_header_rows = sum(1 for h in self._table_has_header if h)
         tbl = _Table(table_content, colWidths=col_widths,
                      repeatRows=num_header_rows)
@@ -550,7 +728,7 @@ class _MarkdownFlowableParser(HTMLParser):
 
     def _add_block_equation(self, expr: str) -> None:
         buf = render_latex_to_image(expr)
-        self.flowables.append(Spacer(1, 6))
+        self.flowables.append(Spacer(1, 14))
         if buf is not None:
             img = Image(buf)
             _scale_equation_image(img, self._max_eq_width)
@@ -561,7 +739,7 @@ class _MarkdownFlowableParser(HTMLParser):
             self.flowables.append(
                 Paragraph(f"[{safe}]", _ESTILOS["ecuacion_bloque"])
             )
-        self.flowables.append(Spacer(1, 6))
+        self.flowables.append(Spacer(1, 14))
 
     @staticmethod
     def _escape(text: str) -> str:
@@ -597,6 +775,8 @@ class _MarkdownFlowableParser(HTMLParser):
 
         if tag in ("ul", "ol"):
             self._flush()
+            if not self._list_stack:  # solo la lista exterior añade espacio
+                self.flowables.append(Spacer(1, 6))
             self._list_stack.append(tag)
             if tag == "ol":
                 self._ol_counters.append(0)
@@ -665,7 +845,8 @@ class _MarkdownFlowableParser(HTMLParser):
                 self._ol_counters.pop()
             if self._tag_stack and self._tag_stack[-1] == tag:
                 self._tag_stack.pop()
-            self.flowables.append(Spacer(1, 3))
+            if not self._list_stack:  # cierre de la lista exterior
+                self.flowables.append(Spacer(1, 6))
             return
 
         # Table-specific handlers — must come before the generic _BLOCK_TAGS branch
@@ -737,10 +918,61 @@ class _MarkdownFlowableParser(HTMLParser):
 
 
 # ---------------------------------------------------------------------------
-# Pie de página
+# Cabecera (páginas > 1) y pie de página con total real (NumberedCanvas)
 # ---------------------------------------------------------------------------
 
-def _make_page_template(doc: BaseDocTemplate, titulo: str) -> PageTemplate:
+_CABECERA_ALTO = 1.2 * cm  # altura reservada desde el borde superior
+
+
+def _dibujar_cabecera(canvas, doc: BaseDocTemplate) -> None:
+    """Cabecera institucional: logo UO (o fallback de texto) + asignatura.
+
+    El logo se dibuja con altura 1cm preservando proporción. Si el archivo
+    no está disponible o falla su lectura, fallback de texto — nunca se
+    lanza una excepción por este motivo.
+    """
+    canvas.saveState()
+    borde_inferior = A4[1] - _CABECERA_ALTO
+
+    logo = _cargar_logo()
+    if logo is not None:
+        try:
+            iw, ih = logo.getSize()
+            alto = 1.0 * cm
+            ancho = iw * alto / ih if ih else alto
+            canvas.drawImage(
+                logo,
+                doc.leftMargin,
+                borde_inferior + 0.1 * cm,
+                width=ancho,
+                height=alto,
+                mask="auto",
+            )
+        except Exception:
+            logo = None
+    if logo is None:
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(_AZUL)
+        canvas.drawString(
+            doc.leftMargin, borde_inferior + 0.45 * cm, _LOGO_FALLBACK_TEXTO
+        )
+
+    canvas.setFont("Helvetica", 8)
+    canvas.setFillColor(_AZUL)
+    canvas.drawRightString(
+        A4[0] - doc.rightMargin,
+        borde_inferior + 0.45 * cm,
+        doc._asignatura_pdf,
+    )
+
+    canvas.setStrokeColor(_AZUL)
+    canvas.setLineWidth(0.5)
+    canvas.line(doc.leftMargin, borde_inferior,
+                A4[0] - doc.rightMargin, borde_inferior)
+    canvas.restoreState()
+
+
+def _make_page_template(doc: BaseDocTemplate) -> PageTemplate:
     frame = Frame(
         doc.leftMargin, doc.bottomMargin,
         doc.width, doc.height,
@@ -748,33 +980,80 @@ def _make_page_template(doc: BaseDocTemplate, titulo: str) -> PageTemplate:
     )
 
     def _on_page(canvas, doc_ref):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(colors.HexColor("#888780"))
-        page_str = f"{titulo}  —  {doc_ref.page}"
-        canvas.drawCentredString(A4[0] / 2, 1.2 * cm, page_str)
-        canvas.setStrokeColor(_GRIS_BORDE)
-        canvas.setLineWidth(0.4)
-        canvas.line(doc.leftMargin, 1.5 * cm,
-                    A4[0] - doc.rightMargin, 1.5 * cm)
-        canvas.restoreState()
+        # Cabecera en todas las páginas excepto la primera. El pie lo dibuja
+        # _NumberedCanvas en save() para conocer el total de páginas.
+        if doc_ref.page > 1:
+            _dibujar_cabecera(canvas, doc)
 
     return PageTemplate(id="main", frames=[frame], onPage=_on_page)
+
+
+def _numbered_canvas_factory(
+    asignatura: str, left_margin: float, right_margin: float
+):
+    """Canvas de dos fases: difiere el pie hasta conocer el total de páginas.
+
+    Patrón NumberedCanvas estándar de ReportLab: showPage() acumula el
+    estado de cada página; save() las reemite dibujando el pie
+    "[asignatura] | Universidad de Oviedo | Página X de N" con el N real.
+    Nunca se muestra "?" como total.
+    """
+
+    class _NumberedCanvas(_pdf_canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_states: list[dict] = []
+
+        def showPage(self):  # noqa: N802 (API de ReportLab)
+            self._saved_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total = len(self._saved_states)
+            for state in self._saved_states:
+                self.__dict__.update(state)
+                self._dibujar_pie(total)
+                super().showPage()
+            super().save()
+
+        def _dibujar_pie(self, total: int) -> None:
+            self.saveState()
+            self.setStrokeColor(_GRIS_LINEA_PIE)
+            self.setLineWidth(0.5)
+            self.line(left_margin, 1.5 * cm, A4[0] - right_margin, 1.5 * cm)
+            self.setFont("Helvetica", 8)
+            self.setFillColor(_GRIS_PIE)
+            self.drawCentredString(
+                A4[0] / 2,
+                1.1 * cm,
+                f"{asignatura} | Universidad de Oviedo | "
+                f"Página {self._pageNumber} de {total}",
+            )
+            self.restoreState()
+
+    return _NumberedCanvas
 
 
 # ---------------------------------------------------------------------------
 # Pre-proceso del Markdown
 # ---------------------------------------------------------------------------
 
-def _preprocess_md(markdown_text: str) -> tuple[str, dict[str, str]]:
+def _preprocess_md(
+    markdown_text: str,
+) -> tuple[str, dict[str, str], dict[str, str]]:
     """Strip frontmatter, protect FIGURA/TEXTO_ILEGIBLE tags, protect LaTeX."""
     # Strip YAML frontmatter
     text = re.sub(r"^---\n[\s\S]*?\n---\n", "", markdown_text.lstrip(), count=1)
 
-    # Turn [FIGURA: ...] into italicised captions
-    text = _FIGURA_RE.sub(
-        lambda m: "\n\n*" + m.group(0)[1:-1] + "*\n\n", text
-    )
+    # [FIGURA: ...] → token; el parser lo convierte en _FiguraPlaceholder
+    figura_subs: dict[str, str] = {}
+
+    def repl_figura(m: re.Match) -> str:
+        key = f"{_FIGURA_PLACEHOLDER}{len(figura_subs)}{_FIGURA_PLACEHOLDER}"
+        figura_subs[key] = m.group(1).strip()
+        return f"\n\n{key}\n\n"
+
+    text = _FIGURA_RE.sub(repl_figura, text)
     # Replace [TEXTO_ILEGIBLE] with a visible italic blockquote so the professor
     # can see exactly where gaps exist in the original material.
     text = _TEXTO_ILEGIBLE_RE.sub(
@@ -783,7 +1062,7 @@ def _preprocess_md(markdown_text: str) -> tuple[str, dict[str, str]]:
 
     # Protect LaTeX from the markdown parser
     text, subs = _protect_latex(text)
-    return text, subs
+    return text, subs, figura_subs
 
 
 # ---------------------------------------------------------------------------
@@ -812,8 +1091,10 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
             "Verifica que está incluido en requirements.txt e instalado en el entorno."
         )
 
-    # 1. Pre-process markdown
-    processed, latex_subs = _preprocess_md(markdown_text)
+    # 1. Pre-process markdown (antes del strip: la asignatura sale del
+    #    frontmatter tema_detectado, o del H1 si no hay metadata)
+    asignatura = _extraer_asignatura(markdown_text, titulo)
+    processed, latex_subs, figura_subs = _preprocess_md(markdown_text)
 
     # 2. Markdown → HTML
     html = _md_lib.markdown(
@@ -822,9 +1103,10 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
     )
 
     # 3. HTML → Flowables
-    margin = 2.5 * cm
-    max_eq_width = 0.8 * (A4[0] - 2 * margin)
-    parser = _MarkdownFlowableParser(latex_subs, max_eq_width)
+    margen_izq = 2.5 * cm
+    margen_der = 2.0 * cm
+    content_width = A4[0] - margen_izq - margen_der
+    parser = _MarkdownFlowableParser(latex_subs, content_width, figura_subs)
     parser.feed(html)
     parser.close()
     flowables = parser.flowables
@@ -837,14 +1119,20 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
     doc = BaseDocTemplate(
         buf,
         pagesize=A4,
-        leftMargin=margin,
-        rightMargin=margin,
-        topMargin=margin,
-        bottomMargin=2.0 * cm,  # extra for footer
+        leftMargin=margen_izq,
+        rightMargin=margen_der,
+        topMargin=2.5 * cm,
+        bottomMargin=2.0 * cm,
     )
-    doc.addPageTemplates([_make_page_template(doc, titulo)])
+    doc._asignatura_pdf = asignatura  # leído por _dibujar_cabecera
+    doc.addPageTemplates([_make_page_template(doc)])
     try:
-        doc.build(flowables)
+        doc.build(
+            flowables,
+            canvasmaker=_numbered_canvas_factory(
+                asignatura, margen_izq, margen_der
+            ),
+        )
     finally:
         for path in parser.temp_image_paths:
             try:

@@ -1,12 +1,12 @@
 # Agente Presentación — Estado del proyecto
 
-**Última actualización:** 2026-06-09
+**Última actualización:** 2026-06-10
 
 ---
 
 ## 1. PROPÓSITO
 
-Genera dos salidas desde el Markdown producido por el Agente Contenido: un PDF académico con ecuaciones renderizadas y una página HTML autocontenida con visualizaciones interactivas.
+Genera tres salidas desde el Markdown producido por el Agente Contenido: un PDF académico con plantilla institucional, una página HTML autocontenida con visualizaciones interactivas por pestañas, y un HTML de presentación completa del tema que integra toda la teoría con los bloques interactivos.
 
 **Inputs:**
 - `[obligatorio]` Archivo `.md` del Agente Contenido.
@@ -15,7 +15,7 @@ Genera dos salidas desde el Markdown producido por el Agente Contenido: un PDF a
 **Outputs:**
 - PDF con ReportLab: ecuaciones como imágenes PNG (matplotlib mathtext), tablas, headings, pie de página.
 - HTML autocontenido: una pestaña por sección seleccionada, con Chart.js o canvas nativo según el patrón elegido dinámicamente por el razonador.
-- HTML de presentación completa del tema (`generador_presentacion.py`): documento scrollable que integra toda la teoría del Markdown (secciones H2) con los bloques interactivos de las ecuaciones seleccionadas insertados tras la subsección que las presenta. Sidebar con índice y scroll-spy, navegación anterior/siguiente, botón volver arriba. Inicialización lazy por viewport (IntersectionObserver) — el listener DOMContentLoaded propio de cada bloque se elimina al embeber. SVG esquemáticos opcionales vía Haiku (`PROMPT_GENERADOR_SVG`) solo para marcadores `[FIGURA: ...]` de secciones sin bloque interactivo; si Haiku responde NO_PROCEDE o el SVG no pasa la sanitización (sin script/image/href/url), se mantiene el placeholder gris. Workers limitados a 2 (los documentos completos generan más bloques y agotan el límite de output tokens/min).
+- HTML de presentación completa del tema (`generador_presentacion.py`): documento scrollable que integra toda la teoría del Markdown (secciones H2) con los bloques interactivos de las ecuaciones seleccionadas insertados tras la subsección que las presenta. Sidebar con índice y scroll-spy, navegación anterior/siguiente, botón volver arriba. Inicialización lazy por viewport (IntersectionObserver) — el listener DOMContentLoaded propio de cada bloque se elimina al embeber. SVG esquemáticos opcionales vía Haiku (`PROMPT_GENERADOR_SVG`) solo para marcadores `[FIGURA: ...]` de secciones sin bloque interactivo; si Haiku responde NO_PROCEDE o el SVG no pasa la sanitización (sin script/image/href/url), se mantiene el placeholder gris. Workers limitados a 2 (los documentos completos generan más bloques y agotan el límite de output tokens/min). **Sidebar con desambiguación:** los títulos H2 repetidos (p. ej. "Contenido teórico" varias veces) se numeran solo en el texto visible del índice — "Contenido teórico", "Contenido teórico (2)", … — sin alterar los IDs de sección (`seccion-N`) ni el contenido del documento.
 
 El patrón de visualización no está fijado de antemano. Para cada sección, Sonnet primero decide si la relación merece representación interactiva y qué patrón aplicar; luego un segundo Sonnet genera el HTML para ese patrón.
 
@@ -31,9 +31,13 @@ app.py              — UI Streamlit; importa render_hero desde shared/ui_hero.p
                       numérica; triggers de detección, PDF y HTML; checkboxes
 detector.py         — Regex + filtro Haiku + evaluar_advertencia() Sonnet
                       (opt-in UI); agrupa por sección (un elemento por ##/###)
-generador_pdf.py    — Markdown → PDF: protege LaTeX, convierte a HTML,
-                      parsea HTML a Flowables ReportLab; renderiza ecuaciones
-                      con matplotlib mathtext
+generador_pdf.py    — Markdown → PDF con plantilla institucional UO:
+                      protege LaTeX, convierte a HTML, parsea a Flowables
+                      ReportLab; cabecera con logo (assets/logo_uniovi.png)
+                      + asignatura; pie "X de N" con NumberedCanvas;
+                      renderiza ecuaciones con matplotlib mathtext
+assets/logo_uniovi.png — Logo Universidad de Oviedo para la cabecera del
+                      PDF (versionado en el repo)
 generador_html.py   — Pipeline por elemento: razonador Sonnet → generador Sonnet;
                       post-procesado Python de rangos (aplicar_rangos);
                       ThreadPoolExecutor; plantilla HTML con pestañas CSS;
@@ -138,17 +142,23 @@ El campo `advertencia` del razonador es complementario. Cubre los elementos que 
 ## 7. PIPELINE PDF
 
 Función pública: `generar_pdf(markdown_text, titulo)` en `generador_pdf.py`.
+El PDF sigue una **plantilla institucional global** (azul UO `#003366`), idéntica para cualquier asignatura — sin excepciones por tema ni materia.
 
-1. **Strip frontmatter YAML** (`---...---`).
-2. **`_protect_latex()`:** reemplaza `$$...$$` e `$...$` con tokens placeholder para que el parser de Markdown no los altere.
-3. **Marcadores del Agente Contenido:** `[FIGURA: ...]` → caption en cursiva; `[TEXTO_ILEGIBLE]` → blockquote italic que indica la laguna al profesor.
-4. **Markdown → HTML** con la biblioteca `markdown` (extensiones `tables`, `fenced_code`).
-5. **`_MarkdownFlowableParser`** (HTMLParser custom): H1-H4 → estilos jerárquicos en azul/negro/gris; párrafos justificados; listas `ul`/`ol` con contador; `blockquote` en cursiva; `pre` en Courier monoespaciado; tablas Markdown → `Table` Flowable de ReportLab con cabecera en azul (`#185FA5`) sobre fondo blanco, filas alternas en `#F7F5F0`, cuadrícula `#D3D1C7` a 0.5pt, ancho de columna distribuido uniformemente.
-6. **Ecuaciones en bloque** (`$$...$$`): `render_latex_to_image()` renderiza la expresión con `matplotlib.mathtext` (`usetex=False`, sin LaTeX del sistema) como PNG en memoria. La imagen se escala para no superar el 80% del ancho de página. Si el renderizado falla, fallback a texto Courier en `_LeftBorderBox`.
-7. **Ecuaciones inline** (`$...$`): renderizadas como `<img>` inline escaladas a 12pt de altura; fallback a `<font name="Courier">`.
-8. **`_LeftBorderBox`:** Flowable custom con fondo `#F7F5F0` y borde izquierdo `#185FA5` (3pt). Envuelve código y ecuaciones en fallback.
-9. **`BaseDocTemplate`** con pie de página: título + número de página, fuente Helvetica 8pt, línea separadora `#D3D1C7`.
-10. Las imágenes PNG temporales se escriben a disco y se eliminan en el bloque `finally`.
+1. **`_extraer_asignatura()`:** nombre de la asignatura para cabecera/pie. Prioridad: campo `tema_detectado` del frontmatter YAML → primer H1 → `titulo` de respaldo. Se calcula **antes** del strip del frontmatter.
+2. **Strip frontmatter YAML** (`---...---`).
+3. **Marcadores del Agente Contenido:** `[FIGURA: ...]` → token que el parser convierte en `_FiguraPlaceholder` (rectángulo gris `#F0F0F0`, borde `#CCCCCC`, alto 60pt, "[Figura]" 9pt itálica + descripción a 2 líneas máx.); `[TEXTO_ILEGIBLE]` → blockquote italic que indica la laguna.
+4. **`_protect_latex()`:** reemplaza `$$...$$` e `$...$` con tokens placeholder.
+5. **Markdown → HTML** con la biblioteca `markdown` (extensiones `tables`, `fenced_code`).
+6. **`_MarkdownFlowableParser`** (HTMLParser custom): jerarquía de encabezados — H1 20pt azul, **H2 14pt azul con línea separadora `#003366` 1pt y salto de página antes de cada uno excepto el primero**, H3 11.5pt negro, H4 10.5pt negrita itálica gris. Cuerpo 10.5pt interlineado 1.4, justificado, 8pt tras párrafo. Listas con bullet `•`/contador en azul, sangría 0.5cm. Tablas → `Table` ReportLab con cabecera `#003366` texto blanco 9.5pt negrita, filas pares `#F5F7FA`, borde exterior `#003366` 0.75pt, interior `#CCCCCC` 0.4pt, ancho 100% de la columna, `repeatRows` para repetir cabecera entre páginas.
+7. **Ecuaciones en bloque** (`$$...$$`): `render_latex_to_image()` (matplotlib mathtext, `usetex=False`) como PNG. Escala a máx. **70%** del ancho de columna, centrada, con 14pt de espacio antes y después. Fallback a Courier en `_LeftBorderBox`.
+8. **Ecuaciones inline** (`$...$`): `<img>` inline a 12pt de altura; fallback `<font name="Courier">`.
+9. **Fuente base:** Arial del sistema si las cuatro variantes TTF existen (`_registrar_arial()`); si no, Helvetica (sin dependencias). Cualquier fallo al registrar TTF degrada a Helvetica sin bloquear.
+10. **Cabecera (`_dibujar_cabecera`, páginas > 1):** logo UO de `assets/logo_uniovi.png` (alto 1cm, proporción preservada) a la izquierda; nombre de asignatura a la derecha (Helvetica 8pt `#003366`); línea separadora `#003366` 0.5pt al borde inferior, a 1.2cm del borde superior. Si el logo no está o falla su lectura → fallback de texto "Universidad de Oviedo | EPI Gijón". **Nunca lanza excepción por el logo.**
+11. **Pie (`_numbered_canvas_factory`, todas las páginas):** patrón NumberedCanvas de dos fases (acumula estados en `showPage()`, los reemite en `save()` con el total real) → "[asignatura] | Universidad de Oviedo | Página X de N", Helvetica 8pt `#666666` centrado, línea `#CCCCCC` 0.5pt arriba. El total **N nunca es "?"**.
+12. **Márgenes:** superior 2.5cm, inferior 2cm, izquierdo 2.5cm, derecho 2cm.
+13. Las imágenes PNG temporales se escriben a disco y se eliminan en el bloque `finally`.
+
+**Logo:** `assets/logo_uniovi.png` está versionado en el repo. `_cargar_logo()` lo lee con `ImageReader` y valida `getSize()`; cualquier problema → `None` → fallback de texto.
 
 ---
 
@@ -194,11 +204,22 @@ MathJax y Chart.js se cargan en el `<head>` de `_HTML_TEMPLATE`. Los bloques gen
 `aplicar_rangos()` debe ejecutarse siempre antes de `validar_bloque_html()`. Cambiar ese orden hace que la validación compruebe atributos que aún no han sido corregidos.
 
 **Paleta fija:**
-- Acento: `#185FA5` / hover: `#0C447C`
-- Fondo de página: `#F7F5F0`
-- Superficie de card: `#FFFFFF`
-- Superficie de control (sliders): `#F0EEE9`
-- Borde sutil: `rgba(0,0,0,0.08)`
+- **HTML interactivo + presentación completa** (identidad de marca de la suite):
+  - Acento: `#185FA5` / hover: `#0C447C`
+  - Fondo de página: `#F7F5F0`
+  - Superficie de card: `#FFFFFF`
+  - Superficie de control (sliders): `#F0EEE9`
+  - Borde sutil: `rgba(0,0,0,0.08)`
+  - Card del bloque interactivo en presentación: borde izquierdo `#003366`, fondo `#EEF2F7`
+- **PDF** (plantilla institucional Universidad de Oviedo):
+  - Acento institucional: `#003366` (encabezados, líneas separadoras, cabecera tabla, borde tabla, separador de cabecera)
+  - Cuerpo de texto: `#1A1A1A`
+  - Filas pares de tabla: `#F5F7FA`
+  - Pie de página y descripción de figura: `#666666` / `#888888`
+  - Líneas de pie e interior de tabla: `#CCCCCC`
+
+**Tabla de variables — filas sin descripción (`construir_tabla_variables`, sección 6):**
+Función compartida por el HTML por pestañas y la presentación completa. Cuando Haiku no genera la descripción de una variable (degradación graceful), esa fila se **omite** en lugar de mostrar "Descripción no disponible". Si tras filtrar no queda ninguna fila, la lista vacía hace que el generador omita la tabla por completo. Cambiar este filtro afecta a ambos outputs HTML.
 
 ---
 
@@ -236,6 +257,17 @@ logging.basicConfig(level=logging.DEBUG)
 
 ---
 
-## 11. PENDIENTE
+## 11. RESILIENCIA DE LA API (generación de bloques)
 
-Sin items pendientes en el pipeline principal. Las tablas en el PDF están implementadas con `Table` de ReportLab desde 2026-06-09.
+El bucle de reintentos de `_generar_bloque()` (`generador_html.py`) maneja dos modos de fallo además del bloque incompleto:
+
+- **Reintento correctivo:** si un intento es rechazado por `validar_bloque_html()`, el siguiente reenvía a Sonnet el motivo exacto del rechazo y la plantilla obligatoria de `window['initBloque_{slug}']` + arranque `DOMContentLoaded`. Repetir el mismo mensaje tendía a reproducir el mismo fallo de formato.
+- **Backoff ante `RateLimitError` (429):** el límite de output tokens/min de la organización se agota al generar varios bloques en paralelo. Ante un 429 se espera 30/60 s antes del siguiente intento en vez de rechocar de inmediato. La presentación completa además limita a 2 workers.
+
+`construir_tabla_variables()` degrada graciosamente si Haiku falla (sin crédito o sin red): las variables sin descripción se omiten de la tabla (ver sección 9).
+
+---
+
+## 12. PENDIENTE
+
+Sin items pendientes en el pipeline principal. Los tres outputs (PDF institucional, HTML por pestañas, HTML presentación completa) están implementados y validados con análisis estático sobre `TEMA7_Calidad_maquinas_con_ejercicios_curado.md`.
