@@ -34,15 +34,22 @@ SECTION_NAMES = {
 # una sola vez; los cuerpos de todos los chunks de ese tipo se concatenan en el
 # orden en que se extrajeron. Evita repetir el mismo H2 cada vez que la
 # clasificación por chunk alterna de tipo (p. ej. 7× "## Theory").
+#
+# "mixto" no figura aquí a propósito: sus cuerpos se fusionan dentro de la
+# sección de "teoria" (ver MERGE_INTO en assemble_markdown), por lo que el
+# documento final no tiene una sección "## Contenido" / "## Content" separada.
 CANONICAL_TYPE_ORDER = (
     "teoria",
-    "mixto",
     "procedimiento",
     "tabla",
     "ejemplo_resuelto",
     "ejercicio_propuesto",
     "resumen",
 )
+
+# Tipos que no generan sección propia: su cuerpo se vuelca en la sección del
+# tipo destino, intercalado en orden de aparición con el resto de ese tipo.
+MERGE_INTO = {"mixto": "teoria"}
 
 
 def _normalize(s: str) -> str:
@@ -200,6 +207,10 @@ def assemble_markdown(items: list[dict[str, Any]], nombre_del_archivo: str) -> s
         )
         if not body:
             continue
+        # "mixto" (y cualquier otro tipo en MERGE_INTO) se vuelca en su tipo
+        # destino. Como se respeta el orden de items, los cuerpos de teoria y
+        # mixto quedan intercalados en orden de aparición.
+        tipo = MERGE_INTO.get(tipo, tipo)
         if tipo not in bodies_by_tipo:
             bodies_by_tipo[tipo] = []
             encounter_order.append(tipo)
