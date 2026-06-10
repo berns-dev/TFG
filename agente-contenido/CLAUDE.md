@@ -161,7 +161,7 @@ compatible_agente_organizador: true
 
 ## Contenido teórico
 
-[contenido estructurado del primer chunk]
+[todos los chunks de teoría y mixtos, en orden de aparición]
 
 ---
 
@@ -171,6 +171,30 @@ compatible_agente_organizador: true
 ```
 
 El campo `compatible_agente_organizador: true` en el frontmatter indica que el Agente Organizador puede consumir este output como alternativa a los PDFs originales.
+
+### Ensamblado por secciones canónicas (`assembler.py`)
+
+`assemble_markdown()` agrupa los cuerpos de los chunks por tipo y emite cada
+sección `##` **una sola vez**, en orden canónico fijo — no repite el encabezado
+cada vez que la clasificación por chunk alterna de tipo. Reglas:
+
+- **`mixto` se fusiona con `teoria`.** Los chunks clasificados como `mixto` no
+  generan sección propia; su contenido se vuelca dentro de `## Contenido teórico`
+  / `## Theory`, intercalado en orden de aparición con el resto de la teoría
+  (mapa `MERGE_INTO` en `assembler.py`). El output **no** tiene una sección
+  `## Contenido` / `## Content` separada.
+- **Secciones `##` canónicas principales (máximo 5):**
+  `## Contenido teórico` / `## Theory` (teoría + mixto),
+  `## Tablas de referencia` / `## Reference tables`,
+  `## Ejemplos resueltos` / `## Solved examples`,
+  `## Ejercicios propuestos` / `## Practice problems`,
+  `## Resumen` / `## Summary`. Cada una aparece solo si hay contenido de ese
+  tipo. (Existe además `## Procedimientos` / `## Procedures` como tipo canónico
+  para material de pasos secuenciales, poco frecuente y ausente en los temas
+  validados.)
+- **H2 no canónicos.** Cualquier `##` que el modelo emita con un nombre fuera de
+  la tabla canónica se degrada a `###`, para que quede como subsección y no
+  compita con las secciones de nivel superior.
 
 ---
 
