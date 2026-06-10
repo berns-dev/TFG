@@ -266,7 +266,10 @@ def main() -> None:
             st.session_state["texto_original"] = None
 
         st.divider()
-        analizar_advertencias = st.checkbox(
+        # El valor se lee vía st.session_state["analizar_advertencias"]
+        # (key del widget) en el trigger de detección — no hace falta
+        # capturar el retorno.
+        st.checkbox(
             "Analizar advertencias pedagógicas (consume más créditos)",
             value=False,
             help="Opcional. Llama a Sonnet por cada elemento detectado para señalar "

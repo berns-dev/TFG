@@ -232,14 +232,6 @@ _ESTILOS: dict[str, ParagraphStyle] = {
         rightIndent=4,
         alignment=TA_CENTER,
     ),
-    "ecuacion_inline": ParagraphStyle(
-        "EcuacionInline",
-        fontName="Courier",
-        fontSize=9,
-        textColor=_NEGRO,
-        leading=12,
-        backColor=_GRIS_FONDO,
-    ),
     "blockquote": ParagraphStyle(
         "Blockquote",
         fontName=_FUENTES["italic"],
@@ -249,16 +241,6 @@ _ESTILOS: dict[str, ParagraphStyle] = {
         leftIndent=20,
         spaceBefore=4,
         spaceAfter=4,
-    ),
-    "figura": ParagraphStyle(
-        "Figura",
-        fontName=_FUENTES["italic"],
-        fontSize=9,
-        textColor=_GRIS_OSCURO,
-        leading=12,
-        spaceBefore=2,
-        spaceAfter=4,
-        alignment=TA_CENTER,
     ),
 }
 
@@ -502,7 +484,6 @@ class _MarkdownFlowableParser(HTMLParser):
         self._skip_tags = {"html", "body", "head"}
 
         # Table state
-        self._in_table = False
         self._table_data: list[list[str]] = []
         self._table_has_header: list[bool] = []
         self._current_row_cells: list[str] = []
@@ -786,7 +767,6 @@ class _MarkdownFlowableParser(HTMLParser):
         # Table-specific handlers — must come before the generic _BLOCK_TAGS branch
         if tag == "table":
             self._flush()
-            self._in_table = True
             self._table_data = []
             self._table_has_header = []
             self._tag_stack.append(tag)
@@ -872,7 +852,6 @@ class _MarkdownFlowableParser(HTMLParser):
 
         if tag == "table":
             self._flush()
-            self._in_table = False
             if self._table_data:
                 self._build_table()
             self._table_data = []
