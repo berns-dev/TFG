@@ -197,6 +197,10 @@ INPUT QUE RECIBIRÁS:
 - Variables de entrada con sus unidades y rango físico razonable
 - Variable de salida con sus unidades
 - Contexto: fragmento del material original (incluye encabezados ### si existen)
+- CONTEXTO TEÓRICO: mismo texto del fragmento, a mostrar literalmente en la
+  sección 5 (puede coincidir con "Contexto")
+- TABLA DE VARIABLES: lista de variables de la ecuación con descripción,
+  unidades y un indicador "generada" (true/false), a mostrar en la sección 6
 - DECISIÓN DE VISUALIZACIÓN: patrón elegido por el razonador (PATRON, EJE_X, EJE_Y, PARAMETROS_SLIDER, ESCALA_LOG_X, ESCALA_LOG_Y, JUSTIFICACION)
 
 Implementa el patrón indicado. El rediseño visual aplica a todos los patrones.
@@ -227,7 +231,7 @@ Envuelve todo en un div exterior (card):
   border-radius 14px, padding 1.75rem 2rem.
   margin-bottom 1.25rem entre secciones internas.
 
-Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
+Genera exactamente estas 10 secciones en este orden. No añadir ni quitar.
 
 1. ETIQUETA DE SECCIÓN
    <p> uppercase, 11px, letter-spacing 0.08em, color #9A9890, margin-bottom 0.4rem.
@@ -247,7 +251,30 @@ Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
    Centrada, padding 1rem 0 1.25rem, font-size 20px.
    MathJax (\\( ... \\) o \\[ ... \\]). Sin caja, sin borde.
 
-5. GRID DE CONTROLES
+5. CONTEXTO TEÓRICO
+   <div class="teoria-contexto">
+   Mostrar el texto recibido en CONTEXTO TEÓRICO tal cual, en uno o más <p>.
+   No parafrasear ni resumir — copiar el texto literalmente. Si el texto trae
+   varias frases o párrafos de contexto, mostrarlos todos.
+   <p> DM Sans, 14px, line-height 1.7, color #1A1A1A, margin-bottom 0.5rem
+   entre párrafos.
+   Si CONTEXTO TEÓRICO está vacío, omitir esta sección por completo.
+
+6. TABLA DE VARIABLES
+   <div class="tabla-variables">
+   Tabla HTML (<table>) con cabecera Símbolo | Descripción | Unidades, una
+   fila por entrada de TABLA DE VARIABLES, en el mismo orden recibido.
+   - Filas con generada=false: fondo #FFFFFF (normal).
+   - Filas con generada=true: fondo #F0F0F0 y, en la celda del símbolo, el
+     símbolo precedido por "⚡ " con atributo title="Descripción generada
+     automáticamente — no extraída del material del profesor".
+   Estilo: table border-collapse: collapse, width 100%; <th>/<td> con padding
+   8px 12px, font-size 13px DM Sans, border-bottom 0.5px solid
+   rgba(0,0,0,0.08); cabecera <th> uppercase, 11px, letter-spacing 0.05em,
+   color #6B6860, text-align left.
+   Si TABLA DE VARIABLES está vacía, omitir esta sección por completo.
+
+7. GRID DE CONTROLES
    display:grid, grid-template-columns: repeat(2, 1fr), gap 12px.
    Si hay un solo slider, 1 columna.
    Cada control en card: background #F0EEE9, border-radius 10px,
@@ -265,7 +292,7 @@ Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
      - data-var="{símbolo exacto}" (ej. data-var="N", data-var="d")
    El JS puede referenciar el id; data-var es para post-procesado fiable.
 
-6. GRÁFICA (según patrón — ver abajo)
+8. GRÁFICA (según patrón — ver abajo)
    Contenedor: background #F0EEE9, border-radius 12px, padding
    1rem 1.25rem 2.5rem 3rem, position relative, height 380px,
    margin 1.25rem 0.
@@ -295,7 +322,7 @@ Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
      y marcarlo con un punto distinto (color #C0392B, radius 6) en un dataset
      scatter separado, con label en el RESULTADO ACTUAL.
 
-7. RESULTADO ACTUAL
+9. RESULTADO ACTUAL
    Strip horizontal: border-left 3px solid #185FA5, border-radius 0 10px 10px 0,
    background #F0EEE9, padding 14px 18px, display flex, gap 16px,
    align-items center, margin 1.25rem 0.
@@ -304,7 +331,7 @@ Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
    - Descripción contextual: 13px, #6B6860, max 1 línea.
      "para [variable] = [valor] con los parámetros actuales"
 
-8. INSIGHT DINÁMICO
+10. INSIGHT DINÁMICO
    Contenedor: border 0.5px solid rgba(0,0,0,0.08), border-radius 10px,
    padding 14px 18px, display flex, gap 12px, align-items flex-start.
    Sin color de fondo. NO usar blockquote.
@@ -313,12 +340,12 @@ Genera exactamente estas 8 secciones en este orden. No añadir ni quitar.
    - Texto: 13px, #6B6860, line-height 1.6. Mínimo 2 rangos que cambien
      según el slider. Solo desde el contexto original.
 
-── INSTRUCCIONES POR PATRÓN (sección 6) ──
+── INSTRUCCIONES POR PATRÓN (sección 8) ──
 
 CURVA_SIMPLE:
   Chart.js línea. Escala logarítmica si ESCALA_LOG_X/Y = SI.
   Sin leyenda Chart.js si hay una sola serie.
-  Añadir el dataset de cursor interactivo descrito en la sección 6.
+  Añadir el dataset de cursor interactivo descrito en la sección 8.
   Si el rango de X tiene >50 puntos, usar 80 puntos de muestreo para
   que la curva sea suave pero la actualización sea fluida.
 
@@ -339,7 +366,7 @@ REGION_CRITERIO:
   rojo si falla). Mostrar el estado actual en texto sobre el punto (14px, bold).
   Leyenda mínima si aplica: 12px, bottom-left, sin borde.
   Calcular y marcar el punto de cruce de la frontera si hay dos curvas que se
-  intersectan (ver instrucción ANOTACIONES DE UMBRAL en sección 6).
+  intersectan (ver instrucción ANOTACIONES DE UMBRAL en sección 8).
 
 MAPA_2D:
   Canvas HTML5 nativo, grid 80×80, escala #185FA5 → blanco → #C0392B.
@@ -416,6 +443,20 @@ Devuelve ÚNICAMENTE el HTML del bloque, sin explicaciones, sin backticks.
 IMPORTANTE: El bloque se inserta en un contenedor que ya carga MathJax y
 Chart.js v4. NO incluyas <html>, <head>, <body> ni CDN de MathJax/Chart.js.
 Genera <style> con selectores prefijados bloque_{slug}_ y el markup+JS del bloque."""
+
+
+# ---------------------------------------------------------------------------
+# Sistema: descripción de variables sin contexto en el Markdown
+# Modelo: Haiku — clasificación simple, coste mínimo
+# ---------------------------------------------------------------------------
+
+PROMPT_DESCRIPCION_VARIABLES = """Eres un asistente de ingeniería. Describe cada variable en máximo 8 palabras. No inventes unidades si no puedes inferirlas — usa "?" en ese caso.
+
+Devuelve ÚNICAMENTE un JSON estricto con este formato, sin preámbulo, sin texto adicional, sin backticks ni bloques de código:
+
+{"variable1": {"descripcion": "...", "unidades": "..."}, "variable2": {"descripcion": "...", "unidades": "..."}}
+
+Una entrada por variable recibida, usando exactamente el símbolo recibido como clave."""
 
 
 # ---------------------------------------------------------------------------
@@ -504,8 +545,35 @@ def build_razonador_message(
     return "\n".join(lines)
 
 
+def build_descripcion_variables_message(
+    latex: str, variables: list[str], contexto: str
+) -> str:
+    """Build the user message for Haiku to describe variables (PASO B).
+
+    Args:
+        latex: Full LaTeX expression of the equation.
+        variables: List of variable symbols without a description found
+                   in the surrounding Markdown.
+        contexto: Topic/section context to help infer plausible descriptions.
+
+    Returns:
+        User message string ready to send to the API.
+    """
+    return "\n".join([
+        f"ECUACIÓN: {latex}",
+        "",
+        f"VARIABLES SIN DESCRIPCIÓN: {', '.join(variables)}",
+        "",
+        "CONTEXTO DEL TEMA:",
+        contexto.strip(),
+    ])
+
+
 def build_generador_message(
-    elemento: dict, visualizacion: dict, slug: str
+    elemento: dict,
+    visualizacion: dict,
+    slug: str,
+    tabla_variables: list[dict] | None = None,
 ) -> str:
     """Build the user message for Sonnet to generate an interactive HTML block.
 
@@ -523,11 +591,20 @@ def build_generador_message(
         PATRON, EJE_X, EJE_Y, PARAMETROS_SLIDER,
         ESCALA_LOG_X, ESCALA_LOG_Y, JUSTIFICACION
 
+    Each entry in tabla_variables must have:
+        simbolo (str): variable symbol as it appears in the equation
+        descripcion (str): short description
+        unidades (str): physical units, or "?" if unknown
+        generada (bool): True if the description was generated by Haiku
+                         instead of extracted from the professor's Markdown
+
     Args:
         elemento: Element dict (nombre, expresion, contexto, variables_entrada,
                   variable_salida).
         visualizacion: Parsed visualization decision from the razonador step.
         slug: Slug exacto del panel (misma fuente que generador_html._slug).
+        tabla_variables: Lista de variables de la ecuación con descripción,
+                  unidades y flag "generada" (sección 6 del HTML generado).
 
     Returns:
         User message string ready to send to the API.
@@ -567,6 +644,24 @@ def build_generador_message(
         "",
         "CONTEXTO DEL MATERIAL ORIGINAL:",
         contexto.strip(),
+        "",
+        "CONTEXTO TEÓRICO (mostrar tal cual en la sección 5, sin parafrasear):",
+        contexto.strip(),
+    ]
+    if tabla_variables:
+        lines += [
+            "",
+            "TABLA DE VARIABLES (sección 6 — usar exactamente esta información,",
+            "una fila por entrada, en el mismo orden):",
+        ]
+        for fila in tabla_variables:
+            flag = "generada=true" if fila.get("generada") else "generada=false"
+            unidades = fila.get("unidades") or "?"
+            lines.append(
+                f"  - {fila.get('simbolo', '')} | "
+                f"{fila.get('descripcion', '')} | {unidades} | {flag}"
+            )
+    lines += [
         "",
         "DECISIÓN DE VISUALIZACIÓN (del razonador — seguir obligatoriamente):",
         f"  PATRÓN: {visualizacion.get('PATRON', 'CURVA_SIMPLE')}",

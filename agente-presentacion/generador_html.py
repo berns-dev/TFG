@@ -28,6 +28,7 @@ Restricciones de diseno (no negociables):
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import unicodedata
@@ -37,12 +38,15 @@ import anthropic
 
 from config import (
     ANTHROPIC_API_KEY,
+    MODEL_FAST,
     MODEL_SMART,
     REQUEST_TIMEOUT_SECONDS,
 )
 from prompts import (
+    PROMPT_DESCRIPCION_VARIABLES,
     PROMPT_GENERADOR_HTML,
     PROMPT_RAZONADOR_VISUALIZACION,
+    build_descripcion_variables_message,
     build_generador_message,
     build_razonador_message,
 )
@@ -440,6 +444,214 @@ def clave_variable(nombre: str) -> str:
     return normalizar_nombre(nombre)
 
 
+# ---------------------------------------------------------------------------
+# Tabla de variables (contenido teórico — sección 5/6 del HTML generado)
+# ---------------------------------------------------------------------------
+
+_VARIABLE_RE = re.compile(
+    r"\\(?:alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta"
+    r"|iota|kappa|lambda|mu|nu|xi|pi|varpi|rho|varrho|sigma|varsigma|tau"
+    r"|upsilon|phi|varphi|chi|psi|omega"
+    r"|Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu"
+    r"|Nu|Xi|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega)"
+    r"(?:_\{[^}]+\}|_[a-zA-Z0-9])?"
+    r"|(?<![\\a-zA-Z])[a-zA-Z](?:_\{[^}]+\}|_[a-zA-Z0-9])?(?![a-zA-Z])"
+)
+
+_VARIABLE_TABLE_RE = re.compile(
+    r"(\|[^\n]+\|\n\|[-|: ]+\|\n(?:\|[^\n]+\|\n?)+)",
+    re.MULTILINE,
+)
+
+_DONDE_BLOQUE_RE = re.compile(r"(?:[Dd]onde|[Ss]iendo)\s*[:,]?\s*(.+?)(?:\n\n|\Z)", re.DOTALL)
+
+_DONDE_ITEM_RE = re.compile(
+    r"^\$?(\\[a-zA-Z]+(?:_\{[^}]+\}|_[a-zA-Z0-9])?|[a-zA-Z](?:_\{[^}]+\}|_[a-zA-Z0-9])?)\$?"
+    r"\s*(?:es|representa|denota|=|:|—|-)\s+(.+)$"
+)
+
+
+def _extraer_variables_ecuacion(latex: str) -> list[str]:
+    """Extrae los símbolos de variable distintos presentes en una expresión LaTeX.
+
+    Preserva el orden de aparición y deduplica mediante clave_variable()
+    (p. ej. \\sigma_y y sigma_y se consideran la misma variable).
+    """
+    variables: list[str] = []
+    vistas: set[str] = set()
+    for match in _VARIABLE_RE.finditer(latex):
+        token = match.group(0)
+        clave = clave_variable(token)
+        if not clave or clave in vistas:
+            continue
+        vistas.add(clave)
+        variables.append(token)
+    return variables
+
+
+def _extraer_descripciones_tablas(contexto: str) -> dict[str, dict[str, str]]:
+    """Extrae descripciones de variables desde tablas Markdown (PASO A)."""
+    resultado: dict[str, dict[str, str]] = {}
+    for tabla_match in _VARIABLE_TABLE_RE.finditer(contexto):
+        filas = [f for f in tabla_match.group(0).strip().splitlines() if f.strip()]
+        if len(filas) < 2:
+            continue
+        cabecera = [c.strip().lower() for c in filas[0].strip("|").split("|")]
+        idx_simbolo = idx_desc = idx_unidades = None
+        for i, col in enumerate(cabecera):
+            if idx_simbolo is None and any(k in col for k in ("símbolo", "simbolo", "variable")):
+                idx_simbolo = i
+            elif idx_desc is None and any(k in col for k in ("descripci", "significado", "nombre")):
+                idx_desc = i
+            elif idx_unidades is None and "unidad" in col:
+                idx_unidades = i
+        if idx_simbolo is None or idx_desc is None:
+            continue
+        for fila in filas[2:]:
+            celdas = [c.strip() for c in fila.strip("|").split("|")]
+            if len(celdas) <= max(idx_simbolo, idx_desc):
+                continue
+            simbolo = celdas[idx_simbolo].strip("$ *")
+            descripcion = celdas[idx_desc].strip()
+            unidades = (
+                celdas[idx_unidades].strip()
+                if idx_unidades is not None and idx_unidades < len(celdas)
+                else ""
+            )
+            clave = clave_variable(simbolo)
+            if clave and descripcion:
+                resultado[clave] = {"descripcion": descripcion, "unidades": unidades}
+    return resultado
+
+
+def _extraer_descripciones_donde(contexto: str) -> dict[str, dict[str, str]]:
+    """Extrae descripciones de variables de listas tipo 'Donde X es...' (PASO A)."""
+    resultado: dict[str, dict[str, str]] = {}
+    for bloque_match in _DONDE_BLOQUE_RE.finditer(contexto):
+        bloque = bloque_match.group(1)
+        for linea in re.split(r"[\n;]", bloque):
+            linea = linea.strip().lstrip("-*•").strip()
+            if not linea:
+                continue
+            for trozo in linea.split(","):
+                trozo = trozo.strip()
+                m = _DONDE_ITEM_RE.match(trozo)
+                if not m:
+                    continue
+                clave = clave_variable(m.group(1))
+                descripcion = m.group(2).strip().rstrip(".")
+                if clave and descripcion and clave not in resultado:
+                    resultado[clave] = {"descripcion": descripcion, "unidades": ""}
+    return resultado
+
+
+def _extraer_descripciones_markdown(contexto: str) -> dict[str, dict[str, str]]:
+    """Combina las dos fuentes de descripción de variables del Markdown (PASO A)."""
+    if not contexto:
+        return {}
+    resultado = _extraer_descripciones_donde(contexto)
+    resultado.update(_extraer_descripciones_tablas(contexto))
+    return resultado
+
+
+def _describir_variables_haiku(
+    latex: str,
+    variables: list[str],
+    contexto: str,
+    client: anthropic.Anthropic,
+) -> dict[str, dict[str, str]]:
+    """Genera descripciones cortas para variables sin contexto (PASO B).
+
+    Degrada graciosamente: si Haiku falla o la respuesta no es JSON válido,
+    devuelve un dict vacío y el llamador marca esas variables como
+    "Descripción no disponible".
+    """
+    if not variables:
+        return {}
+    try:
+        response = client.messages.create(
+            model=MODEL_FAST,
+            max_tokens=512,
+            system=PROMPT_DESCRIPCION_VARIABLES,
+            messages=[{
+                "role": "user",
+                "content": build_descripcion_variables_message(latex, variables, contexto),
+            }],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw).strip()
+        data = json.loads(raw)
+        resultado: dict[str, dict[str, str]] = {}
+        for var, info in data.items():
+            if not isinstance(info, dict):
+                continue
+            resultado[clave_variable(var)] = {
+                "descripcion": str(info.get("descripcion", "")).strip(),
+                "unidades": str(info.get("unidades", "")).strip(),
+            }
+        return resultado
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[VARIABLES] Descripción Haiku falló: %s", exc)
+        return {}
+
+
+def construir_tabla_variables(
+    elemento: dict,
+    client: anthropic.Anthropic,
+) -> list[dict]:
+    """Construye la tabla de variables de la ecuación (sección 6 del HTML).
+
+    PASO A: busca descripciones en el Markdown circundante (tablas y listas
+    tipo "Donde X es..."). PASO B: para las variables restantes, pide a
+    Haiku una descripción corta usando la ecuación y el tema como contexto.
+
+    Returns:
+        Lista de dicts {simbolo, descripcion, unidades, generada}, en el
+        mismo orden en que las variables aparecen en la ecuación.
+    """
+    latex = elemento.get("expresion", "")
+    contexto = elemento.get("contexto", "")
+    variables = _extraer_variables_ecuacion(latex)
+    if not variables:
+        return []
+
+    descripciones_md = _extraer_descripciones_markdown(contexto)
+
+    tabla: list[dict] = []
+    pendientes: list[str] = []
+    for var in variables:
+        info = descripciones_md.get(clave_variable(var))
+        if info:
+            tabla.append({
+                "simbolo": var,
+                "descripcion": info["descripcion"],
+                "unidades": info.get("unidades", "") or "?",
+                "generada": False,
+            })
+        else:
+            pendientes.append(var)
+            tabla.append({"simbolo": var, "descripcion": "", "unidades": "", "generada": True})
+
+    if pendientes:
+        tema = elemento.get("seccion") or elemento.get("nombre", "")
+        contexto_tema = f"{tema}\n\n{contexto}".strip()
+        descripciones_haiku = _describir_variables_haiku(latex, pendientes, contexto_tema, client)
+        for fila in tabla:
+            if not fila["generada"]:
+                continue
+            info = descripciones_haiku.get(clave_variable(fila["simbolo"]))
+            if info and info.get("descripcion"):
+                fila["descripcion"] = info["descripcion"]
+                fila["unidades"] = info.get("unidades") or "?"
+            else:
+                fila["descripcion"] = "Descripción no disponible"
+                fila["unidades"] = "?"
+
+    return tabla
+
+
 _ALIASES_VARIABLE: dict[str, tuple[str, ...]] = {
     "n": ("numero", "espiras", "espira", "turns", "coils", "activas"),
     "N": ("numero", "espiras", "espira", "turns", "coils", "activas"),
@@ -755,7 +967,8 @@ def _generar_bloque(
             rangos_raw or "NO ENCONTRADO",
         )
 
-    user_msg = build_generador_message(elemento, visualizacion, slug)
+    tabla_variables = construir_tabla_variables(elemento, client)
+    user_msg = build_generador_message(elemento, visualizacion, slug, tabla_variables)
     rangos_esperados = _parse_rango_variables(rangos_raw)
     parametros_slider = visualizacion.get("PARAMETROS_SLIDER", "")
 
