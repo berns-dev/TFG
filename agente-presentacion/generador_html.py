@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -885,7 +886,7 @@ def validar_rangos(
 
 
 _DOMLOADED_RE = re.compile(
-    r"addEventListener\(\s*['\"]DOMContentLoaded['\"]", re.IGNORECASE
+    r"addEventListener\(\s*['\"`]DOMContentLoaded['\"`]", re.IGNORECASE
 )
 
 
@@ -899,6 +900,9 @@ def validar_bloque_html(bloque: str, slug: str) -> tuple[bool, str]:
          invocación ``window['initBloque_{slug}']()``.
       3. El script no está truncado (termina en ``</script>`` o ``};``).
 
+    Las comillas del acceso a window pueden ser simples, dobles o backticks
+    (Sonnet alterna entre las tres formas — las tres son JS válido).
+
     Returns:
         (es_valido, motivo): motivo es "" si el bloque es válido; si no,
         describe exactamente qué condición falló (se muestra en el
@@ -908,7 +912,7 @@ def validar_bloque_html(bloque: str, slug: str) -> tuple[bool, str]:
     motivos: list[str] = []
 
     if not re.search(
-        rf"window\[\s*['\"]initBloque_{slug_re}['\"]\s*\]\s*=", bloque
+        rf"window\[\s*['\"`]initBloque_{slug_re}['\"`]\s*\]\s*=", bloque
     ):
         motivos.append(
             f"falta la definición global window['initBloque_{slug}']"
@@ -917,7 +921,7 @@ def validar_bloque_html(bloque: str, slug: str) -> tuple[bool, str]:
     tiene_listener = bool(_DOMLOADED_RE.search(bloque))
     tiene_llamada = bool(
         re.search(
-            rf"window\[\s*['\"]initBloque_{slug_re}['\"]\s*\]\s*\(", bloque
+            rf"window\[\s*['\"`]initBloque_{slug_re}['\"`]\s*\]\s*\(", bloque
         )
     )
     if not (tiene_listener and tiene_llamada):
@@ -1032,11 +1036,30 @@ def _generar_bloque(
     motivo_fallo = ""
     for attempt in range(_MAX_RETRIES + 1):
         try:
+            # Reintento correctivo: repetir el mismo mensaje produce a menudo
+            # el mismo fallo. Indicar a Sonnet qué se rechazó y qué se espera.
+            mensaje = user_msg
+            if attempt and motivo_fallo:
+                mensaje = (
+                    f"{user_msg}\n\n"
+                    f"CORRECCIÓN OBLIGATORIA — tu respuesta anterior fue "
+                    f"rechazada por: {motivo_fallo}.\n"
+                    f"El bloque DEBE contener, en el nivel superior del "
+                    f"<script> y con comillas simples:\n"
+                    f"  window['initBloque_{slug}'] = function() {{ ... }};\n"
+                    f"y al final del <script>:\n"
+                    f"  document.addEventListener('DOMContentLoaded', "
+                    f"function() {{\n"
+                    f"    try {{ window['initBloque_{slug}'](); }}\n"
+                    f"    catch(e) {{ console.error('Error en "
+                    f"initBloque_{slug}:', e); }}\n"
+                    f"  }});"
+                )
             response = client.messages.create(
                 model=MODEL_SMART,
                 max_tokens=_MAX_TOKENS_HTML,
                 system=PROMPT_GENERADOR_HTML,
-                messages=[{"role": "user", "content": user_msg}],
+                messages=[{"role": "user", "content": mensaje}],
             )
             raw = response.content[0].text.strip()
 
@@ -1094,6 +1117,20 @@ def _generar_bloque(
                 f"(primeros 120 chars: {raw[:120]!r})"
             )
 
+        except anthropic.RateLimitError as exc:
+            # El límite de output tokens/min se agota con varios bloques en
+            # paralelo; reintentar de inmediato vuelve a chocar con él.
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                espera = 30 * (attempt + 1)
+                logger.warning(
+                    "[GENERADOR] Rate limit (429) para slug=%r — esperando "
+                    "%s s antes del intento %s",
+                    slug,
+                    espera,
+                    attempt + 2,
+                )
+                time.sleep(espera)
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
 

@@ -451,6 +451,11 @@ RESTRICCIONES TÉCNICAS:
 - CSS y JS inline en el bloque; @import de Google Fonts permitido en <style>
 - Chart.js: destrucción previa dentro de initBloque_{slug}()
 - IDs con prefijo bloque_{slug}_ obligatorio
+- TODA función o variable global del script debe llevar el slug en el
+  nombre (update_{slug}, chart_{slug}, addCurveLabels_{slug}, ...).
+  PROHIBIDOS los nombres globales genéricos (addCurveLabels,
+  updateResultado, chartInstance): varios bloques conviven en el mismo
+  documento y los nombres genéricos se sobreescriben entre sí
 - Cálculo en JS puro, sin librerías matemáticas externas
 - Sin gradientes, box-shadow, blur ni glow
 
@@ -478,6 +483,43 @@ Devuelve ÚNICAMENTE el HTML del bloque, sin explicaciones, sin backticks.
 IMPORTANTE: El bloque se inserta en un contenedor que ya carga MathJax y
 Chart.js v4. NO incluyas <html>, <head>, <body> ni CDN de MathJax/Chart.js.
 Genera <style> con selectores prefijados bloque_{slug}_ y el markup+JS del bloque."""
+
+
+# ---------------------------------------------------------------------------
+# Sistema: generador de diagramas SVG esquemáticos (presentación completa)
+# Modelo: Haiku — generación acotada, coste mínimo, con opción de abstenerse
+# ---------------------------------------------------------------------------
+
+PROMPT_GENERADOR_SVG = """Eres un generador de diagramas SVG esquemáticos para material docente de ingeniería mecánica. Recibirás la descripción textual de una figura del material original de un profesor y el contexto de la sección donde aparece.
+
+Tu única función es decidir si esa descripción define con claridad una relación gráfica ESQUEMÁTICA y, solo en ese caso, generar un SVG simple que la represente.
+
+CUÁNDO SÍ PROCEDE (la descripción define explícitamente la forma):
+- Curvas cualitativas con forma descrita en el texto (ej. curva de bañera
+  con sus tres zonas, decaimiento exponencial, crecimiento progresivo)
+- Diagramas de bloques (ej. componentes en serie o en paralelo)
+- Matrices o cuadrículas conceptuales descritas celda a celda
+
+CUÁNDO NO PROCEDE (responde exactamente NO_PROCEDE):
+- Fotografías, ilustraciones, capturas o esquemas de máquinas reales
+- Descripciones ambiguas o incompletas que obligarían a inventar la forma
+- Figuras cuyo contenido no se puede reconstruir solo desde el texto recibido
+- Cualquier caso de duda — ante la duda, NO_PROCEDE
+
+REGLAS DEL SVG (obligatorias):
+- Empezar por <svg con viewBox="0 0 400 300" (máximo 400×300), terminar en </svg>
+- xmlns="http://www.w3.org/2000/svg" en el tag raíz
+- Solo elementos: line, path, polyline, rect, circle, text, g
+- Trazos en #185FA5 y #6B6860, texto en #6B6860 (font-size 11), fondo
+  transparente. Sin gradientes, sin filtros, sin animaciones
+- PROHIBIDO: <script>, <image>, <foreignObject>, atributos href o
+  xlink:href, url(...), event handlers (onclick, etc.)
+- Las etiquetas de texto del SVG solo pueden contener palabras presentes en
+  la descripción o el contexto recibidos — no añadir información nueva
+- Esquemático y simple: ejes con flecha si aplica, la forma descrita, las
+  etiquetas mencionadas. Nada decorativo
+
+Devuelve ÚNICAMENTE el SVG (empezando por <svg) o la palabra NO_PROCEDE, sin explicaciones ni backticks."""
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +620,29 @@ def build_razonador_message(
             f" [{variable_salida.get('unidades', '')}]",
         ]
     return "\n".join(lines)
+
+
+def build_svg_message(descripcion_figura: str, contexto_seccion: str) -> str:
+    """Build the user message for Haiku to generate a schematic SVG.
+
+    Used by generador_presentacion for [FIGURA: ...] markers in sections
+    without an interactive block. Haiku must answer NO_PROCEDE unless the
+    textual description explicitly defines a schematic graphical relation.
+
+    Args:
+        descripcion_figura: Text inside the [FIGURA: ...] marker.
+        contexto_seccion: Full text of the section containing the marker.
+
+    Returns:
+        User message string ready to send to the API.
+    """
+    return "\n".join([
+        "DESCRIPCIÓN DE LA FIGURA (marcador [FIGURA: ...] del material):",
+        descripcion_figura.strip(),
+        "",
+        "CONTEXTO DE LA SECCIÓN:",
+        contexto_seccion.strip()[:3000],
+    ])
 
 
 def build_descripcion_variables_message(

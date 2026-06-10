@@ -28,6 +28,7 @@ from shared.ui_hero import render_hero
 from detector import detectar_elementos
 from generador_html import generar_html, _slug as _slug_html
 from generador_pdf import generar_pdf
+from generador_presentacion import generar_presentacion
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +132,10 @@ def main() -> None:
         st.session_state["html_titulo"] = "material"
     if "texto_original" not in st.session_state:
         st.session_state["texto_original"] = None
+    if "presentacion_bytes" not in st.session_state:
+        st.session_state["presentacion_bytes"] = None
+    if "presentacion_titulo" not in st.session_state:
+        st.session_state["presentacion_titulo"] = "material"
 
     st.set_page_config(page_title="Agente Presentación", layout="wide")
 
@@ -219,6 +224,7 @@ def main() -> None:
                 st.session_state["elementos"] = None
                 st.session_state["pdf_bytes"] = None
                 st.session_state["html_bytes"] = None
+                st.session_state["presentacion_bytes"] = None
                 st.session_state["md_hash"] = file_hash
                 st.session_state["md_content"] = uploaded_file.getvalue().decode(
                     "utf-8", errors="replace"
@@ -461,7 +467,7 @@ def main() -> None:
             "El PDF completo se genera desde la barra lateral, sin selección."
         )
 
-    col_html, _ = st.columns([1, 1])
+    col_html, col_pres = st.columns([1, 1])
     with col_html:
         if st.button(
             f"Generar HTML ({n_sel} elementos)" if hay_seleccion else "Generar HTML interactivo",
@@ -489,14 +495,57 @@ def main() -> None:
                     st.error(f"Error: {exc}")
             st.rerun()
 
+    # Presentación completa: integra toda la teoría del Markdown con los
+    # bloques interactivos seleccionados. Se permite generar sin selección
+    # (presentación solo textual) — las secciones sin ecuación seleccionada
+    # llevan solo contenido.
+    with col_pres:
+        etiqueta_pres = (
+            f"Generar presentación completa ({n_sel} interactivos)"
+            if hay_seleccion
+            else "Generar presentación completa (solo teoría)"
+        )
+        if st.button(
+            etiqueta_pres,
+            key="generar_presentacion_btn",
+            disabled=st.session_state["md_content"] is None,
+            use_container_width=True,
+        ):
+            with st.status("Generando presentación completa...", expanded=True) as status:
+                try:
+                    st.write(
+                        "⚙️ Integrando teoría y bloques interactivos "
+                        "(puede tardar ~60 s)..."
+                    )
+                    titulo = st.session_state.get("pdf_titulo", "Material docente")
+                    seleccionados_set = set(seleccionados)
+                    elementos_sel = [el for el in elementos if el["id"] in seleccionados_set]
+                    html_pres = generar_presentacion(
+                        st.session_state["md_content"],
+                        elementos_sel,
+                        titulo,
+                        verbose=True,
+                        texto_original=st.session_state.get("texto_original"),
+                    )
+                    st.session_state["presentacion_bytes"] = html_pres.encode("utf-8")
+                    st.session_state["presentacion_titulo"] = titulo
+                    status.update(label="✅ Presentación generada", state="complete")
+                except Exception as exc:
+                    status.update(
+                        label="❌ Error al generar la presentación", state="error"
+                    )
+                    st.error(f"Error: {exc}")
+            st.rerun()
+
     # ── Descargas ─────────────────────────────────────────────────────────
     hay_descarga = (
         st.session_state["pdf_bytes"] is not None
         or st.session_state.get("html_bytes") is not None
+        or st.session_state.get("presentacion_bytes") is not None
     )
     if hay_descarga:
         st.divider()
-        dl_col_pdf, dl_col_html, _ = st.columns([1, 1, 3])
+        dl_col_pdf, dl_col_html, dl_col_pres, _ = st.columns([1, 1, 1, 2])
 
         if st.session_state["pdf_bytes"] is not None:
             titulo = st.session_state.get("pdf_titulo", "material")
@@ -516,6 +565,18 @@ def main() -> None:
                 st.download_button(
                     label="⬇ Descargar HTML interactivo",
                     data=st.session_state["html_bytes"],
+                    file_name=filename,
+                    mime="text/html",
+                    use_container_width=True,
+                )
+
+        if st.session_state.get("presentacion_bytes") is not None:
+            titulo = st.session_state.get("presentacion_titulo", "material")
+            filename = f"{_slug_html(titulo)}_presentacion_completa.html"
+            with dl_col_pres:
+                st.download_button(
+                    label="⬇ Descargar presentación completa",
+                    data=st.session_state["presentacion_bytes"],
                     file_name=filename,
                     mime="text/html",
                     use_container_width=True,

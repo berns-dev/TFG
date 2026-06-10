@@ -1,0 +1,976 @@
+"""Generacion del HTML de presentacion completa del tema.
+
+Tercer modo de output del Agente Presentacion: un documento HTML scrollable
+y autocontenido que integra TODA la teoria del Markdown curado con los
+bloques interactivos (solo las ecuaciones seleccionadas por el profesor)
+insertados en su posicion narrativa correcta.
+
+Pipeline:
+  1. Strip de frontmatter YAML y extraccion del titulo (H1).
+  2. Division del documento en secciones por encabezado H2.
+  3. Por cada elemento seleccionado: localizar la seccion H2 y el offset
+     donde aparece su primera expresion (insercion inmediatamente despues
+     del bloque Markdown que la presenta).
+  4. Generacion de los bloques interactivos reutilizando
+     generador_html._generar_bloque() — mismo razonador, mismos 6 patrones,
+     misma tabla de variables, mismos reintentos y validacion. El listener
+     DOMContentLoaded propio de cada bloque se elimina al embeber: en la
+     presentacion la inicializacion es lazy por viewport
+     (IntersectionObserver del contenedor).
+  5. SVG esquematicos opcionales (Haiku, PROMPT_GENERADOR_SVG) SOLO para
+     marcadores [FIGURA: ...] de secciones sin bloque interactivo. Si Haiku
+     responde NO_PROCEDE o el SVG no pasa la sanitizacion, se mantiene el
+     placeholder gris (mismo criterio que el PDF).
+  6. Render Markdown -> HTML por segmentos, protegiendo LaTeX para MathJax,
+     e intercalando los bloques interactivos en su offset.
+  7. Ensamblado: sidebar con indice de H2 + scroll-spy, navegacion
+     anterior/siguiente por seccion, boton volver arriba. MathJax y
+     Chart.js se cargan UNA sola vez en <head>.
+
+Restricciones (no negociables):
+  - El contenido textual procede exclusivamente del Markdown del profesor.
+  - Los SVG se generan solo desde descripciones textuales explicitas del
+    material y se marcan con el footer "Diagrama generado a partir del
+    material del profesor". Ante la duda, no se genera.
+  - Los bloques interactivos no se duplican: se reutiliza la logica de
+    generador_html sin copiarla.
+"""
+
+from __future__ import annotations
+
+import html as html_lib
+import logging
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import anthropic
+import markdown as md_lib
+
+from config import (
+    ANTHROPIC_API_KEY,
+    MODEL_FAST,
+    REQUEST_TIMEOUT_SECONDS,
+)
+from generador_html import _generar_bloque, _slug
+from prompts import PROMPT_GENERADOR_SVG, build_svg_message
+
+logger = logging.getLogger(__name__)
+
+# La presentación genera más bloques Sonnet por documento que el HTML por
+# pestañas (todas las secciones del tema): 2 workers para no agotar el
+# límite de output tokens/min de la organización (429).
+_MAX_WORKERS = 2
+_MAX_SVG_POR_DOCUMENTO = 4
+_MAX_TOKENS_SVG = 2048
+
+# ---------------------------------------------------------------------------
+# Regex de estructura Markdown
+# ---------------------------------------------------------------------------
+
+_FRONTMATTER_RE = re.compile(r"\A---\s*\n.*?\n---\s*\n", re.DOTALL)
+_H1_RE = re.compile(r"^#\s+(?!#)(.+)$", re.MULTILINE)
+_H2_RE = re.compile(r"^##\s+(?!#)(.+)$", re.MULTILINE)
+_BLOCK_LATEX_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
+_INLINE_LATEX_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
+_FIGURA_RE = re.compile(r"\[FIGURA:\s*([^\]]+)\]")
+_TEXTO_ILEGIBLE_RE = re.compile(r"\[TEXTO_ILEGIBLE\]")
+
+# Emojis de marcado interno del Agente Contenido (p. ej. "> 💡 *Resultado:*").
+# Se eliminan del output porque la presentacion es material academico; el
+# texto que acompanan se conserva integro.
+_EMOJI_MARCADOR_RE = re.compile(r"[\U0001F4A1\U0001F50D⚠⚡✨✅❌\U0001F4CC]️?\s?")
+
+# Listener de autoarranque que PROMPT_GENERADOR_HTML exige a cada bloque
+# (pensado para el HTML interactivo por pestanas). En la presentacion el
+# arranque es por viewport, asi que se elimina al embeber el bloque.
+_SELF_INIT_RE = re.compile(
+    r"(?://[^\n]*\n\s*)?document\.addEventListener\(\s*['\"`]DOMContentLoaded['\"`]\s*,"
+    r"\s*(?:function\s*\(\s*\)|\(\s*\)\s*=>)\s*\{[\s\S]*?\}\s*\)\s*;?",
+)
+
+# Elementos y atributos prohibidos en SVG generado
+_SVG_PROHIBIDO_RE = re.compile(
+    r"<\s*script|<\s*image|<\s*foreignObject|href\s*=|url\s*\(|\bon[a-z]+\s*=",
+    re.IGNORECASE,
+)
+
+
+# ---------------------------------------------------------------------------
+# Particion del documento en secciones H2
+# ---------------------------------------------------------------------------
+
+def _strip_frontmatter(markdown_text: str) -> str:
+    """Elimina el frontmatter YAML inicial si existe."""
+    return _FRONTMATTER_RE.sub("", markdown_text, count=1)
+
+
+def _extraer_titulo(markdown_text: str, fallback: str) -> str:
+    """Devuelve el texto del primer H1, o el fallback si no hay H1."""
+    m = _H1_RE.search(markdown_text)
+    return m.group(1).strip() if m else fallback
+
+
+def _dividir_secciones(markdown_text: str) -> list[dict]:
+    """Divide el documento por H2 en [{titulo, body}], en orden.
+
+    El texto anterior al primer H2 (excluyendo el H1) se devuelve como
+    seccion "Introducción" si no esta vacio.
+    """
+    headings = list(_H2_RE.finditer(markdown_text))
+    secciones: list[dict] = []
+
+    preamble_end = headings[0].start() if headings else len(markdown_text)
+    preamble = _H1_RE.sub("", markdown_text[:preamble_end], count=1).strip()
+    if preamble:
+        secciones.append({"titulo": "Introducción", "body": preamble})
+
+    for i, m in enumerate(headings):
+        body_start = m.end()
+        body_end = headings[i + 1].start() if i + 1 < len(headings) else len(markdown_text)
+        secciones.append({
+            "titulo": m.group(1).strip(),
+            "body": markdown_text[body_start:body_end].strip("\n"),
+        })
+    return secciones
+
+
+# ---------------------------------------------------------------------------
+# Localizacion del punto de insercion de cada bloque interactivo
+# ---------------------------------------------------------------------------
+
+def _primera_expresion(elemento: dict) -> tuple[str | None, bool]:
+    """Primera expresion del elemento ($$ bloque o $ inline) y su tipo."""
+    expresion = elemento.get("expresion", "")
+    m = _BLOCK_LATEX_RE.search(expresion)
+    if m:
+        return m.group(1).strip(), True
+    m = _INLINE_LATEX_RE.search(expresion)
+    if m:
+        return m.group(1).strip(), False
+    return None, False
+
+
+_SIGUIENTE_HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
+
+
+def _fin_de_subseccion(body: str, pos: int) -> int:
+    """Extiende `pos` hasta el siguiente encabezado del body (o su final).
+
+    Asi el bloque interactivo se inserta despues de TODO el contenido
+    textual que presenta la ecuacion (incluidas las lineas "Donde ..."
+    que siguen a la expresion), no en mitad de la explicacion.
+    """
+    m = _SIGUIENTE_HEADING_RE.search(body, pos)
+    return m.start() if m else len(body)
+
+
+def _offset_en_body(body: str, elemento: dict) -> int | None:
+    """Offset de insercion del bloque interactivo dentro del body.
+
+    Localiza la primera expresion del elemento ($$...$$ o inline) y
+    devuelve el final de la subseccion que la contiene. None si la
+    expresion no aparece en este body.
+    """
+    expr, es_bloque = _primera_expresion(elemento)
+    if not expr:
+        return None
+    if es_bloque:
+        for m in _BLOCK_LATEX_RE.finditer(body):
+            if m.group(1).strip() == expr:
+                return _fin_de_subseccion(body, m.end())
+        return None
+    idx = body.find(expr)
+    if idx == -1:
+        return None
+    return _fin_de_subseccion(body, idx)
+
+
+def _asignar_a_secciones(
+    secciones: list[dict], elementos: list[dict]
+) -> dict[int, list[tuple[int, dict]]]:
+    """Asigna cada elemento a (seccion, offset) por su primera expresion.
+
+    Desambiguacion: si el heading `seccion` del elemento (### del detector)
+    aparece en el body de una seccion H2, se busca primero ahi. Elementos
+    no localizados van al final de la ultima seccion (con warning).
+
+    Returns:
+        {indice_seccion: [(offset_en_body, elemento), ...]}
+    """
+    asignaciones: dict[int, list[tuple[int, dict]]] = {}
+
+    def _add(idx_seccion: int, offset: int, elemento: dict) -> None:
+        asignaciones.setdefault(idx_seccion, []).append((offset, elemento))
+
+    for elemento in elementos:
+        heading = (elemento.get("seccion") or "").strip()
+        candidatos = list(range(len(secciones)))
+        if heading:
+            con_heading = [
+                i for i, s in enumerate(secciones)
+                if re.search(
+                    rf"^#{{3,4}}\s+{re.escape(heading)}\s*$",
+                    s["body"],
+                    re.MULTILINE,
+                )
+                or s["titulo"] == heading
+            ]
+            candidatos = con_heading + [i for i in candidatos if i not in con_heading]
+
+        colocado = False
+        for i in candidatos:
+            offset = _offset_en_body(secciones[i]["body"], elemento)
+            if offset is not None:
+                _add(i, offset, elemento)
+                colocado = True
+                break
+
+        if not colocado and secciones:
+            logger.warning(
+                "[PRESENTACION] No se localizó la expresión de %r — "
+                "bloque añadido al final de la última sección",
+                elemento.get("nombre", ""),
+            )
+            _add(len(secciones) - 1, len(secciones[-1]["body"]), elemento)
+
+    return asignaciones
+
+
+# ---------------------------------------------------------------------------
+# Render Markdown -> HTML (con proteccion de LaTeX y marcadores)
+# ---------------------------------------------------------------------------
+
+def _render_markdown(texto: str, figuras_html: dict[str, str]) -> str:
+    """Convierte un segmento Markdown a HTML para la presentacion.
+
+    Protege LaTeX con tokens para que la libreria markdown no lo altere y
+    lo restaura como delimitadores MathJax. Los marcadores [FIGURA: ...] y
+    [TEXTO_ILEGIBLE] se sustituyen por su HTML (placeholder, SVG o aviso).
+
+    Args:
+        texto: Segmento de Markdown (nunca contiene encabezados H1/H2).
+        figuras_html: {descripcion_figura: html} con el render decidido
+            para cada figura del documento (placeholder gris o SVG).
+    """
+    texto = _EMOJI_MARCADOR_RE.sub("", texto)
+
+    tokens: dict[str, str] = {}
+
+    def _token(html_final: str) -> str:
+        key = f"xxPRESTOKEN{len(tokens)}xx"
+        tokens[key] = html_final
+        return key
+
+    def _figura(m: re.Match[str]) -> str:
+        descripcion = m.group(1).strip()
+        return _token(figuras_html.get(
+            descripcion, _figura_placeholder(descripcion)
+        ))
+
+    texto = _FIGURA_RE.sub(_figura, texto)
+    texto = _TEXTO_ILEGIBLE_RE.sub(
+        lambda m: _token(
+            '<span class="texto-ilegible">[fragmento ilegible en el '
+            "material original]</span>"
+        ),
+        texto,
+    )
+    texto = _BLOCK_LATEX_RE.sub(
+        lambda m: _token(
+            '<div class="ecuacion-display">\\['
+            + html_lib.escape(m.group(1).strip())
+            + "\\]</div>"
+        ),
+        texto,
+    )
+    texto = _INLINE_LATEX_RE.sub(
+        lambda m: _token("\\(" + html_lib.escape(m.group(1).strip()) + "\\)"),
+        texto,
+    )
+
+    html_out = md_lib.markdown(texto, extensions=["tables", "fenced_code"])
+
+    for key, html_final in tokens.items():
+        # El token puede llegar envuelto en <p>...</p> si iba solo en linea
+        html_out = html_out.replace(f"<p>{key}</p>", html_final)
+        html_out = html_out.replace(key, html_final)
+    return html_out
+
+
+def _figura_placeholder(descripcion: str) -> str:
+    """Placeholder gris para [FIGURA: ...] — mismo criterio que el PDF."""
+    return (
+        '<div class="figura-placeholder">'
+        '<span class="figura-placeholder-etiqueta">Figura del material original</span>'
+        f"<p>{html_lib.escape(descripcion)}</p>"
+        "</div>"
+    )
+
+
+def _figura_svg(descripcion: str, svg: str) -> str:
+    """Card de figura con SVG generado, marcado como tal."""
+    return (
+        '<figure class="figura-svg">'
+        + svg
+        + f"<figcaption>{html_lib.escape(descripcion)}</figcaption>"
+        + '<div class="figura-svg-footer">Diagrama generado a partir del '
+        "material del profesor</div>"
+        "</figure>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SVG esquematicos (Haiku, opcional y conservador)
+# ---------------------------------------------------------------------------
+
+def _svg_es_seguro(svg: str) -> bool:
+    """True si el SVG es autocontenido y sin contenido activo/externo."""
+    svg_strip = svg.strip()
+    return (
+        svg_strip.lower().startswith("<svg")
+        and svg_strip.rstrip().endswith("</svg>")
+        and len(svg_strip) < 12000
+        and not _SVG_PROHIBIDO_RE.search(svg_strip)
+    )
+
+
+def _generar_svg(
+    descripcion: str, contexto: str, client: anthropic.Anthropic
+) -> str:
+    """Pide a Haiku un SVG esquematico; '' si no procede o no es seguro."""
+    try:
+        response = client.messages.create(
+            model=MODEL_FAST,
+            max_tokens=_MAX_TOKENS_SVG,
+            system=PROMPT_GENERADOR_SVG,
+            messages=[{
+                "role": "user",
+                "content": build_svg_message(descripcion, contexto),
+            }],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw).strip()
+        if "NO_PROCEDE" in raw[:40] or not raw.lower().startswith("<svg"):
+            return ""
+        if not _svg_es_seguro(raw):
+            logger.warning(
+                "[PRESENTACION] SVG descartado por sanitización: %r",
+                descripcion[:60],
+            )
+            return ""
+        return raw
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[PRESENTACION] Generación SVG falló: %s", exc)
+        return ""
+
+
+def _generar_figuras(
+    secciones: list[dict],
+    asignaciones: dict[int, list[tuple[int, dict]]],
+) -> dict[str, str]:
+    """Decide el render de cada [FIGURA: ...] del documento.
+
+    Solo intenta SVG en secciones SIN bloque interactivo (la figura de una
+    seccion con explorador ya tiene representacion grafica) y hasta un
+    maximo de _MAX_SVG_POR_DOCUMENTO intentos. El resto — y cualquier
+    intento fallido — se renderiza como placeholder gris.
+    """
+    figuras_html: dict[str, str] = {}
+    candidatas: list[tuple[str, str]] = []  # (descripcion, contexto)
+
+    for i, seccion in enumerate(secciones):
+        for m in _FIGURA_RE.finditer(seccion["body"]):
+            descripcion = m.group(1).strip()
+            if descripcion in figuras_html:
+                continue
+            figuras_html[descripcion] = _figura_placeholder(descripcion)
+            if i not in asignaciones and len(candidatas) < _MAX_SVG_POR_DOCUMENTO:
+                candidatas.append((descripcion, seccion["body"]))
+
+    if not candidatas or not ANTHROPIC_API_KEY:
+        return figuras_html
+
+    client = anthropic.Anthropic(
+        api_key=ANTHROPIC_API_KEY,
+        timeout=float(REQUEST_TIMEOUT_SECONDS),
+    )
+    workers = min(len(candidatas), _MAX_WORKERS)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(_generar_svg, desc, ctx, client): desc
+            for desc, ctx in candidatas
+        }
+        for future in as_completed(futures):
+            desc = futures[future]
+            svg = future.result()
+            if svg:
+                figuras_html[desc] = _figura_svg(desc, svg)
+    return figuras_html
+
+
+# ---------------------------------------------------------------------------
+# Bloques interactivos (reutiliza generador_html)
+# ---------------------------------------------------------------------------
+
+def _preparar_bloque(html_bloque: str, slug: str) -> str:
+    """Adapta un bloque de generador_html al contenedor de presentacion.
+
+    Elimina el listener DOMContentLoaded de autoarranque (la presentacion
+    inicializa por viewport con IntersectionObserver) y envuelve el bloque
+    en la card "Explorador interactivo" diferenciada del texto.
+    """
+    sin_autoarranque = _SELF_INIT_RE.sub("", html_bloque)
+    return (
+        f'<div class="bloque-interactivo" data-slug="{slug}"'
+        ' data-initialized="false">'
+        '<div class="bloque-interactivo-cabecera">Explorador interactivo</div>'
+        f"\n{sin_autoarranque}\n"
+        "</div>"
+    )
+
+
+def _generar_bloques(
+    elementos: list[dict],
+    verbose: bool,
+    texto_original: str | None,
+) -> dict[int, str]:
+    """Genera los bloques interactivos en paralelo: {id(elemento): html}."""
+    if not elementos:
+        return {}
+    resultados: dict[int, str] = {}
+    workers = min(len(elementos), _MAX_WORKERS)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(_generar_bloque, el, i, verbose, texto_original): i
+            for i, el in enumerate(elementos)
+        }
+        for future in as_completed(futures):
+            idx, html_bloque = future.result()
+            elemento = elementos[idx]
+            slug = _slug(elemento.get("nombre", f"Elemento {idx + 1}"))
+            resultados[id(elemento)] = _preparar_bloque(html_bloque, slug)
+    return resultados
+
+
+# ---------------------------------------------------------------------------
+# Ensamblado de cada seccion
+# ---------------------------------------------------------------------------
+
+def _render_seccion(
+    seccion: dict,
+    inserciones: list[tuple[int, dict]],
+    bloques_html: dict[int, str],
+    figuras_html: dict[str, str],
+) -> str:
+    """Renderiza el body de una seccion intercalando bloques interactivos."""
+    body = seccion["body"]
+    inserciones = sorted(inserciones, key=lambda t: t[0])
+
+    partes: list[str] = []
+    cursor = 0
+    for offset, elemento in inserciones:
+        offset = max(cursor, min(offset, len(body)))
+        segmento = body[cursor:offset]
+        if segmento.strip():
+            partes.append(_render_markdown(segmento, figuras_html))
+        partes.append(bloques_html.get(id(elemento), ""))
+        cursor = offset
+    resto = body[cursor:]
+    if resto.strip():
+        partes.append(_render_markdown(resto, figuras_html))
+    return "\n".join(partes)
+
+
+def _nav_seccion(idx: int, secciones: list[dict]) -> str:
+    """Botones anterior/siguiente al pie de cada seccion."""
+    partes = ['<nav class="seccion-nav">']
+    if idx > 0:
+        titulo_prev = html_lib.escape(secciones[idx - 1]["titulo"])
+        partes.append(
+            f'<a class="seccion-nav-link" href="#seccion-{idx - 1}">'
+            f"&larr; {titulo_prev}</a>"
+        )
+    else:
+        partes.append("<span></span>")
+    if idx < len(secciones) - 1:
+        titulo_next = html_lib.escape(secciones[idx + 1]["titulo"])
+        partes.append(
+            f'<a class="seccion-nav-link" href="#seccion-{idx + 1}">'
+            f"{titulo_next} &rarr;</a>"
+        )
+    else:
+        partes.append("<span></span>")
+    partes.append("</nav>")
+    return "".join(partes)
+
+
+# ---------------------------------------------------------------------------
+# Template de pagina (marcadores <!--X--> como en generador_html)
+# ---------------------------------------------------------------------------
+
+_PAGE_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><!--TITULO--></title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+  <!-- CDN cargados una sola vez: los bloques individuales no deben incluirlos -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #F7F5F0;
+      color: #1A1A1A;
+      line-height: 1.65;
+    }
+
+    .page-header {
+      background: #185FA5;
+      color: #FFFFFF;
+      padding: 1.5rem 2rem;
+    }
+    .page-header h1 { font-size: 22px; font-weight: 500; margin-bottom: 0.25rem; }
+    .page-header .subtitle { font-size: 14px; opacity: 0.75; }
+
+    .layout {
+      display: flex;
+      align-items: flex-start;
+      gap: 2rem;
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+
+    /* ---- Indice lateral ---- */
+    .indice {
+      position: sticky;
+      top: 1.5rem;
+      width: 250px;
+      flex-shrink: 0;
+      background: #FFFFFF;
+      border: 0.5px solid rgba(0,0,0,0.08);
+      border-radius: 12px;
+      padding: 1rem 0.75rem;
+      max-height: calc(100vh - 3rem);
+      overflow-y: auto;
+    }
+    .indice-titulo {
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      color: #9A9890;
+      padding: 0 10px 8px;
+    }
+    .indice-link {
+      display: block;
+      padding: 6px 10px;
+      font-size: 13px;
+      color: #6B6860;
+      text-decoration: none;
+      border-radius: 8px;
+      border-left: 2px solid transparent;
+    }
+    .indice-link:hover { background: rgba(0,0,0,0.04); }
+    .indice-link.activa {
+      color: #185FA5;
+      background: #F0EEE9;
+      border-left-color: #185FA5;
+      font-weight: 500;
+    }
+
+    /* ---- Contenido ---- */
+    .contenido { flex: 1; min-width: 0; }
+
+    .seccion {
+      background: #FFFFFF;
+      border: 0.5px solid rgba(0,0,0,0.08);
+      border-radius: 14px;
+      padding: 2rem 2.25rem;
+      margin-bottom: 1.5rem;
+    }
+    .eyebrow {
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      color: #9A9890;
+      margin-bottom: 0.4rem;
+    }
+    .seccion > h2 {
+      font-family: 'Playfair Display', serif;
+      font-size: 26px;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+    }
+    .seccion h3 {
+      font-size: 17px;
+      font-weight: 500;
+      color: #185FA5;
+      margin: 1.5rem 0 0.6rem;
+    }
+    .seccion h4 {
+      font-size: 14px;
+      font-weight: 500;
+      color: #1A1A1A;
+      margin: 1.25rem 0 0.5rem;
+    }
+    .seccion p { font-size: 14.5px; color: #1A1A1A; margin-bottom: 0.85rem; }
+    .seccion ul, .seccion ol { margin: 0 0 0.85rem 1.4rem; font-size: 14.5px; }
+    .seccion li { margin-bottom: 0.3rem; }
+    .seccion blockquote {
+      border-left: 3px solid #D3D1C7;
+      padding: 0.4rem 1rem;
+      color: #6B6860;
+      font-style: italic;
+      margin: 0 0 0.85rem;
+    }
+    .seccion table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 13.5px;
+      margin: 1rem 0 1.25rem;
+    }
+    .seccion th {
+      color: #185FA5;
+      text-align: left;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .seccion th, .seccion td {
+      padding: 8px 12px;
+      border: 0.5px solid #D3D1C7;
+    }
+    .seccion tbody tr:nth-child(even) td { background: #F7F5F0; }
+
+    .ecuacion-display {
+      text-align: center;
+      padding: 0.75rem 0 1rem;
+      font-size: 18px;
+      overflow-x: auto;
+    }
+
+    .texto-ilegible { color: #9A9890; font-style: italic; }
+
+    /* ---- Figuras ---- */
+    .figura-placeholder {
+      background: #EFEDE8;
+      border: 1px dashed #C9C6BD;
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin: 1.25rem 0;
+      color: #6B6860;
+    }
+    .figura-placeholder-etiqueta {
+      display: block;
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      color: #9A9890;
+      margin-bottom: 0.35rem;
+    }
+    .figura-placeholder p { font-size: 13px; font-style: italic; margin: 0; }
+
+    .figura-svg {
+      margin: 1.25rem 0;
+      padding: 1rem 1.25rem;
+      background: #FFFFFF;
+      border: 0.5px solid rgba(0,0,0,0.08);
+      border-radius: 10px;
+      text-align: center;
+    }
+    .figura-svg svg { max-width: 100%; height: auto; }
+    .figura-svg figcaption {
+      font-size: 13px;
+      font-style: italic;
+      color: #6B6860;
+      margin-top: 0.5rem;
+    }
+    .figura-svg-footer {
+      font-size: 11px;
+      color: #9A9890;
+      margin-top: 0.35rem;
+    }
+
+    /* ---- Bloque interactivo ---- */
+    .bloque-interactivo {
+      border-left: 3px solid #003366;
+      background: #EEF2F7;
+      border-radius: 0 12px 12px 0;
+      padding: 1rem 1.25rem 1.25rem;
+      margin: 1.5rem 0;
+    }
+    .bloque-interactivo-cabecera {
+      text-transform: uppercase;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      color: #003366;
+      margin-bottom: 0.75rem;
+    }
+
+    /* ---- Navegacion entre secciones ---- */
+    .seccion-nav {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-top: 1.75rem;
+      padding-top: 1rem;
+      border-top: 0.5px solid rgba(0,0,0,0.08);
+    }
+    .seccion-nav-link {
+      font-size: 13px;
+      color: #185FA5;
+      text-decoration: none;
+      padding: 6px 10px;
+      border-radius: 8px;
+    }
+    .seccion-nav-link:hover { background: #F0EEE9; }
+
+    #volver-arriba {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: #185FA5;
+      color: #FFFFFF;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    #volver-arriba:hover { background: #0C447C; }
+
+    .page-footer {
+      text-align: center;
+      padding: 2rem;
+      font-size: 0.8rem;
+      color: #9A9890;
+      border-top: 0.5px solid rgba(0,0,0,0.08);
+      margin-top: 3rem;
+    }
+
+    @media (max-width: 900px) {
+      .indice { display: none; }
+    }
+  </style>
+</head>
+<body id="top">
+
+<header class="page-header">
+  <h1><!--TITULO--></h1>
+  <div class="subtitle">Presentaci&oacute;n completa del tema &mdash; Agente Presentaci&oacute;n</div>
+</header>
+
+<div class="layout">
+  <nav class="indice" id="indice">
+    <div class="indice-titulo">&Iacute;ndice del tema</div>
+<!--INDICE-->
+  </nav>
+
+  <main class="contenido">
+<!--SECCIONES-->
+  </main>
+</div>
+
+<button id="volver-arriba" type="button" aria-label="Volver arriba">&uarr;</button>
+
+<footer class="page-footer">
+  Generado a partir del material original del profesor.
+</footer>
+
+<script>
+(function () {
+  function initBloque(card) {
+    if (card.dataset.initialized === "true") return;
+    var initName = "initBloque_" + card.dataset.slug;
+    if (typeof window[initName] === "function") {
+      try {
+        window[initName]();
+      } catch (e) {
+        console.error("Error en " + initName + ":", e);
+      }
+    } else {
+      console.error(
+        "No se encontró la función " + initName +
+        " — el bloque interactivo no puede inicializarse."
+      );
+    }
+    card.dataset.initialized = "true";
+  }
+
+  function arrancarBloques() {
+    var cards = Array.prototype.slice.call(
+      document.querySelectorAll(".bloque-interactivo[data-slug]")
+    );
+    if (!("IntersectionObserver" in window)) {
+      cards.forEach(initBloque);
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          initBloque(entry.target);
+          io.unobserve(entry.target);
+        }
+      });
+    }, { rootMargin: "300px 0px" });
+    cards.forEach(function (card) { io.observe(card); });
+  }
+
+  function arrancarScrollSpy() {
+    if (!("IntersectionObserver" in window)) return;
+    var enlaces = {};
+    document.querySelectorAll(".indice-link").forEach(function (a) {
+      enlaces[a.getAttribute("href").slice(1)] = a;
+    });
+    var visibles = {};
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        visibles[entry.target.id] = entry.isIntersecting;
+      });
+      var activa = null;
+      document.querySelectorAll(".seccion").forEach(function (s) {
+        if (activa === null && visibles[s.id]) activa = s.id;
+      });
+      if (activa && enlaces[activa]) {
+        Object.keys(enlaces).forEach(function (k) {
+          enlaces[k].classList.remove("activa");
+        });
+        enlaces[activa].classList.add("activa");
+      }
+    }, { rootMargin: "-15% 0px -65% 0px" });
+    document.querySelectorAll(".seccion").forEach(function (s) { io.observe(s); });
+  }
+
+  function arrancarVolverArriba() {
+    var btn = document.getElementById("volver-arriba");
+    if (!btn) return;
+    window.addEventListener("scroll", function () {
+      btn.style.display = window.scrollY > 600 ? "flex" : "none";
+    });
+    btn.addEventListener("click", function () {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  function boot() {
+    arrancarBloques();
+    arrancarScrollSpy();
+    arrancarVolverArriba();
+  }
+
+  function esperarMathJax() {
+    if (window.MathJax && window.MathJax.startup && window.MathJax.startup.promise) {
+      MathJax.startup.promise.then(boot);
+    } else {
+      boot();
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", esperarMathJax);
+  } else {
+    esperarMathJax();
+  }
+})();
+</script>
+
+</body>
+</html>
+"""
+
+
+# ---------------------------------------------------------------------------
+# API publica
+# ---------------------------------------------------------------------------
+
+def generar_presentacion(
+    markdown_completo: str,
+    elementos_seleccionados: list[dict],
+    tema_nombre: str = "Material docente",
+    verbose: bool = True,
+    texto_original: str | None = None,
+) -> str:
+    """Genera el HTML de presentacion completa del tema.
+
+    Integra toda la teoria del Markdown (dividida en secciones H2) con los
+    bloques interactivos de las ecuaciones seleccionadas por el profesor,
+    insertados inmediatamente despues del bloque de contenido que las
+    presenta. Las secciones sin ecuacion seleccionada llevan solo contenido
+    textual (y, opcionalmente, un SVG esquematico para sus [FIGURA: ...]).
+
+    Args:
+        markdown_completo: Markdown curado completo (Agente Contenido).
+        elementos_seleccionados: Elementos del detector marcados por el
+            profesor. Puede ser una lista vacia (presentacion solo textual).
+        tema_nombre: Titulo de respaldo si el Markdown no tiene H1.
+        verbose: Propagado a la generacion de bloques (logging.debug).
+        texto_original: Texto opcional del PDF/PPTX del profesor para el
+            razonador de visualizacion.
+
+    Returns:
+        HTML autocontenido (string) listo para escribir a disco.
+
+    Raises:
+        ValueError: Si el Markdown esta vacio.
+        RuntimeError: Si faltan credenciales y hay elementos seleccionados.
+    """
+    if not markdown_completo or not markdown_completo.strip():
+        raise ValueError("El Markdown está vacío — nada que presentar.")
+
+    if elementos_seleccionados and not ANTHROPIC_API_KEY:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY no encontrada. "
+            "Añade tu clave al archivo .env: ANTHROPIC_API_KEY=sk-ant-..."
+        )
+
+    texto = _strip_frontmatter(markdown_completo)
+    titulo = _extraer_titulo(texto, tema_nombre)
+    secciones = _dividir_secciones(texto)
+    if not secciones:
+        raise ValueError("No se encontraron secciones en el Markdown.")
+
+    asignaciones = _asignar_a_secciones(secciones, elementos_seleccionados)
+    bloques_html = _generar_bloques(
+        elementos_seleccionados, verbose, texto_original
+    )
+    figuras_html = _generar_figuras(secciones, asignaciones)
+
+    titulo_esc = html_lib.escape(titulo)
+    indice_parts: list[str] = []
+    secciones_parts: list[str] = []
+    for i, seccion in enumerate(secciones):
+        titulo_sec = html_lib.escape(seccion["titulo"])
+        indice_parts.append(
+            f'    <a class="indice-link" href="#seccion-{i}">{titulo_sec}</a>'
+        )
+        cuerpo = _render_seccion(
+            seccion, asignaciones.get(i, []), bloques_html, figuras_html
+        )
+        secciones_parts.append(
+            f'    <section class="seccion" id="seccion-{i}">\n'
+            f'      <p class="eyebrow">Sección {i + 1} — {titulo_esc}</p>\n'
+            f"      <h2>{titulo_sec}</h2>\n"
+            f"{cuerpo}\n"
+            f"{_nav_seccion(i, secciones)}\n"
+            f"    </section>"
+        )
+
+    html_out = _PAGE_TEMPLATE
+    html_out = html_out.replace("<!--TITULO-->", titulo_esc)
+    html_out = html_out.replace("<!--INDICE-->", "\n".join(indice_parts))
+    html_out = html_out.replace("<!--SECCIONES-->", "\n".join(secciones_parts))
+    return html_out

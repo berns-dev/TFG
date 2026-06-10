@@ -15,6 +15,7 @@ Genera dos salidas desde el Markdown producido por el Agente Contenido: un PDF a
 **Outputs:**
 - PDF con ReportLab: ecuaciones como imágenes PNG (matplotlib mathtext), tablas, headings, pie de página.
 - HTML autocontenido: una pestaña por sección seleccionada, con Chart.js o canvas nativo según el patrón elegido dinámicamente por el razonador.
+- HTML de presentación completa del tema (`generador_presentacion.py`): documento scrollable que integra toda la teoría del Markdown (secciones H2) con los bloques interactivos de las ecuaciones seleccionadas insertados tras la subsección que las presenta. Sidebar con índice y scroll-spy, navegación anterior/siguiente, botón volver arriba. Inicialización lazy por viewport (IntersectionObserver) — el listener DOMContentLoaded propio de cada bloque se elimina al embeber. SVG esquemáticos opcionales vía Haiku (`PROMPT_GENERADOR_SVG`) solo para marcadores `[FIGURA: ...]` de secciones sin bloque interactivo; si Haiku responde NO_PROCEDE o el SVG no pasa la sanitización (sin script/image/href/url), se mantiene el placeholder gris. Workers limitados a 2 (los documentos completos generan más bloques y agotan el límite de output tokens/min).
 
 El patrón de visualización no está fijado de antemano. Para cada sección, Sonnet primero decide si la relación merece representación interactiva y qué patrón aplicar; luego un segundo Sonnet genera el HTML para ese patrón.
 
@@ -36,11 +37,18 @@ generador_pdf.py    — Markdown → PDF: protege LaTeX, convierte a HTML,
 generador_html.py   — Pipeline por elemento: razonador Sonnet → generador Sonnet;
                       post-procesado Python de rangos (aplicar_rangos);
                       ThreadPoolExecutor; plantilla HTML con pestañas CSS;
+                      reintento correctivo (reenvía el motivo de rechazo) y
+                      backoff ante RateLimitError (429);
                       logging con logger.debug() / logger.warning()
+generador_presentacion.py — Presentación completa del tema: división por H2,
+                      render Markdown con LaTeX protegido, inserción de
+                      bloques interactivos (reutiliza _generar_bloque, no
+                      duplica), SVG opcionales Haiku, índice con scroll-spy,
+                      init lazy por IntersectionObserver
 prompts.py          — PROMPT_RAZONADOR_VISUALIZACION, PROMPT_GENERADOR_HTML,
-                      PROMPT_DETECTOR_INTERACTIVIDAD;
+                      PROMPT_DETECTOR_INTERACTIVIDAD, PROMPT_GENERADOR_SVG;
                       build_razonador_message, build_generador_message,
-                      build_detector_message
+                      build_detector_message, build_svg_message
 config.py           — Carga centralizada de .env; MODEL_FAST/MODEL_SMART;
                       MIN_LATEX_CHARS, MIN_VARIABLES_FOR_RELACION, CONTEXTO_CHARS
 requirements.txt    — anthropic, streamlit, reportlab, markdown,
