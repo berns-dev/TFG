@@ -54,7 +54,14 @@ def _normalize(s: str) -> str:
 
 
 def _strip_h1_lines(markdown: str, idioma: str | None = None) -> str:
-    """Quita H1 y H2 estándar para evitar duplicados en el ensamblado."""
+    """Limpia los encabezados del cuerpo de un chunk antes del ensamblado:
+
+    - Quita los H1 (`# `): el título del documento lo pone el ensamblador.
+    - Quita los H2 canónicos: el ensamblador los re-emite una sola vez por tipo.
+    - Degrada a H3 (`### `) cualquier H2 NO canónico que el modelo haya inventado
+      dentro del cuerpo, para que quede como subsección y no compita visualmente
+      con las secciones canónicas del documento.
+    """
     if idioma in SECTION_NAMES:
         section_values = SECTION_NAMES[idioma].values()
     else:
@@ -73,6 +80,8 @@ def _strip_h1_lines(markdown: str, idioma: str | None = None) -> str:
             title = stripped[3:].strip()
             if _normalize(title) in normalized_h2:
                 continue
+            kept.append(f"### {title}")
+            continue
         kept.append(ln)
     return "\n".join(kept).strip()
 
