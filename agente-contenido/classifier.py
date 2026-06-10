@@ -33,6 +33,7 @@ REGLAS ABSOLUTAS:
 7. El texto ilegible o corrupto se marca exactamente como: [TEXTO_ILEGIBLE]
 8. Las figuras o imagenes se marcan exactamente como: [FIGURA: descripcion si existe]
 9. Detecta el idioma del fragmento (espanol o ingles) y mantenlo en el output. Los marcadores tecnicos [FIGURA], [TEXTO_ILEGIBLE] son siempre en espanol.
+10. NO comentes sobre el fragmento en si: su completitud, su procedencia, su numero de pagina, ni el proceso de extraccion. NO crees secciones tipo "Contexto" / "Context" ni notas del estilo "el material aparece incompleto", "no esta especificado en el fragmento" o "al final del fragmento proporcionado". Si en el material hay una nota tecnica del autor (p. ej. "Nota: el valor 625 proviene de..."), transcribela tal cual; lo prohibido son tus observaciones propias sobre el texto recibido.
 
 FORMATO DE SECCIONES EN EL OUTPUT:
 El campo "contenido_markdown" debe usar estos nombres de seccion fijos segun el idioma detectado.
@@ -134,6 +135,28 @@ def _parse_delimited_response(raw: str) -> dict:
         "idioma": idioma,
         "contenido_markdown": markdown,
     }
+
+
+_MATH_BLOCK_RE = re.compile(r"\$\$.*?\$\$", re.DOTALL)
+_MATH_INLINE_RE = re.compile(r"\$[^$\n]*\$")
+
+
+def _normalize_math_dashes(text: str) -> str:
+    """Sustituye guiones tipográficos (– —) por '-' SOLO dentro de spans LaTeX.
+
+    pdfplumber arrastra en-dash/em-dash donde el original tenía un signo menos;
+    dentro de $$...$$ o $...$ esos caracteres no renderizan como operador. Fuera
+    de math no se toca nada (el texto en prosa puede usar – legítimamente).
+    """
+    if "$" not in text:
+        return text
+
+    def _repl(match: re.Match[str]) -> str:
+        return match.group(0).replace("–", "-").replace("—", "-")
+
+    text = _MATH_BLOCK_RE.sub(_repl, text)
+    text = _MATH_INLINE_RE.sub(_repl, text)
+    return text
 
 
 def select_model(chunk_text: str) -> str:
@@ -259,6 +282,7 @@ def classify_and_format(fragment: str, tema_horas: float | None = None) -> dict[
     contenido = str(data.get("contenido_markdown", "")).strip()
     if not contenido:
         raise RuntimeError("contenido_markdown vacio")
+    contenido = _normalize_math_dashes(contenido)
 
     return {
         "tipo": tipo,

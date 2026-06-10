@@ -30,6 +30,20 @@ SECTION_NAMES = {
     },
 }
 
+# Orden canónico de las secciones en el documento ensamblado. Cada tipo aparece
+# una sola vez; los cuerpos de todos los chunks de ese tipo se concatenan en el
+# orden en que se extrajeron. Evita repetir el mismo H2 cada vez que la
+# clasificación por chunk alterna de tipo (p. ej. 7× "## Theory").
+CANONICAL_TYPE_ORDER = (
+    "teoria",
+    "mixto",
+    "procedimiento",
+    "tabla",
+    "ejemplo_resuelto",
+    "ejercicio_propuesto",
+    "resumen",
+)
+
 
 def _normalize(s: str) -> str:
     return "".join(
@@ -165,25 +179,36 @@ def assemble_markdown(items: list[dict[str, Any]], nombre_del_archivo: str) -> s
     )
 
     names = SECTION_NAMES[idioma_doc]
-    section_blocks: list[str] = []
-    previous_tipo: str | None = None
 
+    # Agrupa los cuerpos por tipo preservando el orden de extracción dentro de
+    # cada grupo. Así cada sección canónica se emite una única vez.
+    bodies_by_tipo: dict[str, list[str]] = {}
+    encounter_order: list[str] = []
     for item in items:
         tipo = str(item.get("tipo", "mixto"))
-        raw_body = str(item.get("contenido_markdown", "")).strip()
-        body = _strip_h1_lines(raw_body, idioma=idioma_doc)
+        body = _strip_h1_lines(
+            str(item.get("contenido_markdown", "")).strip(), idioma=idioma_doc
+        )
         if not body:
             continue
+        if tipo not in bodies_by_tipo:
+            bodies_by_tipo[tipo] = []
+            encounter_order.append(tipo)
+        bodies_by_tipo[tipo].append(body)
 
-        encabezado = names.get(tipo, names["mixto"])
-        if previous_tipo is None or tipo != previous_tipo:
-            if section_blocks:
-                section_blocks.append("---")
-            section_blocks.append(encabezado)
-            section_blocks.append("")
-        section_blocks.append(body)
+    # Orden canónico primero; cualquier tipo no contemplado se añade al final
+    # en el orden en que apareció (defensivo: VALID_TYPES es cerrado).
+    ordered_tipos = [t for t in CANONICAL_TYPE_ORDER if t in bodies_by_tipo]
+    ordered_tipos += [t for t in encounter_order if t not in CANONICAL_TYPE_ORDER]
+
+    section_blocks: list[str] = []
+    for tipo in ordered_tipos:
+        if section_blocks:
+            section_blocks.append("---")
+        section_blocks.append(names.get(tipo, names["mixto"]))
         section_blocks.append("")
-        previous_tipo = tipo
+        section_blocks.append("\n\n".join(bodies_by_tipo[tipo]))
+        section_blocks.append("")
 
     body_sections = "\n".join(section_blocks).strip()
 

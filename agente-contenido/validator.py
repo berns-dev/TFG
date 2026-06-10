@@ -34,7 +34,18 @@ _STOPWORDS = {
     "from",
     "that",
     "this",
+    "pagina",
+    "slide",
 }
+
+# Marcadores estructurales/internos que el agente omite a propósito en el output
+# (cabeceras de página/diapositiva, figuras, texto ilegible). No deben contar
+# como "términos clave" perdidos: penalizaban la fidelidad sin reflejar pérdida
+# real de contenido del profesor.
+_STRUCTURAL_MARKER_RE = re.compile(
+    r"\[(?:PAGINA|SLIDE)\s+\d+\]|\[TEXTO_ILEGIBLE\]|\[FIGURA[^\]]*\]",
+    re.IGNORECASE,
+)
 
 
 def extract_key_terms(text: str) -> list[str]:
@@ -58,7 +69,8 @@ def validate_fidelity(original_chunk: str, markdown_output: str) -> dict[str, An
     Comprueba que terminos tecnicos del input aparecen en el output.
     Si faltan terminos clave, baja la cobertura.
     """
-    original_terms = extract_key_terms(original_chunk)
+    chunk_sin_marcadores = _STRUCTURAL_MARKER_RE.sub(" ", original_chunk or "")
+    original_terms = extract_key_terms(chunk_sin_marcadores)
     output_lower = (markdown_output or "").lower()
     missing = [t for t in original_terms if t.lower() not in output_lower]
     coverage = 1 - len(missing) / max(len(original_terms), 1)
