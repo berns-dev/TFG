@@ -897,7 +897,7 @@ class _MarkdownFlowableParser(HTMLParser):
 
 
 # ---------------------------------------------------------------------------
-# Cabecera (páginas > 1) y pie de página con total real (NumberedCanvas)
+# Cabecera (todas las páginas) y pie de página con total real (NumberedCanvas)
 # ---------------------------------------------------------------------------
 
 _CABECERA_ALTO = 1.2 * cm  # altura reservada desde el borde superior
@@ -959,10 +959,9 @@ def _make_page_template(doc: BaseDocTemplate) -> PageTemplate:
     )
 
     def _on_page(canvas, doc_ref):
-        # Cabecera en todas las páginas excepto la primera. El pie lo dibuja
-        # _NumberedCanvas en save() para conocer el total de páginas.
-        if doc_ref.page > 1:
-            _dibujar_cabecera(canvas, doc)
+        # Cabecera institucional en TODAS las páginas, incluida la primera.
+        # El pie lo dibuja _NumberedCanvas en save() para conocer el total.
+        _dibujar_cabecera(canvas, doc)
 
     return PageTemplate(id="main", frames=[frame], onPage=_on_page)
 
@@ -1017,12 +1016,31 @@ def _numbered_canvas_factory(
 # Pre-proceso del Markdown
 # ---------------------------------------------------------------------------
 
+def _strip_frontmatter(markdown_text: str) -> str:
+    """Elimina por completo el bloque frontmatter YAML inicial (--- ... ---).
+
+    Robusto frente a CRLF/LF y espacios finales en las líneas delimitadoras,
+    para que ningún campo YAML del Agente Contenido (archivo_origen,
+    tipo_documento, tema_detectado, idioma, fecha_procesado,
+    compatible_agente_organizador) llegue a renderizarse en el PDF. Si no hay
+    frontmatter, el texto se devuelve intacto y el H1 sigue siendo lo primero.
+    """
+    candidato = markdown_text.lstrip()
+    m = re.match(
+        r"---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)",
+        candidato,
+    )
+    if m:
+        return candidato[m.end():]
+    return markdown_text
+
+
 def _preprocess_md(
     markdown_text: str,
 ) -> tuple[str, dict[str, str], dict[str, str]]:
     """Strip frontmatter, protect FIGURA/TEXTO_ILEGIBLE tags, protect LaTeX."""
-    # Strip YAML frontmatter
-    text = re.sub(r"^---\n[\s\S]*?\n---\n", "", markdown_text.lstrip(), count=1)
+    # Strip YAML frontmatter (robusto a CRLF/LF; ver _strip_frontmatter)
+    text = _strip_frontmatter(markdown_text)
 
     # [FIGURA: ...] → token; el parser lo convierte en _FiguraPlaceholder
     figura_subs: dict[str, str] = {}
