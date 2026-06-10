@@ -72,7 +72,7 @@ requirements.txt    — anthropic, streamlit, reportlab, markdown,
    - Si el razonador devuelve `VISUALIZABLE=NO`, se aplica igualmente el fallback CURVA_SIMPLE. El elemento no se descarta porque el profesor lo seleccionó explícitamente.
    - **Paso 2 — Generador (Sonnet):** `build_generador_message()` pasa el elemento, la decisión del razonador y el `slug` exacto. Sonnet genera el bloque HTML (máx. 8.192 tokens).
    - **Post-procesado — `aplicar_rangos()`:** antes de validar, Python sobreescribe los atributos `min`, `max` y `value` de cada `input[type=range]` con los valores de `RANGO_VARIABLES`. Esto corrige los casos donde Sonnet recibe los rangos correctos del razonador pero los ignora en la generación (ver sección 7).
-   - **Validación — `validar_bloque_html()`:** comprueba que el bloque contiene `initBloque_{slug}` y no está truncado. Si falla tras `_MAX_RETRIES=2` intentos, inserta un panel de error o un placeholder visible.
+   - **Validación — `validar_bloque_html()`:** comprueba (1) que existe la definición global `window['initBloque_{slug}'] =`, (2) que existe la llamada de arranque `DOMContentLoaded` → `window['initBloque_{slug}']()`, y (3) que el script no está truncado. Devuelve `(es_valido, motivo)`; si falla tras `_MAX_RETRIES=2` intentos, el placeholder visible indica el motivo exacto.
 10. Los resultados se ordenan por índice original (no por orden de finalización).
 11. `_construir_pagina()` envuelve los bloques en `_HTML_TEMPLATE` inyectando el sistema de pestañas CSS e inicialización lazy.
 
@@ -166,8 +166,8 @@ Función pública: `generar_pdf(markdown_text, titulo)` en `generador_pdf.py`.
 **IDs en HTML generado por Sonnet:**
 Todos los IDs deben tener el prefijo `bloque_{slug}_`. El slug se construye en Python con `_slug(nombre)` y se pasa explícitamente a Sonnet como `SLUG_EXACTO` en el mensaje de usuario. Sonnet no debe derivarlo por su cuenta: el prompt indica que el nombre de la función de inicialización debe ser `window['initBloque_{SLUG_EXACTO}']` con el valor exacto recibido.
 
-**Inicialización lazy (obligatorio):**
-Todo el código de inicialización de Chart.js debe estar dentro de `window['initBloque_{slug}'] = function() { ... }`. Esta función se llama desde el JS del contenedor cuando la pestaña se activa, después de que MathJax termine. No usar `DOMContentLoaded` ni ejecución inmediata para crear charts.
+**Inicialización (obligatorio):**
+Todo el código de inicialización de Chart.js debe estar dentro de `window['initBloque_{slug}'] = function() { ... }`, definida en el scope global del script (nunca anidada). Hay doble arranque deliberado: (1) cada bloque registra al final de su `<script>` un listener `DOMContentLoaded` que llama a `window['initBloque_{slug}']()` dentro de try/catch con `console.error` — garantiza que la primera pestaña se inicializa en carga; (2) el contenedor llama a la misma función cuando la pestaña se activa (tras MathJax), también con try/catch. Por eso la función debe ser idempotente: la destrucción previa del chart no es opcional. La llamada se hace siempre como `window['initBloque_{slug}']()` porque el slug contiene guiones y no es un identificador JS válido.
 
 **Destrucción previa de Chart.js:**
 Dentro de `initBloque_{slug}()`, antes de `new Chart(...)`:

@@ -265,9 +265,14 @@ Genera exactamente estas 10 secciones en este orden. No añadir ni quitar.
    Tabla HTML (<table>) con cabecera Símbolo | Descripción | Unidades, una
    fila por entrada de TABLA DE VARIABLES, en el mismo orden recibido.
    - Filas con generada=false: fondo #FFFFFF (normal).
-   - Filas con generada=true: fondo #F0F0F0 y, en la celda del símbolo, el
-     símbolo precedido por "⚡ " con atributo title="Descripción generada
-     automáticamente — no extraída del material del profesor".
+   - Filas con generada=true: fondo #F0F0F0. La distinción entre variable
+     extraída del Markdown y variable generada por IA se hace SOLO mediante
+     ese fondo CSS.
+   - Cada fila con generada=true lleva en su <tr> el atributo
+     title="Descripción generada automáticamente — no extraída del material
+     del profesor" (tooltip nativo activado por hover, sin icono visible).
+   - PROHIBIDO incluir emojis o iconos (⚡, ✨ o similares) en cualquier
+     celda de la tabla — el output es material académico.
    Estilo: table border-collapse: collapse, width 100%; <th>/<td> con padding
    8px 12px, font-size 13px DM Sans, border-bottom 0.5px solid
    rgba(0,0,0,0.08); cabecera <th> uppercase, 11px, letter-spacing 0.05em,
@@ -303,6 +308,17 @@ Genera exactamente estas 10 secciones en este orden. No añadir ni quitar.
      scales.x.ticks.font.size: 11, scales.x.ticks.color: '#6B6860'
      scales.y.ticks.font.size: 11, scales.y.ticks.color: '#6B6860'
    Canvas Chart.js dentro sin padding propio.
+   ESCALA Y ADAPTATIVA (obligatoria, todos los patrones Chart.js):
+     Cuando los valores de todas las curvas de la gráfica se concentran en
+     menos del 20% del rango total del eje Y, NO usar escala fija 0-1.
+     En su lugar, calcular el min y max reales de los datos generados y
+     aplicar:
+       scales: { y: { min: valorMin * 0.95, max: valorMax * 1.05 } }
+     Esto aplica especialmente a funciones que convergen a valores cercanos
+     a 1, como disponibilidad D = MTBF/(MTBF+MTTR), fiabilidad de sistemas
+     redundantes y similares. Si update_{slug}() regenera los datos al mover
+     un slider, recalcular también chart.options.scales.y.min/max en cada
+     update antes de chart.update().
    REGLA DE SLIDERS (obligatoria, sin excepciones):
      Cada input[type=range] DEBE tener el atributo oninput="update_{slug}()"
      directamente en el elemento HTML — no event listeners añadidos con
@@ -380,16 +396,37 @@ RESPUESTA_FRECUENCIAL:
   Dos Chart.js apilados: magnitud y fase, eje X logarítmico.
   Leyenda mínima bottom-left si múltiples series.
 
-INICIALIZACIÓN LAZY (obligatorio — pestañas del contenedor):
-  El script del bloque NO debe ejecutar Chart.js ni cálculos al cargarse.
-  Todo el código de inicialización (creación del chart, primera update(),
-  primera evaluación, MathJax del bloque) debe estar dentro de:
+INICIALIZACIÓN (obligatorio — pestañas del contenedor):
+  El script del bloque NO debe ejecutar Chart.js ni cálculos directamente
+  en el nivel superior del script. Todo el código de inicialización
+  (creación del chart, primera update(), primera evaluación) debe estar
+  dentro de:
 
     window['initBloque_{SLUG_EXACTO}'] = function() { ... };
 
   El nombre de la función de inicialización debe ser EXACTAMENTE
   window['initBloque_{SLUG_EXACTO}'] donde SLUG_EXACTO es el valor
   proporcionado en el mensaje de usuario. No abreviar ni modificar el slug.
+
+  REGLA DE SCOPE Y ARRANQUE (no negociable):
+  La función initBloque_{SLUG_EXACTO} debe estar definida en el scope global
+  del script — asignación a window en el nivel superior, no anidada dentro
+  de otra función ni de un IIFE. Las funciones auxiliares (update_{slug} y
+  similares) también deben definirse en el scope global. Debe ser llamada
+  explícitamente al final del bloque <script> con:
+
+    document.addEventListener('DOMContentLoaded', function() {
+      try { window['initBloque_{SLUG_EXACTO}'](); }
+      catch(e) { console.error('Error en initBloque_{SLUG_EXACTO}:', e); }
+    });
+
+  Esto es obligatorio para todas las pestañas, no solo las secundarias.
+  El slug contiene guiones: la llamada se hace SIEMPRE con
+  window['initBloque_{SLUG_EXACTO}'](), nunca como identificador suelto
+  (initBloque_mi-slug() sería un error de sintaxis).
+
+  El contenedor de pestañas también llama a initBloque_{slug}() cuando la
+  pestaña se activa. Por eso la función debe ser idempotente:
 
   Dentro de initBloque_{slug}():
     if (window[chartId]) window[chartId].destroy() antes de recrear el chart.
@@ -399,8 +436,6 @@ INICIALIZACIÓN LAZY (obligatorio — pestañas del contenedor):
   llaman a update_{slug}() u otras funciones que no dependen de dimensiones
   iniciales del canvas. update_{slug}() debe ser invocable en cualquier momento
   tras la primera inicialización.
-
-  NO usar DOMContentLoaded ni ejecución inmediata para crear charts.
 
 RANGOS DE SLIDERS (obligatorio si se proporcionan en RANGO_VARIABLES):
   Los atributos min, max y value de cada input[type=range] DEBEN ser

@@ -227,7 +227,16 @@ _HTML_TEMPLATE = """\
 
     function runInit() {
       if (typeof window[initName] === "function") {
-        window[initName]();
+        try {
+          window[initName]();
+        } catch (e) {
+          console.error("Error en " + initName + ":", e);
+        }
+      } else {
+        console.error(
+          "No se encontró la función " + initName +
+          " — el bloque de esta pestaña no puede inicializarse."
+        );
       }
       panel.dataset.initialized = "true";
     }
@@ -875,18 +884,64 @@ def validar_rangos(
             )
 
 
-def validar_bloque_html(bloque: str, slug: str) -> bool:
-    """Comprueba que el bloque incluye initBloque completo y no está truncado."""
-    nombre_funcion = "initBloque_" + slug
-    tiene_funcion = nombre_funcion in bloque
+_DOMLOADED_RE = re.compile(
+    r"addEventListener\(\s*['\"]DOMContentLoaded['\"]", re.IGNORECASE
+)
+
+
+def validar_bloque_html(bloque: str, slug: str) -> tuple[bool, str]:
+    """Valida que el bloque incluye initBloque global, su arranque y el cierre.
+
+    Comprueba tres condiciones:
+      1. La definición global ``window['initBloque_{slug}'] = ...`` existe
+         (no basta con que el nombre aparezca en cualquier parte del texto).
+      2. Existe la llamada de arranque: un listener DOMContentLoaded y la
+         invocación ``window['initBloque_{slug}']()``.
+      3. El script no está truncado (termina en ``</script>`` o ``};``).
+
+    Returns:
+        (es_valido, motivo): motivo es "" si el bloque es válido; si no,
+        describe exactamente qué condición falló (se muestra en el
+        placeholder de error).
+    """
+    slug_re = re.escape(slug)
+    motivos: list[str] = []
+
+    if not re.search(
+        rf"window\[\s*['\"]initBloque_{slug_re}['\"]\s*\]\s*=", bloque
+    ):
+        motivos.append(
+            f"falta la definición global window['initBloque_{slug}']"
+        )
+
+    tiene_listener = bool(_DOMLOADED_RE.search(bloque))
+    tiene_llamada = bool(
+        re.search(
+            rf"window\[\s*['\"]initBloque_{slug_re}['\"]\s*\]\s*\(", bloque
+        )
+    )
+    if not (tiene_listener and tiene_llamada):
+        motivos.append(
+            f"falta la llamada DOMContentLoaded a initBloque_{slug}"
+        )
+
     stripped = bloque.rstrip()
-    tiene_cierre = stripped.endswith("</script>") or stripped.endswith("};")
-    return tiene_funcion and tiene_cierre
+    if not (stripped.endswith("</script>") or stripped.endswith("};")):
+        motivos.append("script truncado (sin cierre </script>)")
+
+    return (not motivos, "; ".join(motivos))
 
 
-def _bloque_placeholder(slug: str, nombre: str) -> str:
+def _bloque_placeholder(slug: str, nombre: str, motivo: str = "") -> str:
     """HTML de reserva cuando Sonnet devuelve un bloque truncado o inválido."""
     nombre_esc = nombre.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    motivo_esc = motivo.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    detalle = (
+        f'<p style="font-size:12px;line-height:1.5;color:#9A9890;'
+        f'margin-top:0.5rem;">Motivo: {motivo_esc}</p>'
+        if motivo
+        else ""
+    )
     return (
         f'<div id="bloque_{slug}_card" style="background:#FFFFFF;'
         f"border:0.5px solid rgba(0,0,0,0.08);border-radius:14px;"
@@ -897,6 +952,7 @@ def _bloque_placeholder(slug: str, nombre: str) -> str:
         "No se pudo generar la visualización para este elemento. "
         "Prueba a seleccionar menos elementos simultáneamente."
         "</p>"
+        f"{detalle}"
         f"<script>window['initBloque_{slug}'] = function() {{}};</script>"
         "</div>"
     )
@@ -973,6 +1029,7 @@ def _generar_bloque(
     parametros_slider = visualizacion.get("PARAMETROS_SLIDER", "")
 
     bloque_incompleto = False
+    motivo_fallo = ""
     for attempt in range(_MAX_RETRIES + 1):
         try:
             response = client.messages.create(
@@ -990,6 +1047,7 @@ def _generar_bloque(
 
             if getattr(response, "stop_reason", None) == "max_tokens":
                 bloque_incompleto = True
+                motivo_fallo = "respuesta truncada por límite de tokens (max_tokens)"
                 logger.warning(
                     "[GENERADOR] Respuesta truncada (max_tokens) para slug=%r — intento %s",
                     slug,
@@ -1006,7 +1064,8 @@ def _generar_bloque(
                         verbose=verbose,
                         parametros_slider=parametros_slider,
                     )
-                if validar_bloque_html(raw, slug):
+                bloque_valido, motivo_validacion = validar_bloque_html(raw, slug)
+                if bloque_valido:
                     if rangos_esperados:
                         validar_rangos(
                             raw,
@@ -1016,17 +1075,17 @@ def _generar_bloque(
                         )
                     return idx, raw
 
-            if _is_valid_html(raw):
                 bloque_incompleto = True
+                motivo_fallo = motivo_validacion
                 logger.warning(
-                    "[GENERADOR] Bloque incompleto para slug=%r "
-                    "(falta initBloque_%s o cierre de script) — intento %s",
+                    "[GENERADOR] Bloque incompleto para slug=%r (%s) — intento %s",
                     slug,
-                    slug,
+                    motivo_validacion,
                     attempt + 1,
                 )
                 last_exc = ValueError(
-                    f"Bloque HTML incompleto para initBloque_{slug}"
+                    f"Bloque HTML inválido para initBloque_{slug}: "
+                    f"{motivo_validacion}"
                 )
                 continue
 
@@ -1039,7 +1098,7 @@ def _generar_bloque(
             last_exc = exc
 
     if bloque_incompleto:
-        return idx, _bloque_placeholder(slug, nombre)
+        return idx, _bloque_placeholder(slug, nombre, motivo_fallo)
 
     # All retries exhausted — return visible error panel
     nombre_esc = nombre.replace("<", "&lt;").replace(">", "&gt;")
