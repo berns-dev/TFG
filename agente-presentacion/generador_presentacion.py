@@ -12,7 +12,7 @@ Pipeline:
      donde aparece su primera expresion (insercion inmediatamente despues
      del bloque Markdown que la presenta).
   4. Generacion de los bloques interactivos reutilizando
-     generador_html._generar_bloque() — mismo razonador, mismos 6 patrones,
+     generador_html._generar_bloque() — mismo razonador, mismos 7 patrones,
      misma tabla de variables, mismos reintentos y validacion. El listener
      DOMContentLoaded propio de cada bloque se elimina al embeber: en la
      presentacion la inicializacion es lazy por viewport
