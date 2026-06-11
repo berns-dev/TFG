@@ -1120,6 +1120,8 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
         rightMargin=margen_der,
         topMargin=2.5 * cm,
         bottomMargin=2.0 * cm,
+        title=asignatura,
+        author="Universidad de Oviedo",
     )
     doc._asignatura_pdf = asignatura  # leído por _dibujar_cabecera
     doc.addPageTemplates([_make_page_template(doc)])
