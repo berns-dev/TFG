@@ -97,7 +97,7 @@ requirements.txt    — anthropic, streamlit, reportlab, markdown,
 | Detección regex (fase 1) | ninguno | Contenido matemático en Markdown con formato correcto |
 | Filtro de interactividad (fase Haiku) | Haiku (`MODEL_FAST`) | Descarta constantes empíricas y contexto no manipulable; fail-open si API falla |
 | Evaluación de valor pedagógico (`evaluar_advertencia`) | Sonnet (`MODEL_SMART`) | Opt-in en UI; rellena campo `advertencia`; reutiliza `_razonar_visualizacion` |
-| Razonador de visualización por elemento | Sonnet (`MODEL_SMART`) | Contexto físico y elección entre 6 patrones |
+| Razonador de visualización por elemento | Sonnet (`MODEL_SMART`) | Contexto físico y elección entre 7 patrones |
 | Generador de bloque HTML | Sonnet (`MODEL_SMART`) | JS + Chart.js; 8.192 tokens de salida |
 
 ---
@@ -112,7 +112,7 @@ El razonador evalúa primero el valor pedagógico del elemento antes de elegir p
 
 **Qué pasa cuando el razonador devuelve NO:** `_parse_visualizacion()` detecta el NO y devuelve un dict con `VISUALIZABLE=NO`. `_generar_bloque()` lo sustituye por el fallback CURVA_SIMPLE y genera el HTML igualmente, porque el profesor decidió seleccionar ese elemento. No hay bloqueo ni omisión.
 
-**Los 6 patrones:**
+**Los 7 patrones:**
 
 | Patrón | Criterio de selección | Tecnología |
 |---|---|---|
@@ -122,6 +122,7 @@ El razonador evalúa primero el valor pedagógico del elemento antes de elegir p
 | `MAPA_2D` | Tres o más variables con peso comparable. | Canvas HTML5 nativo, grid 80×80, escala #185FA5 → blanco → #C0392B; sin Chart.js |
 | `TRAYECTORIA` | La expresión describe un proceso en un espacio de estados (P-V, T-S, tensión-deformación). | Chart.js scatter+línea; slider de progreso 0-100% |
 | `RESPUESTA_FRECUENCIAL` | Variable independiente es frecuencia o tiempo, respuesta dinámica. | Dos Chart.js apilados (magnitud y fase); eje X logarítmico |
+| `ANIMACION_MECANISMO` | El contenido describe un mecanismo cuyo funcionamiento se entiende viendo moverse sus piezas (cilindro de doble efecto, biela-manivela, leva). | SVG en corte animado (sin Chart.js); conjunto móvil en un `<g>` con translate; controles botón toggle + slider de velocidad; animación por `requestAnimationFrame` |
 
 ---
 
