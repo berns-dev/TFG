@@ -70,6 +70,7 @@ _PATRONES_VALIDOS = frozenset({
     "MAPA_2D",
     "TRAYECTORIA",
     "RESPUESTA_FRECUENCIAL",
+    "ANIMACION_MECANISMO",
 })
 
 # ---------------------------------------------------------------------------
