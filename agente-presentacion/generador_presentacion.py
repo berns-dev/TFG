@@ -443,7 +443,10 @@ def _generar_bloques(
     workers = min(len(elementos), _MAX_WORKERS)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(_generar_bloque, el, i, verbose, texto_original): i
+            executor.submit(
+                _generar_bloque, el, i, verbose, texto_original,
+                requiere_autoarranque=False,
+            ): i
             for i, el in enumerate(elementos)
         }
         for future in as_completed(futures):

@@ -896,14 +896,20 @@ _DOMLOADED_RE = re.compile(
 )
 
 
-def validar_bloque_html(bloque: str, slug: str) -> tuple[bool, str]:
+def validar_bloque_html(
+    bloque: str, slug: str, requiere_autoarranque: bool = True
+) -> tuple[bool, str]:
     """Valida que el bloque incluye initBloque global, su arranque y el cierre.
 
-    Comprueba tres condiciones:
+    Comprueba:
       1. La definición global ``window['initBloque_{slug}'] = ...`` existe
          (no basta con que el nombre aparezca en cualquier parte del texto).
-      2. Existe la llamada de arranque: un listener DOMContentLoaded y la
-         invocación ``window['initBloque_{slug}']()``.
+      2. Si ``requiere_autoarranque`` es True: existe la llamada de arranque
+         (un listener DOMContentLoaded y la invocación
+         ``window['initBloque_{slug}']()``). Si es False (presentación
+         completa), esta condición se omite — el contenedor invoca
+         ``initBloque_{slug}()`` externamente vía IntersectionObserver y un
+         DOMContentLoaded propio sería innecesario.
       3. El script no está truncado (termina en ``</script>`` o ``};``).
 
     Las comillas del acceso a window pueden ser simples, dobles o backticks
@@ -924,16 +930,17 @@ def validar_bloque_html(bloque: str, slug: str) -> tuple[bool, str]:
             f"falta la definición global window['initBloque_{slug}']"
         )
 
-    tiene_listener = bool(_DOMLOADED_RE.search(bloque))
-    tiene_llamada = bool(
-        re.search(
-            rf"window\[\s*['\"`]initBloque_{slug_re}['\"`]\s*\]\s*\(", bloque
+    if requiere_autoarranque:
+        tiene_listener = bool(_DOMLOADED_RE.search(bloque))
+        tiene_llamada = bool(
+            re.search(
+                rf"window\[\s*['\"`]initBloque_{slug_re}['\"`]\s*\]\s*\(", bloque
+            )
         )
-    )
-    if not (tiene_listener and tiene_llamada):
-        motivos.append(
-            f"falta la llamada DOMContentLoaded a initBloque_{slug}"
-        )
+        if not (tiene_listener and tiene_llamada):
+            motivos.append(
+                f"falta la llamada DOMContentLoaded a initBloque_{slug}"
+            )
 
     stripped = bloque.rstrip()
     if not (stripped.endswith("</script>") or stripped.endswith("};")):
@@ -973,6 +980,7 @@ def _generar_bloque(
     idx: int,
     verbose: bool = False,
     texto_original: str | None = None,
+    requiere_autoarranque: bool = True,
 ) -> tuple[int, str]:
     """Call Sonnet to generate the interactive HTML panel for one element.
 
@@ -991,6 +999,11 @@ def _generar_bloque(
         idx: Original position in the elementos list. Preserved and returned
              so parallel results can be sorted back into document order.
         verbose: If True, print pattern and justification to stdout.
+        requiere_autoarranque: True (HTML por pestañas) exige que el bloque
+            incluya su propio listener DOMContentLoaded que invoque
+            initBloque_{slug}(). False (presentación completa) omite esa
+            exigencia: el contenedor invoca initBloque_{slug}() vía
+            IntersectionObserver al entrar en el viewport.
 
     Returns:
         (idx, html_block) where html_block is the Sonnet-generated HTML
@@ -1034,7 +1047,10 @@ def _generar_bloque(
         )
 
     tabla_variables = construir_tabla_variables(elemento, client)
-    user_msg = build_generador_message(elemento, visualizacion, slug, tabla_variables)
+    user_msg = build_generador_message(
+        elemento, visualizacion, slug, tabla_variables,
+        requiere_autoarranque=requiere_autoarranque,
+    )
     rangos_esperados = _parse_rango_variables(rangos_raw)
     parametros_slider = visualizacion.get("PARAMETROS_SLIDER", "")
 
@@ -1046,21 +1062,35 @@ def _generar_bloque(
             # el mismo fallo. Indicar a Sonnet qué se rechazó y qué se espera.
             mensaje = user_msg
             if attempt and motivo_fallo:
-                mensaje = (
-                    f"{user_msg}\n\n"
-                    f"CORRECCIÓN OBLIGATORIA — tu respuesta anterior fue "
-                    f"rechazada por: {motivo_fallo}.\n"
-                    f"El bloque DEBE contener, en el nivel superior del "
-                    f"<script> y con comillas simples:\n"
-                    f"  window['initBloque_{slug}'] = function() {{ ... }};\n"
-                    f"y al final del <script>:\n"
-                    f"  document.addEventListener('DOMContentLoaded', "
-                    f"function() {{\n"
-                    f"    try {{ window['initBloque_{slug}'](); }}\n"
-                    f"    catch(e) {{ console.error('Error en "
-                    f"initBloque_{slug}:', e); }}\n"
-                    f"  }});"
-                )
+                if requiere_autoarranque:
+                    mensaje = (
+                        f"{user_msg}\n\n"
+                        f"CORRECCIÓN OBLIGATORIA — tu respuesta anterior fue "
+                        f"rechazada por: {motivo_fallo}.\n"
+                        f"El bloque DEBE contener, en el nivel superior del "
+                        f"<script> y con comillas simples:\n"
+                        f"  window['initBloque_{slug}'] = function() {{ ... }};\n"
+                        f"y al final del <script>:\n"
+                        f"  document.addEventListener('DOMContentLoaded', "
+                        f"function() {{\n"
+                        f"    try {{ window['initBloque_{slug}'](); }}\n"
+                        f"    catch(e) {{ console.error('Error en "
+                        f"initBloque_{slug}:', e); }}\n"
+                        f"  }});"
+                    )
+                else:
+                    mensaje = (
+                        f"{user_msg}\n\n"
+                        f"CORRECCIÓN OBLIGATORIA — tu respuesta anterior fue "
+                        f"rechazada por: {motivo_fallo}.\n"
+                        f"El bloque DEBE contener, en el nivel superior del "
+                        f"<script> y con comillas simples:\n"
+                        f"  window['initBloque_{slug}'] = function() {{ ... }};\n"
+                        f"NO añadas ningún listener DOMContentLoaded — el "
+                        f"contenedor de la presentación invoca "
+                        f"window['initBloque_{slug}']() automáticamente "
+                        f"cuando el bloque entra en el viewport."
+                    )
             response = client.messages.create(
                 model=MODEL_SMART,
                 max_tokens=_MAX_TOKENS_HTML,
@@ -1093,7 +1123,9 @@ def _generar_bloque(
                         verbose=verbose,
                         parametros_slider=parametros_slider,
                     )
-                bloque_valido, motivo_validacion = validar_bloque_html(raw, slug)
+                bloque_valido, motivo_validacion = validar_bloque_html(
+                    raw, slug, requiere_autoarranque=requiere_autoarranque
+                )
                 if bloque_valido:
                     if rangos_esperados:
                         validar_rangos(

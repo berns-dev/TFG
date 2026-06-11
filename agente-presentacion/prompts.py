@@ -316,15 +316,16 @@ Genera exactamente estas 10 secciones en este orden. No añadir ni quitar.
        scales: { y: { min: valorMin * 0.95, max: valorMax * 1.05 } }
      Esto aplica especialmente a funciones que convergen a valores cercanos
      a 1, como disponibilidad D = MTBF/(MTBF+MTTR), fiabilidad de sistemas
-     redundantes y similares. Si update_{slug}() regenera los datos al mover
-     un slider, recalcular también chart.options.scales.y.min/max en cada
+     redundantes y similares. Si update_{slug_snake}() regenera los datos al
+     mover un slider, recalcular también chart.options.scales.y.min/max en cada
      update antes de chart.update().
    REGLA DE SLIDERS (obligatoria, sin excepciones):
-     Cada input[type=range] DEBE tener el atributo oninput="update_{slug}()"
+     Cada input[type=range] DEBE tener el atributo oninput="update_{slug_snake}()"
      directamente en el elemento HTML — no event listeners añadidos con
      addEventListener en el JS. Si hay 3 sliders, los 3 tienen oninput.
-     update_{slug}() debe leer TODOS los sliders del bloque cada vez que
-     se llama, no solo el que disparó el evento.
+     update_{slug_snake}() debe leer TODOS los sliders del bloque cada vez que
+     se llama, no solo el que disparó el evento. (update_{slug_snake} es una
+     function declaration global — ver REGLA — FUNCIONES UPDATE Y AUXILIARES.)
    CURSOR INTERACTIVO (obligatorio en todos los patrones Chart.js):
      Cuando el usuario mueva un slider, actualizar un punto resaltado sobre
      la curva activa en la posición X actual. Implementar como dataset
@@ -411,9 +412,10 @@ INICIALIZACIÓN (obligatorio — pestañas del contenedor):
   REGLA DE SCOPE Y ARRANQUE (no negociable):
   La función initBloque_{SLUG_EXACTO} debe estar definida en el scope global
   del script — asignación a window en el nivel superior, no anidada dentro
-  de otra función ni de un IIFE. Las funciones auxiliares (update_{slug} y
-  similares) también deben definirse en el scope global. Debe ser llamada
-  explícitamente al final del bloque <script> con:
+  de otra función ni de un IIFE. Las funciones auxiliares (update_{slug_snake}
+  y similares, declaradas como function declaration — ver REGLA — FUNCIONES
+  UPDATE Y AUXILIARES) también deben definirse en el scope global. Debe ser
+  llamada explícitamente al final del bloque <script> con:
 
     document.addEventListener('DOMContentLoaded', function() {
       try { window['initBloque_{SLUG_EXACTO}'](); }
@@ -430,12 +432,12 @@ INICIALIZACIÓN (obligatorio — pestañas del contenedor):
 
   Dentro de initBloque_{slug}():
     if (window[chartId]) window[chartId].destroy() antes de recrear el chart.
-    Crear el chart, llamar a update_{slug}() una vez al final.
+    Crear el chart, llamar a update_{slug_snake}() una vez al final.
 
   Los event listeners de sliders (oninput) pueden estar fuera de init — solo
-  llaman a update_{slug}() u otras funciones que no dependen de dimensiones
-  iniciales del canvas. update_{slug}() debe ser invocable en cualquier momento
-  tras la primera inicialización.
+  llaman a update_{slug_snake}() u otras funciones que no dependen de
+  dimensiones iniciales del canvas. update_{slug_snake}() debe ser invocable
+  en cualquier momento tras la primera inicialización.
 
 RANGOS DE SLIDERS (obligatorio si se proporcionan en RANGO_VARIABLES):
   Los atributos min, max y value de cada input[type=range] DEBEN ser
@@ -452,10 +454,39 @@ RESTRICCIONES TÉCNICAS:
 - Chart.js: destrucción previa dentro de initBloque_{slug}()
 - IDs con prefijo bloque_{slug}_ obligatorio
 - TODA función o variable global del script debe llevar el slug en el
-  nombre (update_{slug}, chart_{slug}, addCurveLabels_{slug}, ...).
+  nombre (update_{slug_snake}, chart_{slug_snake}, addCurveLabels_{slug_snake}, ...).
   PROHIBIDOS los nombres globales genéricos (addCurveLabels,
   updateResultado, chartInstance): varios bloques conviven en el mismo
   documento y los nombres genéricos se sobreescriben entre sí
+
+REGLA — FUNCIONES UPDATE Y AUXILIARES (no negociable):
+  La función de actualización de sliders SIEMPRE se declara como función
+  nombrada global (function declaration):
+    function update_{slug_snake}() { ... }
+  NUNCA como expresión asignada a window[] ni a una variable:
+    window['update_{slug_snake}'] = function() { ... }   ← PROHIBIDO
+    const update_{slug_snake} = function() { ... }        ← PROHIBIDO
+    let update_{slug_snake} = ...                          ← PROHIBIDO
+  Donde {slug_snake} es el slug con los guiones convertidos a guiones bajos.
+  Los oninput del HTML invocan la función como llamada directa (bare call):
+    oninput="update_{slug_snake}()"
+  Una asignación window['nombre'] = fn NO crea un identificador en el scope
+  léxico, así que el bare call del oninput lanzaría un ReferenceError
+  silencioso y el slider no actualizaría la gráfica. Solo una function
+  declaration crea ese identificador.
+  La MISMA regla aplica a toda función auxiliar del bloque que NO sea
+  initBloque (las llamadas desde el HTML o desde otras funciones del bloque):
+  declárala como function {nombre}_{slug_snake}() { ... }, nunca como
+  expresión asignada a window[] o a una variable.
+
+  DISTINCIÓN CON initBloque (ambos patrones coexisten en el mismo bloque y es
+  correcto):
+    - initBloque_{slug}  → window['initBloque_{slug}'] = function() { ... };
+      (el contenedor la invoca por nombre dinámico vía window[initName]();
+      el slug conserva los guiones)
+    - update_{slug_snake} y auxiliares → function update_{slug_snake}() { ... }
+      (el oninput las invoca como bare call; el slug va con guiones bajos)
+
 - Cálculo en JS puro, sin librerías matemáticas externas
 - Sin gradientes, box-shadow, blur ni glow
 
@@ -674,6 +705,7 @@ def build_generador_message(
     visualizacion: dict,
     slug: str,
     tabla_variables: list[dict] | None = None,
+    requiere_autoarranque: bool = True,
 ) -> str:
     """Build the user message for Sonnet to generate an interactive HTML block.
 
@@ -705,6 +737,13 @@ def build_generador_message(
         slug: Slug exacto del panel (misma fuente que generador_html._slug).
         tabla_variables: Lista de variables de la ecuación con descripción,
                   unidades y flag "generada" (sección 6 del HTML generado).
+        requiere_autoarranque: True (HTML por pestañas) deja la instrucción
+                  de PROMPT_GENERADOR_HTML sin cambios — el bloque debe
+                  incluir su propio listener DOMContentLoaded. False
+                  (presentación completa) añade una instrucción explícita
+                  que sustituye esa exigencia: el contenedor invoca
+                  initBloque_{slug}() vía IntersectionObserver, así que el
+                  bloque NO debe incluir el listener.
 
     Returns:
         User message string ready to send to the API.
@@ -807,4 +846,18 @@ def build_generador_message(
                     f'  - {param}: id="bloque_{slug}_slider_{var_id}" '
                     f'data-var="{param}"'
                 )
+    if not requiere_autoarranque:
+        lines += [
+            "",
+            "CONTEXTO DE INSERCIÓN — PRESENTACIÓN COMPLETA (anula la regla de "
+            "arranque del sistema):",
+            f"Define igualmente window['initBloque_{slug}'] = function() "
+            "{ ... }; en el scope global del script, pero NO añadas ningún "
+            "listener document.addEventListener('DOMContentLoaded', ...) "
+            "que la invoque. Este bloque se inserta en la presentación "
+            f"completa del tema, donde el contenedor invoca "
+            f"window['initBloque_{slug}']() automáticamente cuando el "
+            "bloque entra en el viewport (IntersectionObserver). Un "
+            "DOMContentLoaded propio aquí es código innecesario.",
+        ]
     return "\n".join(lines)
