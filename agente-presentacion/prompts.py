@@ -133,6 +133,17 @@ INSTRUCCIONES:
      tiempo y la expresión describe una respuesta dinámica. Magnitud y fase en
      escala logarítmica.
 
+   - ANIMACION_MECANISMO: el contenido describe un mecanismo o componente
+     físico cuyo funcionamiento se comprende viendo MOVERSE sus partes
+     (cilindro de doble efecto, biela-manivela, leva-seguidor, engranajes,
+     válvula de corredera). No es una relación a representar en ejes X/Y:
+     es un esquema en corte animado con uno o dos controles de la animación
+     (sentido o estado, y velocidad). Elegir SOLO cuando el valor pedagógico
+     está en ver el movimiento del mecanismo y la geometría de sus piezas, no
+     en explorar una curva paramétrica. En este patrón EJE_X y EJE_Y no aplican
+     (poner "n/a") y PARAMETROS_SLIDER son controles de la animación (p. ej.
+     velocidad), no ejes.
+
 4. Identifica qué variables son los ejes principales (X, Y) y cuáles son
    parámetros secundarios. Para FAMILIA_CURVAS, el parámetro secundario define
    las 4 curvas — no va como slider individual sino como familia de líneas.
@@ -396,6 +407,47 @@ TRAYECTORIA:
 RESPUESTA_FRECUENCIAL:
   Dos Chart.js apilados: magnitud y fase, eje X logarítmico.
   Leyenda mínima bottom-left si múltiples series.
+
+ANIMACION_MECANISMO:
+  SVG en corte transversal del mecanismo, SIN Chart.js (como MAPA_2D). El
+  contenedor de la sección 8 usa el mismo fondo #F0EEE9 y border-radius 12px,
+  pero con height automática (no 380px fija); el <svg> lleva viewBox propio,
+  width 100% y height auto.
+  Dibujo: piezas con rect/line/path/circle/polygon en colores planos —
+  metal en grises (#C9C6BD relleno claro, #6B6860 trazo, #4A4843 oscuro),
+  fluido o zona activa/presurizada en #185FA5 con fill-opacity 0.7, zona en
+  reposo/escape en un gris muy claro (#EDEBE5). Sin gradientes, sombras ni glow.
+  CONJUNTO MÓVIL (obligatorio): todas las piezas que se desplazan juntas
+  (émbolo + vástago + acoplamiento, biela, seguidor...) van dentro de UN solo
+  <g> que se mueve con transform="translate(dx,0)" — nunca reposicionar cada
+  pieza por separado. Así el conjunto se mueve de forma solidaria.
+  CONTROLES (sección 7): un botón que conmuta el estado del mecanismo
+  (sentido avance/retroceso, abierto/cerrado) con onclick="toggle_{slug_snake}()"
+  y un slider de velocidad con oninput="update_{slug_snake}()". El slider sigue
+  la convención de IDs (id="bloque_{slug}_slider_{var}", data-var). El botón es
+  el único control sin slider; refleja el estado actual en una etiqueta con id.
+  ANIMACIÓN con requestAnimationFrame:
+    - function animar_{slug_snake}(ts): calcula dt entre frames y avanza la
+      posición del conjunto móvil hacia su objetivo a la velocidad del slider
+      (px/seg), la limita a su recorrido (clamp) y vuelve a programarse con
+      requestAnimationFrame.
+    - function dibujar_{slug_snake}(): redibuja el SVG al estado actual —
+      traslación del conjunto móvil y relleno (#185FA5 / gris) de la zona
+      activa según el sentido.
+    - function toggle_{slug_snake}(): invierte el sentido/estado y actualiza
+      la etiqueta del botón.
+    Las tres son function declarations globales con el slug, igual que
+    update_{slug_snake} (ver REGLA — FUNCIONES UPDATE Y AUXILIARES). Guarda el
+    id de requestAnimationFrame y la posición en un objeto de estado global
+    con el slug (estado_{slug_snake}).
+  IDEMPOTENCIA: initBloque_{slug} debe cancelar con cancelAnimationFrame
+  cualquier animación previa (usando el id guardado) y reiniciar la posición
+  ANTES de arrancar una nueva — equivale al destroy() del chart en los demás
+  patrones. Luego llama una vez a update_{slug_snake}() y arranca el bucle.
+  ETIQUETAS DINÁMICAS: magnitudes que cambian con el estado (p. ej. presión de
+  cada cámara) como <text> con id prefijado; update/dibujar actualizan su
+  contenido y su color (#185FA5 activa, #9A9890 en reposo). El cursor
+  interactivo y la escala Y adaptativa de los patrones Chart.js NO aplican aquí.
 
 INICIALIZACIÓN (obligatorio — pestañas del contenedor):
   El script del bloque NO debe ejecutar Chart.js ni cálculos directamente
