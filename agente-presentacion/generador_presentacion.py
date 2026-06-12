@@ -582,6 +582,17 @@ _PAGE_TEMPLATE = """\
     }
     .page-header h1 { font-size: 22px; font-weight: 500; margin-bottom: 0.25rem; }
     .page-header .subtitle { font-size: 14px; opacity: 0.75; }
+    /* Chip blanco para que el logo (oscuro, fondo transparente) sea legible
+       sobre la cabecera azul #003366. */
+    .page-header-logo {
+      background: #FFFFFF;
+      border-radius: 8px;
+      padding: 8px 14px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+    }
+    .page-header-logo img { height: 64px; width: auto; display: block; }
 
     .layout {
       display: flex;
@@ -1033,9 +1044,9 @@ def generar_presentacion(
     logo_b64 = _cargar_logo_base64()
     if logo_b64:
         logo_html = (
-            '  <img src="data:image/png;base64,' + logo_b64 + '" '
-            'alt="Universidad de Oviedo" '
-            'style="height:48px; width:auto; flex-shrink:0;">'
+            '  <div class="page-header-logo">'
+            '<img src="data:image/png;base64,' + logo_b64 + '" '
+            'alt="Universidad de Oviedo"></div>'
         )
     else:
         logo_html = ""
