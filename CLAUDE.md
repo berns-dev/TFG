@@ -150,8 +150,10 @@ TFG/
     ├── detector.py
     ├── generador_pdf.py
     ├── generador_html.py
+    ├── generador_presentacion.py
     ├── prompts.py
     ├── config.py
+    ├── tools/razonador_fixture.py   ← debug CLI del razonador (consume API)
     ├── requirements.txt
     ├── .env.example
     ├── .gitignore
