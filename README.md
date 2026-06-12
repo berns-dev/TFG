@@ -27,14 +27,15 @@ University professors accumulate years of teaching material in PowerPoint and PD
                                               ▼
                                   Presentation Agent
                                   ├──► [Structured PDF]
-                                  └──► [Interactive HTML]
+                                  ├──► [Interactive HTML]
+                                  └──► [Full topic presentation HTML]
 ```
 
 **Organiser Agent** receives the course guide and theory materials, detects teaching hours (lectures, seminars, lab sessions), and produces a thematic distribution with blocks, subtopics, and hours proportional to the available time. Output: a `.md` file with the subject's curricular structure.
 
 **Content Agent** receives that `.md` as optional density context plus one or more PDF/PPTX files for the topic. It converts the material into structured Markdown faithful to the original, classifying each block as theory, worked example, exercise, table, or procedure. Output: a curated `.md` per topic.
 
-**Presentation Agent** receives the curated Markdown, detects sections with mathematical content, and lets the professor select which sections to include. It then generates an academic PDF (ReportLab) or an interactive HTML page with sliders and Chart.js graphs.
+**Presentation Agent** receives the curated Markdown, detects sections with mathematical content, and lets the professor select which sections to include. It then generates an academic PDF (ReportLab), an interactive HTML page with sliders and Chart.js graphs, and a full topic presentation that integrates the theory with the interactive blocks.
 
 ---
 
@@ -50,7 +51,7 @@ The three agents transform — they never invent. The output of each agent can o
 |-------|-------|--------|--------|
 | Organiser | Course guide (PDF) + theory materials (PDF/PPTX) | Thematic distribution with blocks and hours | [`agente-organizador/`](agente-organizador/) |
 | Content | Topic materials (PDF/PPTX) + optional organiser `.md` | Structured and curated Markdown by topic | [`agente-contenido/`](agente-contenido/) |
-| Presentation | Curated Markdown from Content Agent | Academic PDF + interactive HTML page | [`agente-presentacion/`](agente-presentacion/) |
+| Presentation | Curated Markdown from Content Agent | Academic PDF + interactive HTML + full topic presentation HTML | [`agente-presentacion/`](agente-presentacion/) |
 
 ---
 
