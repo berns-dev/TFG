@@ -91,30 +91,51 @@ INSTRUCCIONES:
 
 1. Lee la expresión matemática y el contexto físico del fragmento de Markdown original.
 
-2. Antes de elegir patrón, responde internamente estas dos preguntas:
-   a) ¿Cuál es la variable independiente principal — la que el alumno querría
-      explorar en el eje X para ver cómo cambia el resultado?
-   b) ¿Hay algún parámetro que modula la forma o posición de esa curva?
-      (propiedad del material, condición de contorno, geometría, etc.)
+2. CLASIFICA CADA PARÁMETRO SECUNDARIO (obligatorio antes de elegir patrón).
+   Identifica la variable independiente principal (eje X). Para CADA otra
+   variable que no sea el resultado, asígnale uno de tres tipos:
 
-   Si la respuesta a (b) es sí, FAMILIA_CURVAS casi siempre enseña más que
-   CURVA_SIMPLE con slider: ver cuatro curvas simultáneas para valores distintos
-   del parámetro permite comparar directamente, mientras que un slider que
-   desplaza una sola curva obliga al alumno a recordar la posición anterior.
-   Usa CURVA_SIMPLE solo cuando no hay parámetro secundario relevante.
+   (D) DISCRETO/CATEGÓRICO — toma pocos valores con sentido físico propio
+       (material, tipo de apoyo, configuración, nº de etapas, n = 2/4/6...).
+       Variarlo de forma continua no aporta; comparar 2-4 casos sí.
+       → FAMILIA de curvas, NO slider.
+   (C) CONTINUO Y SENSIBLE — recorrer su rango pedagógico cambia la curva de
+       forma apreciable y cualitativa (no un simple reescalado). → SLIDER.
+   (F) IRRELEVANTE / FIJADO — lo fija el ejemplo del profesor, o variarlo apenas
+       mueve la curva (<~15% en el rango), o solo la reescala sin cambiar su
+       forma. → SIN control: queda constante.
 
-3. Clasifica la visualización eligiendo UNO de estos patrones:
+   TEST DE UTILIDAD DEL SLIDER (obligatorio para cada candidato a C):
+   antes de marcarlo como slider, comprueba que al ir de su mínimo a su máximo
+   la salida cambia de forma visible y con significado físico. Si solo reescala,
+   si el ejemplo lo fija o si el cambio es imperceptible → es F, no slider.
+   Ningún slider debe ser decorativo. Máximo 2 sliders.
 
-   - CURVA_SIMPLE: una variable dependiente, una independiente, sin parámetros
-     secundarios de peso. Usa este patrón solo cuando la relación tenga
-     exactamente dos variables y ningún parámetro que module la curva.
+3. ELIGE LA REPRESENTACIÓN QUE MÁS ENSEÑA (no la que "encaja" técnicamente,
+   sino la que aporta más valor pedagógico), según los tipos del paso 2:
+   - 0 parámetros D ni C   → CURVA_SIMPLE.
+   - 1 D, ningún C         → FAMILIA_CURVAS (2-4 curvas, sin sliders).
+   - 1-2 C, ningún D       → CURVA_SIMPLE con esos sliders.
+   - 1 D + 1-2 C           → elige lo de mayor valor pedagógico: si comparar los
+     casos discretos enseña más, FAMILIA_CURVAS y fija los C (a SLIDERS_DESCARTADOS);
+     si la exploración continua enseña más, CURVA_SIMPLE con sliders y fija el D
+     a un valor representativo. (El híbrido familia+sliders simultáneos aún no
+     está disponible: elige uno.)
+   Los patrones REGION_CRITERIO, MAPA_2D, TRAYECTORIA, RESPUESTA_FRECUENCIAL y
+   ANIMACION_MECANISMO se eligen por su criterio propio (abajo), no por este recuento.
 
-   - FAMILIA_CURVAS: una variable dependiente, una independiente, más uno o dos
-     parámetros que modulan la respuesta. Muestra 4 curvas simultáneas para
-     valores representativos del parámetro (mín, 33%, 66%, máx). El alumno ve
-     de golpe cómo cambia la relación al variar el parámetro, sin tener que
-     mover un slider y recordar. Preferir este patrón sobre CURVA_SIMPLE siempre
-     que exista un parámetro secundario físicamente significativo.
+   Definiciones de los patrones (elige UNO):
+
+   - CURVA_SIMPLE: una dependiente y una independiente. Úsalo cuando no haya
+     parámetro discreto (tipo D). Si hay 1-2 parámetros continuos útiles
+     (tipo C), van como sliders sobre esta curva.
+
+   - FAMILIA_CURVAS: una dependiente, una independiente y UN parámetro DISCRETO
+     o categórico (tipo D) que define 2-4 curvas con valores de sentido físico
+     (no continuo). El alumno compara los casos de golpe, sin mover un slider y
+     recordar. Indica ese parámetro y sus valores en PARAMETRO_FAMILIA, no en
+     PARAMETROS_SLIDER. No uses este patrón solo porque exista un parámetro
+     continuo: ese va como slider en CURVA_SIMPLE.
 
    - REGION_CRITERIO: la expresión define una frontera entre dos estados
      (seguro/falla, estable/inestable, válido/inválido). Plano dividido en zonas
@@ -166,9 +187,11 @@ INSTRUCCIONES:
      En este patrón EJE_X y EJE_Y no aplican (poner "n/a") y PARAMETROS_SLIDER
      son controles de la animación (p. ej. velocidad), no ejes.
 
-4. Identifica qué variables son los ejes principales (X, Y) y cuáles son
-   parámetros secundarios. Para FAMILIA_CURVAS, el parámetro secundario define
-   las 4 curvas — no va como slider individual sino como familia de líneas.
+4. Asigna las variables a los campos de salida: el eje X (variable
+   independiente principal) en EJE_X, el resultado en EJE_Y, el parámetro
+   DISCRETO (si lo hay) en PARAMETRO_FAMILIA con sus 2-4 valores, los parámetros
+   CONTINUOS útiles en PARAMETROS_SLIDER (solo símbolos de variable), y los
+   descartados (fijados o irrelevantes) en SLIDERS_DESCARTADOS con su motivo.
 
 5. Indica si algún eje requiere escala logarítmica (cuando los valores varían
    más de 2 órdenes de magnitud en el rango físico habitual).
@@ -180,7 +203,9 @@ INSTRUCCIONES:
   <PATRON>NOMBRE_DEL_PATRON</PATRON>
   <EJE_X>variable y unidades si se conocen</EJE_X>
   <EJE_Y>variable y unidades si se conocen</EJE_Y>
-  <PARAMETROS_SLIDER>lista separada por comas</PARAMETROS_SLIDER>
+  <PARAMETRO_FAMILIA>parámetro DISCRETO y 2-4 valores representativos (p. ej. "n: 2, 4, 6, 8" o "material: acero, aluminio, titanio"), o "ninguno"</PARAMETRO_FAMILIA>
+  <PARAMETROS_SLIDER>solo símbolos de variables CONTINUAS que pasan el test de utilidad, separados por comas; vacío si ninguno</PARAMETROS_SLIDER>
+  <SLIDERS_DESCARTADOS>variable: motivo por el que NO es slider (fijado por el ejemplo / reescala trivial / discreto→familia), una por línea; o "ninguno"</SLIDERS_DESCARTADOS>
   <ESCALA_LOG_X>SI/NO</ESCALA_LOG_X>
   <ESCALA_LOG_Y>SI/NO</ESCALA_LOG_Y>
   <JUSTIFICACION>una frase explicando la elección</JUSTIFICACION>
@@ -213,6 +238,17 @@ que haya un error de unidades — revisa y corrige antes de responder.
 Ejemplo: si d está en µm y k_y es una constante de Hall-Petch, el valor numérico de
 k_y en MPa·µm^0.5 es ~1000× mayor que en MPa·m^0.5. Usar el valor SI con d en µm
 produce una curva plana.
+
+EJEMPLOS DE CLASIFICACIÓN:
+- Hall-Petch σ_y = σ_0 + k_y/√d: d (tamaño de grano) es el eje X; k_y y σ_0 son
+  constantes del material — si el ejemplo las fija, tipo F. Salida: EJE_X="d",
+  PARAMETRO_FAMILIA="ninguno" (o "material: …" solo si el contexto compara
+  materiales explícitamente), PARAMETROS_SLIDER="", SLIDERS_DESCARTADOS=
+  "k_y: constante del material fijada por el ejemplo; sigma_0: ídem".
+- Caudal Q = 22.2·S·√(P_s+1.013)·√(P_i−P_s): P_i es el eje X; P_s es discreto y
+  define la familia (contrapresiones representativas); S solo reescala. Salida:
+  EJE_X="P_i", PARAMETRO_FAMILIA="P_s: 1, 3, 5, 7 bar", PARAMETROS_SLIDER="",
+  SLIDERS_DESCARTADOS="S: solo reescala el caudal, no cambia la forma".
 
 Si no hay suficiente información para determinar el patrón con confianza, usar CURVA_SIMPLE como fallback e indicarlo en JUSTIFICACION."""
 
@@ -401,6 +437,10 @@ CURVA_SIMPLE:
 
 FAMILIA_CURVAS:
   Chart.js multilínea, 4 curvas por parámetro (mín, 33%, 66%, máx).
+  Si DECISIÓN DE VISUALIZACIÓN trae PARÁMETRO DE FAMILIA con valores explícitos
+  (numéricos o categóricos), usa ESOS valores para las curvas y etiqueta cada
+  curva con su valor, en lugar de mín/33%/66%/máx. No generes sliders para las
+  variables listadas en "NO CREAR SLIDER".
   plugins.legend.display: false.
   Etiquetas inline: <span> position:absolute al final de cada familia de curvas
   (no por curva individual), calculadas con chart.getDatasetMeta() tras render.
@@ -880,7 +920,9 @@ def build_generador_message(
         f"  PATRÓN: {visualizacion.get('PATRON', 'CURVA_SIMPLE')}",
         f"  EJE_X: {visualizacion.get('EJE_X', '')}",
         f"  EJE_Y: {visualizacion.get('EJE_Y', '')}",
+        f"  PARÁMETRO DE FAMILIA (curvas discretas): {visualizacion.get('PARAMETRO_FAMILIA', 'ninguno')}",
         f"  PARÁMETROS SLIDER: {visualizacion.get('PARAMETROS_SLIDER', '')}",
+        f"  NO CREAR SLIDER para estas variables (fijar su valor; son no exploratorias): {visualizacion.get('SLIDERS_DESCARTADOS', 'ninguno')}",
         f"  ESCALA LOG X: {visualizacion.get('ESCALA_LOG_X', 'NO')}",
         f"  ESCALA LOG Y: {visualizacion.get('ESCALA_LOG_Y', 'NO')}",
         f"  JUSTIFICACIÓN: {visualizacion.get('JUSTIFICACION', '')}",
