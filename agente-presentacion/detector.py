@@ -70,6 +70,7 @@ _PATRONES_VALIDOS = frozenset({
     "MAPA_2D",
     "TRAYECTORIA",
     "RESPUESTA_FRECUENCIAL",
+    "ANIMACION_MECANISMO",
 })
 
 # ---------------------------------------------------------------------------
@@ -377,6 +378,8 @@ def _fallback_visualizacion(
         "EJE_X": eje_x,
         "EJE_Y": variable_salida.get("nombre", "Y"),
         "PARAMETROS_SLIDER": params,
+        "PARAMETRO_FAMILIA": "",
+        "SLIDERS_DESCARTADOS": "",
         "ESCALA_LOG_X": "NO",
         "ESCALA_LOG_Y": "NO",
         "JUSTIFICACION": justificacion,
@@ -404,6 +407,8 @@ def _parse_visualizacion(raw: str, elemento: dict) -> dict:
         "EJE_X": _extract_xml_tag(raw, "EJE_X") or "",
         "EJE_Y": _extract_xml_tag(raw, "EJE_Y") or "",
         "PARAMETROS_SLIDER": _extract_xml_tag(raw, "PARAMETROS_SLIDER") or "",
+        "PARAMETRO_FAMILIA": _extract_xml_tag(raw, "PARAMETRO_FAMILIA") or "",
+        "SLIDERS_DESCARTADOS": _extract_xml_tag(raw, "SLIDERS_DESCARTADOS") or "",
         "ESCALA_LOG_X": _extract_xml_tag(raw, "ESCALA_LOG_X") or "NO",
         "ESCALA_LOG_Y": _extract_xml_tag(raw, "ESCALA_LOG_Y") or "NO",
         "JUSTIFICACION": _extract_xml_tag(raw, "JUSTIFICACION") or "",

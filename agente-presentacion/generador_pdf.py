@@ -900,15 +900,15 @@ class _MarkdownFlowableParser(HTMLParser):
 # Cabecera (todas las páginas) y pie de página con total real (NumberedCanvas)
 # ---------------------------------------------------------------------------
 
-_CABECERA_ALTO = 1.2 * cm  # altura reservada desde el borde superior
+_CABECERA_ALTO = 1.5 * cm  # altura reservada desde el borde superior
 
 
 def _dibujar_cabecera(canvas, doc: BaseDocTemplate) -> None:
     """Cabecera institucional: logo UO (o fallback de texto) + asignatura.
 
-    El logo se dibuja con altura 1cm preservando proporción. Si el archivo
-    no está disponible o falla su lectura, fallback de texto — nunca se
-    lanza una excepción por este motivo.
+    El logo se dibuja con altura 1.25cm preservando proporción. Si el
+    archivo no está disponible o falla su lectura, fallback de texto —
+    nunca se lanza una excepción por este motivo.
     """
     canvas.saveState()
     borde_inferior = A4[1] - _CABECERA_ALTO
@@ -917,7 +917,7 @@ def _dibujar_cabecera(canvas, doc: BaseDocTemplate) -> None:
     if logo is not None:
         try:
             iw, ih = logo.getSize()
-            alto = 1.0 * cm
+            alto = 1.25 * cm
             ancho = iw * alto / ih if ih else alto
             canvas.drawImage(
                 logo,
@@ -936,7 +936,7 @@ def _dibujar_cabecera(canvas, doc: BaseDocTemplate) -> None:
             doc.leftMargin, borde_inferior + 0.45 * cm, _LOGO_FALLBACK_TEXTO
         )
 
-    canvas.setFont("Helvetica", 8)
+    canvas.setFont("Helvetica", 10)
     canvas.setFillColor(_AZUL)
     canvas.drawRightString(
         A4[0] - doc.rightMargin,
@@ -945,7 +945,7 @@ def _dibujar_cabecera(canvas, doc: BaseDocTemplate) -> None:
     )
 
     canvas.setStrokeColor(_AZUL)
-    canvas.setLineWidth(0.5)
+    canvas.setLineWidth(1.5)
     canvas.line(doc.leftMargin, borde_inferior,
                 A4[0] - doc.rightMargin, borde_inferior)
     canvas.restoreState()
