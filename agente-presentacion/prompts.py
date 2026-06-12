@@ -133,16 +133,38 @@ INSTRUCCIONES:
      tiempo y la expresión describe una respuesta dinámica. Magnitud y fase en
      escala logarítmica.
 
-   - ANIMACION_MECANISMO: el contenido describe un mecanismo o componente
-     físico cuyo funcionamiento se comprende viendo MOVERSE sus partes
-     (cilindro de doble efecto, biela-manivela, leva-seguidor, engranajes,
-     válvula de corredera). No es una relación a representar en ejes X/Y:
-     es un esquema en corte animado con uno o dos controles de la animación
-     (sentido o estado, y velocidad). Elegir SOLO cuando el valor pedagógico
-     está en ver el movimiento del mecanismo y la geometría de sus piezas, no
-     en explorar una curva paramétrica. En este patrón EJE_X y EJE_Y no aplican
-     (poner "n/a") y PARAMETROS_SLIDER son controles de la animación (p. ej.
-     velocidad), no ejes.
+   - ANIMACION_MECANISMO: el contenido describe un mecanismo, componente o
+     sistema físico cuyo funcionamiento se comprende viendo MOVERSE sus partes.
+     No es una relación a representar en ejes X/Y: es un esquema en corte
+     animado con uno o dos controles de la animación (sentido o estado, y
+     velocidad).
+     Señales léxicas en el NOMBRE o el CONTEXTO que apuntan a este patrón
+     (lista orientativa, no exhaustiva):
+       · Actuadores y fluidos: cilindro (simple/doble efecto), émbolo, pistón,
+         vástago, actuador (lineal/rotativo), válvula (de corredera,
+         distribuidora, direccional, antirretorno), bomba, compresor, motor
+         hidráulico/neumático, acumulador, cámara, lumbrera.
+       · Mecanismos y cinemática: biela-manivela, manivela, biela, leva,
+         seguidor, excéntrica, cigüeñal, balancín, cuadrilátero articulado,
+         cuatro barras, yugo escocés, cruz de Malta, trinquete,
+         piñón-cremallera, cremallera.
+       · Transmisión de potencia: engranaje(s), tren de engranajes, piñón,
+         corona, rueda dentada, polea, correa, cadena, husillo, tornillo sinfín,
+         rodamiento, cojinete, embrague, freno, acoplamiento, junta cardán.
+       · Verbos/adjetivos de movimiento: avanza, retrocede, gira, rota, oscila,
+         desliza, traslada, abre/cierra, sube/baja, entra/sale, vaivén;
+         alternativo, rotativo, lineal, recíproco.
+       · Sistemas y conjuntos: sistema o accionamiento hidráulico, neumático o
+         de transmisión; mecanismo; conjunto o componente móvil.
+     ESTAS PALABRAS SON INDICIOS, NO UN DISPARADOR AUTOMÁTICO. Elige el patrón
+     SOLO si el valor pedagógico está en VER el movimiento y la geometría de las
+     piezas, no en explorar una curva. La mera aparición de un término no basta:
+     p. ej. "sistema redundante", "disponibilidad del sistema" o "rigidez del
+     sistema" describen relaciones numéricas sin geometría que se mueva → usa
+     otro patrón. Ante un mecanismo cuya forma no puedas reconstruir con
+     seguridad desde el contexto, prefiere un patrón de curva.
+     En este patrón EJE_X y EJE_Y no aplican (poner "n/a") y PARAMETROS_SLIDER
+     son controles de la animación (p. ej. velocidad), no ejes.
 
 4. Identifica qué variables son los ejes principales (X, Y) y cuáles son
    parámetros secundarios. Para FAMILIA_CURVAS, el parámetro secundario define
