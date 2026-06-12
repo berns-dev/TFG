@@ -57,6 +57,10 @@ config.py           — Carga centralizada de .env; MODEL_FAST/MODEL_SMART;
                       MIN_LATEX_CHARS, MIN_VARIABLES_FOR_RELACION, CONTEXTO_CHARS
 requirements.txt    — anthropic, streamlit, reportlab, markdown,
                       matplotlib, python-dotenv, pdfplumber, python-pptx
+tools/razonador_fixture.py — debug CLI: ejecuta el razonador sobre casos
+                      canónicos (Hall-Petch, Q(P_i,P_s), Gay-Lussac, σ por
+                      material) y comprueba familia/sliders/descartados;
+                      consume API (--repeat N estabilidad). No es del pipeline.
 ```
 
 ---
@@ -116,13 +120,27 @@ El razonador evalúa primero el valor pedagógico del elemento antes de elegir p
 
 | Patrón | Criterio de selección | Tecnología |
 |---|---|---|
-| `CURVA_SIMPLE` | Una dependiente, una independiente, sin parámetros secundarios relevantes. Fallback por defecto. | Chart.js línea; escala log si el razonador lo indica |
-| `FAMILIA_CURVAS` | Una dependiente, una independiente, más uno o dos parámetros que modulan la respuesta. | Chart.js multilínea: 4 curvas para mín/33%/66%/máx del parámetro; activa en #185FA5, resto en #CCCCCC |
+| `CURVA_SIMPLE` | Una dependiente y una independiente, sin parámetro discreto; admite 1-2 sliders solo para parámetros continuos útiles. Fallback por defecto. | Chart.js línea; escala log si el razonador lo indica |
+| `FAMILIA_CURVAS` | Una dependiente, una independiente y un parámetro DISCRETO/categórico que define 2-4 curvas (`PARAMETRO_FAMILIA`). | Chart.js multilínea: curvas por los valores de la familia (explícitos si se dan); activa en #185FA5, resto en #CCCCCC |
 | `REGION_CRITERIO` | La expresión define una frontera entre dos estados (seguro/falla, válido/inválido). | Chart.js scatter: zonas verde/rojo con fill, punto móvil controlado por sliders |
 | `MAPA_2D` | Tres o más variables con peso comparable. | Canvas HTML5 nativo, grid 80×80, escala #185FA5 → blanco → #C0392B; sin Chart.js |
 | `TRAYECTORIA` | La expresión describe un proceso en un espacio de estados (P-V, T-S, tensión-deformación). | Chart.js scatter+línea; slider de progreso 0-100% |
 | `RESPUESTA_FRECUENCIAL` | Variable independiente es frecuencia o tiempo, respuesta dinámica. | Dos Chart.js apilados (magnitud y fase); eje X logarítmico |
 | `ANIMACION_MECANISMO` | El contenido describe un mecanismo cuyo funcionamiento se entiende viendo moverse sus piezas (cilindro de doble efecto, biela-manivela, leva). | SVG en corte animado (sin Chart.js); conjunto móvil en un `<g>` con translate; controles botón toggle + slider de velocidad; animación por `requestAnimationFrame` |
+
+**Clasificación de parámetros (decisión familia vs slider, anti-sliders decorativos):**
+Antes de elegir patrón, el razonador clasifica cada parámetro secundario (paso 2 de `PROMPT_RAZONADOR_VISUALIZACION`):
+- **(D) discreto/categórico** (material, configuración, n = 2/4/6…) → familia de curvas, no slider.
+- **(C) continuo y sensible** (recorrer su rango cambia la curva de forma apreciable, no un mero reescalado) → slider.
+- **(F) irrelevante/fijado** (lo fija el ejemplo, solo reescala, o cambio <~15 %) → sin control, queda constante.
+Un **test de utilidad del slider** (máx. 2 sliders) impide sliders decorativos: solo es C si variarlo cambia la salida de forma visible y con significado físico. El paso 3 elige la representación por **valor pedagógico** (árbol según nº de D/C), no por encaje técnico.
+
+**Campos XML del razonador** (parseados en ambas copias de `_parse_visualizacion` — `generador_html.py` y `detector.py`):
+- `PARAMETRO_FAMILIA`: parámetro discreto y sus 2-4 valores (numéricos o categóricos), o "ninguno".
+- `PARAMETROS_SLIDER`: solo símbolos de variables continuas que pasan el test de utilidad.
+- `SLIDERS_DESCARTADOS`: variables fijadas/irrelevantes con su motivo.
+
+`build_generador_message()` traslada `PARAMETRO_FAMILIA` al generador y emite la **orden dura "NO CREAR SLIDER"** para las descartadas; la instrucción `FAMILIA_CURVAS` de `PROMPT_GENERADOR_HTML` usa los valores explícitos de la familia. **Retrocompatibilidad:** respuestas sin estos tags → defaults `""` → comportamiento anterior. Validación: `tools/razonador_fixture.py`.
 
 ---
 
