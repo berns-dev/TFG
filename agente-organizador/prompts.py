@@ -37,10 +37,24 @@ def construir_prompt(
     textos_contexto: list[str],
     horas_totales: int = None,
     horas_laboratorio: int = 0,
+    subtemas_por_material: list[list[dict]] | None = None,
 ) -> tuple[str, str]:
     materiales_teoria_formateados = []
     for indice, texto in enumerate(textos_teoria, start=1):
-        materiales_teoria_formateados.append(f"=== TEORÍA {indice} ===\n{texto}")
+        bloque = f"=== TEORÍA {indice} ===\n{texto}"
+        if subtemas_por_material and indice - 1 < len(subtemas_por_material):
+            lista_sub = subtemas_por_material[indice - 1]
+            if lista_sub:
+                lineas_sub = "\n".join(
+                    f"- {s['nombre']} [{s['origen']}]" for s in lista_sub
+                )
+                bloque += (
+                    f"\n\nSUBTEMAS CONFIRMADOS PARA ESTA TEORÍA (lista cerrada):\n"
+                    f"{lineas_sub}\n"
+                    f"Usa EXACTAMENTE estos subtemas, en este orden, en la tabla del bloque "
+                    f"correspondiente. No añadas ni elimines ninguno."
+                )
+        materiales_teoria_formateados.append(bloque)
 
     materiales_contexto_formateados = []
     for indice, texto in enumerate(textos_contexto, start=1):
@@ -115,6 +129,35 @@ def construir_prompt(
         f"Si el recuento da un número distinto, reorganiza el output antes de enviarlo."
     )
 
+    instruccion_orden = (
+        f"RESTRICCIÓN DE ORDEN Y NUMERACIÓN — PRIORIDAD MÁXIMA:\n"
+        f"La guía docente define no solo cuántos bloques existen, sino también su\n"
+        f"ORDEN y su NUMERACIÓN. Debes respetar ambos exactamente.\n"
+        f"\n"
+        f"1. ORDEN DE APARICIÓN: Los bloques deben aparecer en el output en el MISMO\n"
+        f"   orden en que los temas figuran en la guía docente, de principio a fin.\n"
+        f"   El primer tema de la guía es el primer bloque del output; el último\n"
+        f"   tema de la guía es el último bloque del output.\n"
+        f"   NO ordenes los bloques por el orden de los materiales de teoría\n"
+        f"   (=== TEORÍA 1, 2, 3... ===): ese orden es accidental (depende de cómo\n"
+        f"   se subieron los archivos) y NO debe determinar el orden de los bloques.\n"
+        f"   El orden lo manda SIEMPRE la guía docente.\n"
+        f"\n"
+        f"2. NUMERACIÓN: Si la guía docente numera sus temas (por ejemplo 'Tema 3',\n"
+        f"   'Unidad 3', 'Bloque 3', 'Tema III'), el número N de cada '## Bloque N'\n"
+        f"   debe coincidir con el número que ese tema tiene en la guía docente,\n"
+        f"   convertido a cifra arábiga. Si la guía llama 'Tema 3' a un tema, su\n"
+        f"   encabezado debe ser '## Bloque 3 — ...', no el número de posición que\n"
+        f"   ocupe entre los materiales subidos.\n"
+        f"   Solo si la guía docente NO numera sus temas usarás una numeración\n"
+        f"   secuencial 1, 2, 3... siguiendo el orden de aparición en la guía.\n"
+        f"\n"
+        f"AUTOVERIFICACIÓN DE ORDEN ANTES DE RESPONDER:\n"
+        f"Recorre la guía docente de arriba abajo y comprueba que tus bloques\n"
+        f"aparecen en ese mismo orden y con ese mismo número de tema.\n"
+        f"Si algún bloque está fuera de orden o renumerado, corrígelo antes de enviar."
+    )
+
     idioma = detectar_idioma(textos_teoria)
     if idioma == "english":
         instruccion_idioma = (
@@ -128,12 +171,49 @@ def construir_prompt(
             "Debes escribir toda tu respuesta en español."
         )
 
+    if subtemas_por_material:
+        instruccion_subtemas = (
+            "2) Usa ÚNICAMENTE los subtemas listados bajo «SUBTEMAS CONFIRMADOS» en cada "
+            "material de teoría. No añadas, elimines ni renombres ninguno. Si un material "
+            "no tiene subtemas confirmados, indica [MATERIAL SIN SUBTEMAS] en la tabla."
+        )
+        formato_tabla_subtemas = (
+            "  | Subtema | Horas | Origen |\n"
+            "  |---------|-------|--------|\n"
+            "  | {subtema} | {horas} | {origen} |"
+        )
+        instruccion_columna_subtemas = (
+            "- La columna \"Origen\" copia exactamente el valor [Detectado] o [Manual] que "
+            "aparece junto a cada subtema en la lista «SUBTEMAS CONFIRMADOS» del material. "
+            "No modifiques estos valores.\n"
+            "- Estas reglas aplican igual en la primera generación y en todos los refinamientos."
+        )
+    else:
+        instruccion_subtemas = (
+            "2) Para cada bloque temático, identifica subtemas que aparezcan EXPLÍCITAMENTE "
+            "como títulos de sección o apartados en los materiales del profesor."
+        )
+        formato_tabla_subtemas = (
+            "  | Subtema | Horas | Justificación |\n"
+            "  |---------|-------|---------------|\n"
+            "  | {subtema} | {horas} | {una frase corta} |"
+        )
+        instruccion_columna_subtemas = (
+            "- La columna \"Justificación\" debe ser siempre una frase corta descriptiva "
+            "del contenido del subtema, nunca un párrafo.\n"
+            "- La \"Justificación\" nunca puede ser un conteo de páginas/slides ni una "
+            "referencia al material fuente (por ejemplo: \"2 páginas en teoría\", \"3 slides\", "
+            "\"según el PDF\").\n"
+            "- Estas reglas de formato, incluida la regla de \"Justificación\", aplican igual "
+            "en la primera generación y en todas las regeneraciones con feedback del profesor."
+        )
+
     prompt = f"""
 {instruccion_idioma}
 
 Instrucciones obligatorias:
 1) Identifica los bloques temáticos y sus horas SOLO a partir del texto de la guía docente.
-2) Para cada bloque temático, identifica subtemas que aparezcan EXPLÍCITAMENTE como títulos de sección o apartados en los materiales del profesor.
+{instruccion_subtemas}
 3) Distribuye las horas de cada bloque de forma proporcional entre sus subtemas según el número de slides o páginas dedicadas a cada subtema en los materiales.
 4) Si en los materiales no hay suficiente información para un bloque, indícalo de forma explícita.
 
@@ -159,6 +239,8 @@ identificar subtemas, indica explícitamente: [MATERIAL INSUFICIENTE].
 
 {instruccion_cardinalidad}
 
+{instruccion_orden}
+
 Formato de salida:
 - Devuelve el resultado en Markdown.
 - Debes seguir LITERALMENTE esta plantilla de salida (mismos encabezados, orden y estructura):
@@ -170,9 +252,7 @@ Formato de salida:
 
   ## Bloque {{N}} — {{NOMBRE_BLOQUE}} · {{HORAS_BLOQUE}}h
 
-  | Subtema | Horas | Justificación |
-  |---------|-------|---------------|
-  | {{subtema}} | {{horas}} | {{una frase corta}} |
+{formato_tabla_subtemas}
 
   *(repetir para cada bloque)*
 
@@ -182,12 +262,10 @@ Formato de salida:
 - No añadas ninguna sección fuera de esa plantilla.
 - Prohibido incluir: análisis previos, conteos de páginas/slides, cálculos intermedios, verificaciones finales, tablas de verificación, notas de ajuste o cualquier texto adicional.
 - El único contenido permitido es el que cabe dentro de la plantilla anterior.
-- La columna "Justificación" debe ser siempre una frase corta descriptiva del contenido del subtema, nunca un párrafo.
-- La "Justificación" nunca puede ser un conteo de páginas/slides ni una referencia al material fuente (por ejemplo: "2 páginas en teoría", "3 slides", "según el PDF").
+{instruccion_columna_subtemas}
 - Todos los valores numéricos de horas deben usar punto decimal (.) y nunca coma (,), tanto en las horas de subtemas como en las horas totales de cada bloque.
 - La suma de horas de todos los bloques debe ser EXACTAMENTE igual a las horas disponibles.
 - Si necesitas ajustar horas para cuadrar, hazlo internamente y no muestres esos ajustes en el output.
-- Estas reglas de formato, incluida la regla de "Justificación", aplican igual en la primera generación y en todas las regeneraciones con feedback del profesor.
 
 Texto de la guía docente:
 {texto_guia}

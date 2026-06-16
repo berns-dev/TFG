@@ -12,7 +12,13 @@ if str(_SUITE_ROOT) not in sys.path:
 from shared.ui_hero import render_hero
 
 from agente import ejecutar_agente
-from parser import clasificar_archivo, extraer_texto
+from parser import (
+    clasificar_archivo,
+    extraer_subtemas_candidatos,
+    extraer_texto,
+    hay_discrepancia,
+    normalizar_subtema,
+)
 from prompts import construir_prompt, construir_prompt_refinamiento
 
 
@@ -263,6 +269,7 @@ def normalizar_horas_output(markdown: str, total_horas: float) -> tuple[str, dic
     _CABECERAS = {
         "subtema", "topic", "horas", "hours",
         "justificación", "justificacion", "justification",
+        "origen", "origin",
     }
 
     lineas = markdown.splitlines(keepends=True)
@@ -397,6 +404,10 @@ if "warning_cardinalidad" not in st.session_state:
     st.session_state["warning_cardinalidad"] = None
 if "warning_normalizacion" not in st.session_state:
     st.session_state["warning_normalizacion"] = None
+if "subtemas_editor" not in st.session_state:
+    st.session_state["subtemas_editor"] = []
+if "fase" not in st.session_state:
+    st.session_state["fase"] = None
 
 
 def _validar_y_persistir(resultado: str, n_esperados: int, nombre_descarga: str | None = None) -> None:
@@ -415,10 +426,93 @@ def _validar_y_persistir(resultado: str, n_esperados: int, nombre_descarga: str 
         st.session_state["ultimo_nombre_descarga"] = nombre_descarga
 
 
+def extraer_y_detectar(guia_docente, materiales_teoria) -> bool:
+    """Fase 1: extrae texto y detecta candidatos de subtemas determinísticamente.
+    No llama al LLM. Almacena los datos del editor en session_state y pone
+    fase='editar' para que el área principal muestre el revisor de subtemas.
+    """
+    if guia_docente is None or not materiales_teoria:
+        st.error("Debes subir guía docente y materiales de teoría.")
+        return False
+
+    with st.status("Extrayendo y detectando subtemas...", expanded=True) as status:
+        try:
+            st.write("📄 Extrayendo texto de la guía docente...")
+            texto_guia = extraer_texto(guia_docente.getvalue(), guia_docente.name)
+            candidatos_guia = extraer_subtemas_candidatos(texto_guia)
+
+            st.write("📚 Extrayendo y clasificando materiales de teoría...")
+            textos_teoria_raw: list[str] = []
+            archivos_teoria: list[str] = []
+            archivos_contexto: list[str] = []
+
+            for archivo in materiales_teoria:
+                try:
+                    texto_material = extraer_texto(archivo.getvalue(), archivo.name)
+                    categoria = clasificar_archivo(archivo.name, texto_material)
+                    if categoria == "contexto":
+                        archivos_contexto.append(archivo.name)
+                        st.write(f"  → {archivo.name} → contexto")
+                    else:
+                        textos_teoria_raw.append(texto_material)
+                        archivos_teoria.append(archivo.name)
+                        st.write(f"  → {archivo.name} → teoría")
+                except Exception as error_archivo:
+                    st.warning(f"No se pudo procesar '{archivo.name}': {error_archivo}")
+
+            if not textos_teoria_raw:
+                status.update(label="❌ Error", state="error")
+                st.error("No se pudo extraer texto válido de ningún material de teoría.")
+                return False
+
+            st.write("🔍 Detectando subtemas por numeración jerárquica...")
+            editor_data: list[dict] = []
+            for texto_mat, nombre_arch in zip(textos_teoria_raw, archivos_teoria):
+                cands_mat = extraer_subtemas_candidatos(texto_mat)
+                if cands_mat:
+                    candidatos = cands_mat
+                    origen_base = "material"
+                    discrepancia = hay_discrepancia(cands_mat, candidatos_guia)
+                elif candidatos_guia:
+                    candidatos = candidatos_guia
+                    origen_base = "guia"
+                    discrepancia = False
+                else:
+                    candidatos = []
+                    origen_base = "ninguno"
+                    discrepancia = False
+                editor_data.append({
+                    "archivo": nombre_arch,
+                    "candidatos": candidatos,
+                    "candidatos_mat_orig": cands_mat,
+                    "origen": origen_base,
+                    "discrepancia": discrepancia,
+                })
+
+            # Detectar horas ya en fase 1 para que el expander esté disponible.
+            horas_docencia = extraer_horas_docencia(texto_guia)
+            st.session_state["ultimas_horas_teoria"] = horas_docencia
+            st.session_state["ultimos_archivos_teoria"] = archivos_teoria
+            st.session_state["ultimos_archivos_contexto"] = archivos_contexto
+            st.session_state["subtemas_editor"] = editor_data
+            st.session_state["fase"] = "editar"
+
+            status.update(
+                label="✅ Subtemas detectados — revisa y confirma en el área principal",
+                state="complete",
+            )
+            return True
+        except Exception as error:
+            status.update(label="❌ Error en la extracción", state="error")
+            st.error(f"Error durante la extracción: {error}")
+            return False
+
+
 def generar_organizacion(
     guia_docente,
     materiales_teoria,
     feedback_previo: list[str] | None = None,
+    subtemas_confirmados: list[list[dict]] | None = None,
 ) -> bool:
     # ── Camino rápido: refinamiento sobre output existente ────────────────────
     # Se activa cuando hay feedback Y ya existe un output previo válido.
@@ -523,6 +617,7 @@ def generar_organizacion(
                 textos_contexto=textos_contexto,
                 horas_totales=horas_totales if horas_totales > 0 else None,
                 horas_laboratorio=horas_laboratorio,
+                subtemas_por_material=subtemas_confirmados,
             )
 
             st.write("🤖 Consultando al agente (esto puede tardar ~15s)...")
@@ -609,15 +704,18 @@ with st.sidebar:
         st.session_state["iteracion"] = 1
         st.session_state["warning_cardinalidad"] = None
         st.session_state["warning_normalizacion"] = None
+        st.session_state["subtemas_editor"] = []
+        st.session_state["fase"] = None
         st.session_state["session_id_archivos"] = session_id_actual
 
     puede_generar = guia_docente is not None and len(materiales_teoria or []) > 0
 
     if st.button("Generar organización", disabled=not puede_generar, use_container_width=True):
-        # Se reinicia el ciclo de refinamiento cuando se genera una nueva versión base.
         st.session_state["historial_feedback"] = []
         st.session_state["iteracion"] = 1
-        if generar_organizacion(guia_docente, materiales_teoria):
+        st.session_state["ultimo_output"] = None
+        st.session_state["fase"] = None
+        if extraer_y_detectar(guia_docente, materiales_teoria):
             st.rerun()
 
 
@@ -633,7 +731,7 @@ render_hero(
     button_full_width=True,
 )
 
-if st.session_state["ultimo_output"] is None:
+if st.session_state["ultimo_output"] is None and st.session_state.get("fase") != "editar":
     st.info("Sube los archivos en el panel izquierdo y pulsa **Generar organización** para comenzar.")
 
 with st.expander("⏱️ Validación de horas detectadas", expanded=False):
@@ -675,6 +773,78 @@ if st.session_state["ultimos_archivos_teoria"] or st.session_state["ultimos_arch
                 st.write("Sin archivos clasificados como contexto.")
 
 st.divider()
+
+# ── Editor de subtemas (fase 1 → fase 2) ─────────────────────────────────────
+if st.session_state.get("fase") == "editar" and st.session_state["ultimo_output"] is None:
+    editor_data = st.session_state.get("subtemas_editor", [])
+    if editor_data:
+        st.markdown("### Subtemas detectados — revisa y confirma")
+        st.caption(
+            "Los subtemas se han detectado por numeración jerárquica en los materiales "
+            "(ej. '3.2. Título'). Edita la lista antes de generar la propuesta."
+        )
+
+        for i, bloque_info in enumerate(editor_data):
+            nombre_archivo = bloque_info["archivo"]
+            candidatos = bloque_info["candidatos"]
+            discrepancia = bloque_info.get("discrepancia", False)
+
+            st.markdown(
+                f'<div style="font-family:\'DM Sans\',sans-serif; font-size:13px; '
+                f'font-weight:500; margin:16px 0 4px 0; color:var(--text-color);">'
+                f'Material {i + 1}: <code>{nombre_archivo}</code></div>',
+                unsafe_allow_html=True,
+            )
+
+            if discrepancia:
+                st.warning(
+                    "⚠️ La guía docente y el material discrepan en los subtemas de este "
+                    "archivo. Se ha usado la lista del material como base — revísala."
+                )
+
+            if not candidatos:
+                st.info(
+                    "No se detectó numeración de subtemas en este material. "
+                    "Indica manualmente los subtemas del bloque (uno por línea)."
+                )
+
+            st.text_area(
+                "Subtemas (uno por línea):",
+                value="\n".join(candidatos),
+                key=f"subtemas_ta_{i}",
+                height=max(100, min(300, 30 * len(candidatos) + 60)),
+            )
+
+        st.divider()
+        if st.button(
+            "Confirmar subtemas y generar propuesta",
+            type="primary",
+            use_container_width=True,
+        ):
+            subtemas_confirmados: list[list[dict]] = []
+            for i, bloque_info in enumerate(editor_data):
+                ta_valor = st.session_state.get(f"subtemas_ta_{i}", "")
+                lineas = [l.strip() for l in ta_valor.splitlines() if l.strip()]
+                cands_orig_norm = {
+                    normalizar_subtema(c)
+                    for c in bloque_info.get("candidatos_mat_orig", [])
+                }
+                lista: list[dict] = []
+                for linea in lineas:
+                    origen = (
+                        "Detectado"
+                        if normalizar_subtema(linea) in cands_orig_norm
+                        else "Manual"
+                    )
+                    lista.append({"nombre": linea, "origen": origen})
+                subtemas_confirmados.append(lista)
+
+            if generar_organizacion(
+                guia_docente,
+                materiales_teoria,
+                subtemas_confirmados=subtemas_confirmados,
+            ):
+                st.rerun()
 
 if st.session_state["ultimo_output"]:
     w = st.session_state.get("warning_cardinalidad")
