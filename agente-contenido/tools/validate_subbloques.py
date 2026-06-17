@@ -82,14 +82,10 @@ ORG_MD_FALLBACK = """\
 
 def test_parseo_org_md() -> None:
     print("\n[1] Parseo del .md del Agente Organizador")
-    # Import aquí para no depender del entorno Streamlit
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "app",
-        Path(__file__).resolve().parent.parent / "app.py",
-    )
-    # Solo necesitamos las funciones de parseo; importamos directamente
-    from app import parse_organization_md  # type: ignore[import]
+    _org_root = Path(__file__).resolve().parent.parent.parent / "agente-organizador"
+    if str(_org_root) not in sys.path:
+        sys.path.insert(0, str(_org_root))
+    from parser import parse_organization_md
 
     bloques = parse_organization_md(ORG_MD_4COL + "\n" + ORG_MD_3COL + "\n" + ORG_MD_FALLBACK)
 
@@ -102,7 +98,8 @@ def test_parseo_org_md() -> None:
 
     sb1 = b1["subbloques"][0]
     check("Sub1 nombre", sb1["nombre"] == "Defectos y dislocaciones")
-    check("Sub1 horas", sb1["horas"] == 3.0)
+    # Horas por subtema: el parser unificado deja 0.0 (solo aplica a nivel de bloque).
+    check("Sub1 horas (bloque aplica densidad)", sb1["horas"] == 0.0)
     check("Sub1 evidencia", sb1["evidencia"] == "Sección 3.1")
     check("Sub1 origen", sb1["origen"] == "Detectado")
 

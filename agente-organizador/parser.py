@@ -1015,6 +1015,30 @@ def parsear_bloques_organizador(markdown: str) -> list[dict]:
     return bloques
 
 
+def parse_organization_md(content: str) -> list[dict]:
+    """Adapta `parsear_bloques_organizador` al formato del Agente Contenido.
+
+    Fuente de verdad única: `parsear_bloques_organizador`. Esta función solo
+    renombra claves (`subtemas` → `subbloques`) para el standalone de Contenido.
+    """
+    return [
+        {
+            "nombre": bloque["nombre"],
+            "horas": bloque["horas"],
+            "subbloques": [
+                {
+                    "nombre": subtema["nombre"],
+                    "horas": subtema.get("horas", 0.0),
+                    "evidencia": subtema.get("evidencia", ""),
+                    "origen": subtema.get("origen", ""),
+                }
+                for subtema in bloque["subtemas"]
+            ],
+        }
+        for bloque in parsear_bloques_organizador(content)
+    ]
+
+
 def detectar_output_truncado(markdown: str, stop_reason: str | None = None) -> dict | None:
     """Detecta si el Markdown de organización quedó incompleto o truncado.
 

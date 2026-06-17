@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sys
 import tempfile
 from collections import Counter
@@ -15,7 +14,12 @@ _SUITE_ROOT = Path(__file__).resolve().parent.parent
 if str(_SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SUITE_ROOT))
 
+_ORG_ROOT = _SUITE_ROOT / "agente-organizador"
+if str(_ORG_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ORG_ROOT))
+
 from shared.ui_hero import render_hero
+from parser import parse_organization_md
 
 from assembler import (
     assemble_block_with_subbloques,
@@ -33,14 +37,6 @@ from subblock_state import SubbloqueResult, calcular_progreso_bloque
 from validator import validate_items
 
 
-# ── Parseo del .md del Agente Organizador ────────────────────────────────────
-
-_BLOCK_HEADER_RE = re.compile(
-    r"^##\s+Bloque\s+\d+\s+—\s+(.+?)\s*·\s*([\d,.]+)h",
-    re.MULTILINE,
-)
-_TABLE_SEPARATOR_RE = re.compile(r"^\|[\s|:-]+\|$")
-
 # Valores de evidencia que indican ausencia de señal estructural verificable.
 # Se replican aquí (en lugar de importar _FALLBACK_EVIDENCIAS de segmentor) para
 # mantener la UI independiente de detalles privados del módulo de segmentación.
@@ -48,107 +44,6 @@ _EVIDENCIAS_FALLBACK = frozenset({
     "sin señal verificable", "sin senal verificable",
     "fallback", "sin señal", "sin senal", "",
 })
-
-
-def _parse_subbloques_table(section: str) -> list[dict]:
-    """Parsea la tabla de subbloques de la sección de un bloque.
-
-    Soporta tablas con 4 columnas (flujo normal):
-        | Subtema | Horas | Evidencia | Origen |
-    y con 3 columnas (tras edición manual sin evidencia):
-        | Subtema | Horas | Origen |
-    """
-    lines = section.strip().split("\n")
-
-    # Buscar fila de cabecera de la tabla
-    header_idx = None
-    for i, ln in enumerate(lines):
-        stripped = ln.strip()
-        if stripped.startswith("|") and "subtema" in stripped.lower():
-            header_idx = i
-            break
-
-    if header_idx is None:
-        return []
-
-    # Determinar columnas por nombre
-    raw_header = lines[header_idx].strip().strip("|")
-    header_cells = [c.strip().lower() for c in raw_header.split("|")]
-
-    col_nombre = next((i for i, h in enumerate(header_cells) if "subtema" in h), None)
-    col_horas = next((i for i, h in enumerate(header_cells) if "hora" in h), None)
-    col_evidencia = next((i for i, h in enumerate(header_cells) if "evidencia" in h), None)
-    col_origen = next((i for i, h in enumerate(header_cells) if "origen" in h), None)
-
-    if col_nombre is None:
-        return []
-
-    subbloques: list[dict] = []
-    for ln in lines[header_idx + 1 :]:
-        stripped = ln.strip()
-        if not stripped.startswith("|"):
-            break  # fin de la tabla
-        if _TABLE_SEPARATOR_RE.match(stripped):
-            continue  # fila separadora
-
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
-
-        nombre = cells[col_nombre] if col_nombre < len(cells) else ""
-        if not nombre or nombre == "---":
-            continue
-
-        horas_raw = cells[col_horas] if col_horas is not None and col_horas < len(cells) else "0"
-        try:
-            horas = float(horas_raw.replace(",", "."))
-        except ValueError:
-            horas = 0.0
-
-        evidencia = (
-            cells[col_evidencia]
-            if col_evidencia is not None and col_evidencia < len(cells)
-            else ""
-        )
-        origen = (
-            cells[col_origen]
-            if col_origen is not None and col_origen < len(cells)
-            else ""
-        )
-
-        subbloques.append(
-            {"nombre": nombre, "horas": horas, "evidencia": evidencia, "origen": origen}
-        )
-
-    return subbloques
-
-
-def parse_organization_md(content: str) -> list[dict]:
-    """Extrae bloques (con sus subbloques) de un .md del Agente Organizador.
-
-    Formato bloque canónico (prompts.py del Organizador):
-        ## Bloque N — Nombre del bloque · Xh
-
-    Devuelve lista de dicts con 'nombre' (sin prefijo «Bloque N —»), 'horas'
-    y 'subbloques' (lista de dicts con nombre, horas, evidencia, origen).
-    """
-    bloques: list[dict] = []
-    matches = list(_BLOCK_HEADER_RE.finditer(content))
-
-    for i, m in enumerate(matches):
-        nombre = m.group(1).strip()
-        horas_str = m.group(2).replace(",", ".")
-        try:
-            horas = float(horas_str)
-        except ValueError:
-            horas = 0.0
-
-        block_start = m.end()
-        block_end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
-        block_section = content[block_start:block_end]
-
-        subbloques = _parse_subbloques_table(block_section)
-        bloques.append({"nombre": nombre, "horas": horas, "subbloques": subbloques})
-
-    return bloques
 
 
 # ── Pipeline por subbloque ────────────────────────────────────────────────────
