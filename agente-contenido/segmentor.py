@@ -9,7 +9,9 @@ para localizar las fronteras en el texto extraído. Las evidencias pueden ser:
 
 from __future__ import annotations
 
+import difflib
 import re
+import unicodedata
 
 _SLIDE_EVIDENCIA_RE = re.compile(r"Slide\s+(\d+)", re.IGNORECASE)
 _SECCION_EVIDENCIA_RE = re.compile(r"Secci[oó]n\s+([\d.]+)", re.IGNORECASE)
@@ -23,8 +25,53 @@ _FALLBACK_EVIDENCIAS = frozenset(
         "sin señal",
         "sin senal",
         "",
+        "—",
+        "-",
+        "–",
     }
 )
+
+
+def _evidencia_es_vacia(evidencia: str) -> bool:
+    return (evidencia or "").strip().lower() in _FALLBACK_EVIDENCIAS
+
+
+def _normalize_title(texto: str) -> str:
+    s = (texto or "").lower()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-z0-9 ]", " ", s).strip()
+
+
+def _find_boundary_by_title(text: str, nombre: str, min_ratio: float = 0.85) -> int | None:
+    """Localiza un encabezado por coincidencia con el nombre del sub-bloque.
+
+    Solo se usa como red de seguridad cuando no hay evidencia estructural.
+    Devuelve None si hay cero o varias coincidencias ambiguas.
+    """
+    target = _normalize_title(nombre)
+    if len(target) < 4:
+        return None
+
+    candidatos: list[tuple[int, float]] = []
+    for m in re.finditer(r"^(.+)$", text, re.MULTILINE):
+        line = m.group(1).strip()
+        if not line or len(line) > 150:
+            continue
+        norm = _normalize_title(line)
+        if not norm:
+            continue
+        ratio = difflib.SequenceMatcher(None, norm, target).ratio()
+        if ratio >= min_ratio:
+            candidatos.append((m.start(), ratio))
+
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda x: x[1], reverse=True)
+    mejor_pos, mejor_ratio = candidatos[0]
+    if len(candidatos) > 1 and candidatos[1][1] >= min_ratio - 0.05:
+        return None
+    return mejor_pos if mejor_ratio >= min_ratio else None
 
 
 def _find_boundary_in_text(text: str, evidencia: str) -> int | None:
@@ -90,6 +137,8 @@ def segment_text_by_subbloques(
     for i, sb in enumerate(subbloques):
         ev = sb.get("evidencia", "")
         pos = _find_boundary_in_text(clean, ev)
+        if pos is None and _evidencia_es_vacia(ev):
+            pos = _find_boundary_by_title(clean, sb.get("nombre", ""))
         if pos is not None:
             found_boundaries.append((i, pos))
 

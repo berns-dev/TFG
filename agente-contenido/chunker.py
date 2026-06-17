@@ -23,7 +23,7 @@ def _ensure_chunker_audit_handler() -> None:
 _ensure_chunker_audit_handler()
 
 
-_NUMBERED_HEADER_RE = re.compile(r"^\d+(?:\.\d+)*\.\s+\S")
+_NUMBERED_HEADER_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
 _PAGE_SLIDE_HEADER_RE = re.compile(r"^\[(?:PAGINA|SLIDE)\s+\d+\]")
 _SENTENCE_END_RE = re.compile(r'[.!?]["\'\)]*(?:\s|$)')
 _SECTION_KEYWORDS = (
