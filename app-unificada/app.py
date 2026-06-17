@@ -1939,15 +1939,12 @@ def _org_sync_widgets_a_bloques(iter_key: int) -> bool:
                 changed = True
         for idx_s, sub in enumerate(bloque.get("subtemas", [])):
             k_s = f"org_sn_{idx_b}_{idx_s}_{iter_key}"
-            k_ok = f"org_ok_{idx_b}_{idx_s}_{iter_key}"
             if k_s in st.session_state:
                 v = st.session_state[k_s].strip()
                 if v and v != sub["nombre"]:
                     sub["nombre"] = v
                     sub["manual"] = True
                     changed = True
-            if k_ok in st.session_state:
-                sub["aprobado"] = bool(st.session_state[k_ok])
     if changed:
         st.session_state["org_organizacion_bloques"] = bloques
     return changed
@@ -1972,10 +1969,23 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
         st.markdown(
             """
             <style>
-            div[data-testid="stCheckbox"] input[type="checkbox"] {
-                accent-color: #16a34a;
-                width: 1.15rem;
-                height: 1.15rem;
+            button[title="Aprobar subbloque"][kind="primary"] {
+                background-color: #16a34a !important;
+                color: #fff !important;
+                border-color: #15803d !important;
+            }
+            button[title="Aprobar subbloque"][kind="primary"]:hover {
+                background-color: #15803d !important;
+                border-color: #166534 !important;
+            }
+            button[title="Aprobar subbloque"][kind="secondary"] {
+                background-color: #ecfdf5 !important;
+                color: #166534 !important;
+                border: 1px solid #86efac !important;
+            }
+            button[title="Aprobar subbloque"][kind="secondary"]:hover {
+                background-color: #d1fae5 !important;
+                border-color: #4ade80 !important;
             }
             button[title="Eliminar subtema"],
             button[title="Eliminar bloque"] {
@@ -2075,12 +2085,18 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                     st.caption(evidencia)
                 if editable:
                     with r3:
-                        st.checkbox(
-                            "Aprobar",
-                            value=sub.get("aprobado", False),
+                        aprobado = sub.get("aprobado", False)
+                        if st.button(
+                            "✓",
                             key=f"org_ok_{idx_b}_{idx_s}_{iter_key}",
-                            label_visibility="collapsed",
-                        )
+                            help="Aprobar subbloque",
+                            type="primary" if aprobado else "secondary",
+                        ):
+                            _org_sync_widgets_a_bloques(iter_key)
+                            st.session_state["org_organizacion_bloques"][idx_b]["subtemas"][idx_s][
+                                "aprobado"
+                            ] = not aprobado
+                            st.rerun()
                     with r4:
                         if st.button(
                             "✕",
