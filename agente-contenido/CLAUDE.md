@@ -147,6 +147,8 @@ Subbloques cuya evidencia no se localiza en el texto reciben segmento vacío y e
 - Un único subbloque (incluido el fallback "Sin señal verificable"): recibe todo el texto. ✓
 - Sin ningún boundary encontrado: primer subbloque recibe todo el texto; resto vacíos. ✓
 - Los boundaries se ordenan por posición en el texto (defensivo). ✓
+- Cuando un subbloque queda vacío por boundary no encontrado (evidencia no-fallback),
+  `app.py` emite `st.warning()` indicando el nombre del subbloque y la referencia buscada. ✓
 
 ---
 
@@ -207,6 +209,26 @@ import re
 inicios = re.findall(r'<!-- SUBBLOQUE_INICIO: (.*?) -->', md)
 cuerpos = re.findall(r'<!-- SUBBLOQUE_INICIO:.*?-->\s*(.*?)\s*<!-- SUBBLOQUE_FIN:.*?-->', md, re.DOTALL)
 ```
+
+### Contrato del frontmatter — campos presentes por pipeline
+
+| Campo | Pipeline con subbloques | Pipeline clásico |
+|---|---|---|
+| `archivo_origen` | ✓ siempre | ✓ siempre |
+| `idioma` | ✓ siempre | ✓ siempre |
+| `fecha_procesado` | ✓ siempre | ✓ siempre |
+| `compatible_agente_organizador` | ✓ siempre | ✓ siempre |
+| `bloque` | ✓ siempre | — ausente |
+| `bloque_horas` | ✓ siempre | — ausente |
+| `total_subbloques` | ✓ siempre | **— ausente** |
+| `tipo_documento` | — ausente | ✓ siempre |
+| `tema_detectado` | — ausente | ✓ siempre |
+
+**`total_subbloques` es un campo opcional** — solo está presente cuando el bloque se
+procesó con la pipeline de subbloques (bloque_subbloques disponible desde el .md del
+Organizador). El pipeline clásico produce un frontmatter distinto con `tipo_documento`
+y `tema_detectado`. Cualquier código que consuma el Markdown de este agente **debe
+comprobar la presencia de `total_subbloques` antes de usarlo**, sin asumir que existe.
 
 ---
 
@@ -370,7 +392,7 @@ sección `##` **una sola vez**, en orden canónico fijo. Reglas:
 2. **Subíndices químicos:** `pdfplumber` pierde subíndices (ZrO₂ → "ZrO"). Limitación de la biblioteca.
 3. **Chunking en posición no ideal:** `[TEXTO_ILEGIBLE]` puede aparecer por partición a mitad de contexto, no por fallo de extracción.
 4. **Rate limit 429 Haiku:** concurrencia puede agotar el límite de 10.000 tokens output/min de Haiku con muchos chunks. No es bug del agente.
-5. **Segmentación parcial:** si la evidencia de un subbloque no se encuentra en el texto (p. ej., las señales estructurales del material no coinciden exactamente con las del Organizador), ese subbloque queda con estado `pendiente` y texto vacío. El profesor puede editarlo manualmente.
+5. **Segmentación parcial:** si la evidencia de un subbloque no se encuentra en el texto (p. ej., las señales estructurales del material no coinciden exactamente con las del Organizador), ese subbloque queda con estado `pendiente` y texto vacío. La UI emite un `st.warning()` indicando qué referencia concreta no se localizó. El profesor puede editarlo manualmente.
 
 ---
 
