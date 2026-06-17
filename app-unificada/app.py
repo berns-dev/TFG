@@ -50,6 +50,15 @@ TITULOS_SECCION = {
     "Base de datos": "Base de datos",
 }
 
+ICONOS_VISTA = {
+    "Resumen": "📊",
+    "Inputs": "📁",
+    "Organizador": "🗂️",
+    "Contenido": "📝",
+    "Presentación": "🎨",
+    "Base de datos": "🗄️",
+}
+
 # =============================================================================
 # Carga aislada de los módulos de los tres agentes vía importlib
 #
@@ -2609,20 +2618,31 @@ st.markdown(
         color: var(--text-color); opacity: 0.5;
         letter-spacing: 0.12em; text-transform: uppercase;
     }}
-    .nav-item {{
-        display: flex; align-items: center; gap: 10px; padding: 4px 0;
-        font-family: 'DM Sans', sans-serif;
+    section[data-testid="stSidebar"] div[data-testid="stRadio"] > div[role="radiogroup"] {{
+        display: flex !important; flex-direction: column !important; gap: 2px !important;
     }}
-    .nav-item .marker {{
-        width: 22px; height: 22px; border-radius: 50%;
-        border: 1.5px solid {ACENTO};
-        display: flex; align-items: center; justify-content: center;
-        font-size: 11px; font-weight: 500; color: {ACENTO};
-        flex-shrink: 0; background: transparent;
+    section[data-testid="stSidebar"] div[data-testid="stRadio"] input[type="radio"] {{
+        display: none !important;
     }}
-    .nav-item.activo .marker {{ background: {ACENTO}; color: #FFFFFF; }}
-    .nav-item .label {{ font-size: 13px; color: var(--text-color); opacity: 0.75; }}
-    .nav-item.activo .label {{ opacity: 1; font-weight: 500; }}
+    section[data-testid="stSidebar"] div[data-testid="stRadio"] label {{
+        display: flex !important; align-items: center !important;
+        padding: 9px 12px !important; border-radius: 8px !important;
+        background: transparent !important; border: none !important;
+        width: 100% !important; cursor: pointer !important;
+        font-family: 'DM Sans', sans-serif !important; font-size: 13px !important;
+        color: var(--text-color) !important; opacity: 0.65;
+        font-weight: 400 !important; margin: 0 !important;
+    }}
+    section[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {{
+        background: rgba(24, 95, 165, 0.06) !important; opacity: 1 !important;
+    }}
+    section[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) {{
+        background: rgba(24, 95, 165, 0.10) !important; color: {ACENTO} !important;
+        opacity: 1 !important; font-weight: 500 !important;
+    }}
+    section[data-testid="stSidebar"] div[data-testid="stRadio"] label p {{
+        margin: 0 !important; line-height: 1.4 !important;
+    }}
     .file-chip {{
         display: inline-block; padding: 3px 10px; margin: 2px 4px 2px 0;
         border-radius: 12px; background: rgba(24, 95, 165, 0.08);
@@ -2680,16 +2700,13 @@ with st.sidebar:
     if "vista_actual" not in st.session_state:
         st.session_state["vista_actual"] = VISTAS[0]
 
-    vista = st.radio("Navegación", VISTAS, key="vista_actual", label_visibility="collapsed")
-
-    st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
-    for idx, nombre in enumerate(VISTAS, start=1):
-        clase = "nav-item activo" if nombre == vista else "nav-item"
-        st.markdown(
-            f'<div class="{clase}"><div class="marker">{idx}</div>'
-            f'<div class="label">{nombre}</div></div>',
-            unsafe_allow_html=True,
-        )
+    vista = st.radio(
+        "Navegación",
+        VISTAS,
+        key="vista_actual",
+        label_visibility="collapsed",
+        format_func=lambda v: f"{ICONOS_VISTA.get(v, '·')} {v}",
+    )
 
 
 # =============================================================================
