@@ -376,6 +376,7 @@ _ORG_KEYS: dict[str, object] = {
     "org_ultimo_nombre_descarga": "Propuesta_asignatura.md",
     "org_warning_cardinalidad": None,
     "org_warning_normalizacion": None,
+    "org_warning_truncamiento": None,
     "org_subtemas_editor": [],
     "org_fase": None,
     "org_ejecucion_id": None,
@@ -683,7 +684,10 @@ def _org_generar_organizacion(
                     horas_totales=horas_totales,
                 )
                 st.write("🤖 Aplicando ajuste sobre la organización actual...")
-                resultado = _org_agente.ejecutar_agente(prompt)
+                resultado, stop_reason = _org_agente.ejecutar_agente(prompt)
+                st.session_state["org_warning_truncamiento"] = _org_parser.detectar_output_truncado(
+                    resultado, stop_reason
+                )
                 resultado, info_norm = _org_parser.normalizar_horas_output(resultado, horas_totales or 0)
                 st.session_state["org_warning_normalizacion"] = info_norm
 
@@ -777,7 +781,10 @@ def _org_generar_organizacion(
             )
 
             st.write("🤖 Consultando al agente (esto puede tardar ~15s)...")
-            resultado = _org_agente.ejecutar_agente(prompt)
+            resultado, stop_reason = _org_agente.ejecutar_agente(prompt)
+            st.session_state["org_warning_truncamiento"] = _org_parser.detectar_output_truncado(
+                resultado, stop_reason
+            )
 
             resultado, info_norm = _org_parser.normalizar_horas_output(resultado, horas_totales if horas_totales else 0)
             st.session_state["org_warning_normalizacion"] = info_norm
@@ -1922,140 +1929,212 @@ def _render_stepper(pasos: list[str], paso_actual: int) -> None:
 # Vista Organizador
 # =============================================================================
 
-def _org_render_editor_manual(slug: str) -> None:
-    """Editor manual de bloques y subbloques (añadir/eliminar por botones).
+def _org_sync_widgets_a_bloques(iter_key: int) -> bool:
+    """Lee los widgets de edición y actualiza org_organizacion_bloques. Devuelve True si hubo cambios."""
+    bloques = st.session_state.get("org_organizacion_bloques", [])
+    changed = False
+    for idx_b, bloque in enumerate(bloques):
+        k_n = f"org_bn_{idx_b}_{iter_key}"
+        k_h = f"org_bh_{idx_b}_{iter_key}"
+        if k_n in st.session_state:
+            v = st.session_state[k_n].strip()
+            if v and v != bloque["nombre"]:
+                bloque["nombre"] = v
+                changed = True
+        if k_h in st.session_state:
+            v = float(st.session_state[k_h])
+            if abs(v - float(bloque.get("horas", 0))) > 0.001:
+                bloque["horas"] = v
+                changed = True
+        for idx_s, sub in enumerate(bloque.get("subtemas", [])):
+            k_s = f"org_sn_{idx_b}_{idx_s}_{iter_key}"
+            k_ok = f"org_ok_{idx_b}_{idx_s}_{iter_key}"
+            if k_s in st.session_state:
+                v = st.session_state[k_s].strip()
+                if v and v != sub["nombre"]:
+                    sub["nombre"] = v
+                    sub["manual"] = True
+                    changed = True
+            if k_ok in st.session_state:
+                sub["aprobado"] = bool(st.session_state[k_ok])
+    if changed:
+        st.session_state["org_organizacion_bloques"] = bloques
+    return changed
 
-    Equivalente al editor del standalone (agente-organizador/app.py): opera sobre
-    el estado estructurado `org_organizacion_bloques` y reconstruye el Markdown con
-    regenerar_markdown_desde_bloques del Organizador. Solo debe invocarse mientras
-    la organización está en fase de revisión (antes de confirmarla); el caller es
-    responsable de no renderizarlo una vez confirmada (estructura congelada).
-    """
-    bloques_estado = st.session_state.get("org_organizacion_bloques", [])
-    if not bloques_estado:
+
+def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
+    """Vista unificada de bloques y subbloques — editable o solo lectura."""
+    bloques = st.session_state.get("org_organizacion_bloques", [])
+    if not bloques:
         st.info(
-            "La edición manual no está disponible porque el Markdown generado no "
-            "pudo parsearse en bloques estructurados."
+            "No se pudo mostrar la organización en formato estructurado. "
+            "Revisa que el Markdown siga el patrón «## Bloque N — Nombre · Xh»."
         )
+        if st.session_state.get("org_ultimo_output"):
+            with st.expander("Ver Markdown generado"):
+                st.markdown(st.session_state["org_ultimo_output"])
         return
 
-    with st.expander(
-        "✏️ Editar estructura manualmente (añadir / eliminar bloques y subbloques)",
-        expanded=False,
-    ):
+    iter_key = st.session_state["org_iteracion"]
+
+    if editable:
+        st.markdown("### Revisa y edita la organización")
         st.caption(
-            "Los cambios manuales no requieren verificación de señal estructural — "
-            "reflejan el criterio pedagógico del profesor. Coexisten con el refinamiento "
-            "por prompt: ambos mecanismos operan sobre el mismo estado. Disponibles solo "
-            "hasta confirmar la organización como definitiva."
+            "Marca cada subbloque como correcto (✓), edita nombres, elimina filas o añade "
+            "bloques/subbloques. Las horas se gestionan solo a nivel de bloque. "
+            "Para cambios grandes usa el cuadro de redistribución por prompt más abajo."
         )
+    else:
+        st.markdown("### Organización confirmada")
 
-        iter_key = st.session_state["org_iteracion"]
-
-        for idx_b, bloque in enumerate(bloques_estado):
-            horas_b = sum(s["horas"] for s in bloque["subtemas"]) if bloque["subtemas"] else bloque["horas"]
-            manual_tag = " *(añadido manualmente)*" if bloque.get("manual") else ""
-            st.markdown(
-                f'<div style="font-family:\'DM Sans\',sans-serif; font-weight:600; '
-                f'font-size:13px; margin-top:14px; color:var(--text-color);">'
-                f'Bloque {bloque["numero"]} — {bloque["nombre"]} · {horas_b:.1f}h'
-                f'{manual_tag}</div>',
-                unsafe_allow_html=True,
-            )
-
-            for idx_s, sub in enumerate(bloque["subtemas"]):
-                col_sub, col_del = st.columns([6, 1])
-                with col_sub:
-                    manual_s = " *(manual)*" if sub.get("manual") else ""
-                    st.markdown(
-                        f'<div style="font-size:12px; margin-left:12px; '
-                        f'padding:2px 0; color:var(--text-color);">'
-                        f'• {sub["nombre"]} ({sub["horas"]:.1f}h){manual_s}</div>',
-                        unsafe_allow_html=True,
+    for idx_b, bloque in enumerate(bloques):
+        with st.container(border=True):
+            if editable:
+                c_tit, c_horas, c_del_b = st.columns([5, 1.2, 0.5])
+                with c_tit:
+                    st.text_input(
+                        f"Nombre — Bloque {bloque['numero']}",
+                        value=bloque["nombre"],
+                        key=f"org_bn_{idx_b}_{iter_key}",
+                        label_visibility="collapsed",
                     )
-                with col_del:
-                    if st.button(
-                        "🗑",
-                        key=f"org_del_sub_{idx_b}_{idx_s}_{iter_key}",
-                        help=f"Eliminar subbloque '{sub['nombre']}'",
-                    ):
-                        st.session_state["org_organizacion_bloques"][idx_b]["subtemas"].pop(idx_s)
+                with c_horas:
+                    st.number_input(
+                        "Horas del bloque",
+                        min_value=0.0,
+                        step=0.5,
+                        value=float(bloque.get("horas", 0)),
+                        key=f"org_bh_{idx_b}_{iter_key}",
+                        label_visibility="collapsed",
+                    )
+                with c_del_b:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("✕", key=f"org_del_bloque_{idx_b}_{iter_key}", help="Eliminar bloque"):
+                        _org_sync_widgets_a_bloques(iter_key)
+                        st.session_state["org_organizacion_bloques"].pop(idx_b)
                         _org_actualizar_desde_bloques(slug)
                         st.rerun()
+            else:
+                h = bloque.get("horas", 0)
+                h_fmt = str(int(h)) if h == int(h) else f"{h:.1f}"
+                st.markdown(f"**Bloque {bloque['numero']} — {bloque['nombre']} · {h_fmt}h**")
 
-            ctr_s = st.session_state["org_contador_add_subtema"].get(idx_b, 0)
-            col_ns1, col_ns2, col_ns3 = st.columns([3, 1, 1])
-            with col_ns1:
-                st.text_input(
-                    "Nuevo subbloque",
-                    key=f"org_ns_nombre_{idx_b}_{ctr_s}",
-                    label_visibility="collapsed",
-                    placeholder="Nombre del subbloque...",
-                )
-            with col_ns2:
-                st.number_input(
-                    "Horas",
-                    min_value=0.0,
-                    step=0.5,
-                    key=f"org_ns_horas_{idx_b}_{ctr_s}",
-                    label_visibility="collapsed",
-                )
-            with col_ns3:
-                if st.button("+ Añadir", key=f"org_btn_ns_{idx_b}_{ctr_s}"):
-                    nombre_ns = st.session_state.get(f"org_ns_nombre_{idx_b}_{ctr_s}", "").strip()
-                    if nombre_ns:
-                        horas_ns = float(st.session_state.get(f"org_ns_horas_{idx_b}_{ctr_s}", 0.0))
-                        st.session_state["org_organizacion_bloques"][idx_b]["subtemas"].append({
-                            "nombre": nombre_ns,
-                            "horas": horas_ns,
-                            "manual": True,
-                        })
-                        ctrs = st.session_state["org_contador_add_subtema"]
-                        ctrs[idx_b] = ctr_s + 1
-                        st.session_state["org_contador_add_subtema"] = ctrs
-                        _org_actualizar_desde_bloques(slug)
-                        st.rerun()
+            # Cabecera de tabla
+            h1, h2, h3, h4, h5 = st.columns([3.2, 2, 1.2, 0.5, 0.5])
+            h1.markdown("**Subtema**")
+            h2.markdown("**Evidencia**")
+            h3.markdown("**Origen**")
+            if editable:
+                h4.markdown("**✓**")
+                h5.markdown("")
 
-            if st.button(
-                "🗑 Eliminar bloque completo",
-                key=f"org_del_bloque_{idx_b}_{iter_key}",
-                help=f"Eliminar el bloque '{bloque['nombre']}' y todos sus subbloques",
-            ):
-                st.session_state["org_organizacion_bloques"].pop(idx_b)
-                _org_actualizar_desde_bloques(slug)
-                st.rerun()
+            for idx_s, sub in enumerate(bloque.get("subtemas", [])):
+                r1, r2, r3, r4, r5 = st.columns([3.2, 2, 1.2, 0.5, 0.5])
+                evidencia = sub.get("evidencia") or ("Manual (profesor)" if sub.get("manual") else "—")
+                origen = "Manual" if sub.get("manual") else sub.get("origen", "Detectado")
+                with r1:
+                    if editable:
+                        st.text_input(
+                            "Subtema",
+                            value=sub["nombre"],
+                            key=f"org_sn_{idx_b}_{idx_s}_{iter_key}",
+                            label_visibility="collapsed",
+                        )
+                    else:
+                        marca = " ✓" if sub.get("aprobado") else ""
+                        st.markdown(f"{sub['nombre']}{marca}")
+                with r2:
+                    st.caption(evidencia)
+                with r3:
+                    st.caption(origen)
+                if editable:
+                    with r4:
+                        st.checkbox(
+                            "OK",
+                            value=sub.get("aprobado", False),
+                            key=f"org_ok_{idx_b}_{idx_s}_{iter_key}",
+                            label_visibility="collapsed",
+                        )
+                    with r5:
+                        if st.button("✕", key=f"org_del_sub_{idx_b}_{idx_s}_{iter_key}"):
+                            _org_sync_widgets_a_bloques(iter_key)
+                            st.session_state["org_organizacion_bloques"][idx_b]["subtemas"].pop(idx_s)
+                            _org_actualizar_desde_bloques(slug)
+                            st.rerun()
 
-            st.markdown(
-                '<hr style="border:none; border-top:1px solid rgba(128,128,128,0.15); margin:8px 0;">',
-                unsafe_allow_html=True,
-            )
+            if editable:
+                ctr_s = st.session_state["org_contador_add_subtema"].get(idx_b, 0)
+                a1, a2 = st.columns([5, 1])
+                with a1:
+                    st.text_input(
+                        "Nuevo subbloque",
+                        key=f"org_ns_nombre_{idx_b}_{ctr_s}",
+                        label_visibility="collapsed",
+                        placeholder="+ Añadir subbloque…",
+                    )
+                with a2:
+                    if st.button("+ Añadir", key=f"org_btn_ns_{idx_b}_{ctr_s}"):
+                        _org_sync_widgets_a_bloques(iter_key)
+                        nombre_ns = st.session_state.get(f"org_ns_nombre_{idx_b}_{ctr_s}", "").strip()
+                        if nombre_ns:
+                            st.session_state["org_organizacion_bloques"][idx_b]["subtemas"].append({
+                                "nombre": nombre_ns,
+                                "evidencia": "Manual (profesor)",
+                                "origen": "Manual",
+                                "manual": True,
+                                "aprobado": False,
+                            })
+                            ctrs = st.session_state["org_contador_add_subtema"]
+                            ctrs[idx_b] = ctr_s + 1
+                            st.session_state["org_contador_add_subtema"] = ctrs
+                            _org_actualizar_desde_bloques(slug)
+                            st.rerun()
 
+    if editable:
         ctr_b = st.session_state["org_contador_add_bloque"]
-        st.markdown("**Añadir bloque:**")
-        col_nb1, col_nb2 = st.columns([4, 1])
-        with col_nb1:
+        st.markdown("**Añadir bloque**")
+        nb1, nb2, nb3 = st.columns([4, 1.2, 1])
+        with nb1:
             st.text_input(
                 "Nombre del nuevo bloque",
                 key=f"org_nb_nombre_{ctr_b}",
                 label_visibility="collapsed",
-                placeholder="Nombre del nuevo bloque...",
+                placeholder="Nombre del nuevo bloque…",
             )
-        with col_nb2:
+        with nb2:
+            st.number_input(
+                "Horas",
+                min_value=0.0,
+                step=0.5,
+                value=0.0,
+                key=f"org_nb_horas_{ctr_b}",
+                label_visibility="collapsed",
+            )
+        with nb3:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             if st.button("+ Añadir bloque", key=f"org_btn_nb_{ctr_b}"):
+                _org_sync_widgets_a_bloques(iter_key)
                 nombre_nb = st.session_state.get(f"org_nb_nombre_{ctr_b}", "").strip()
                 if nombre_nb:
                     nums = [b["numero"] for b in st.session_state["org_organizacion_bloques"]]
                     nuevo_num = max(nums) + 1 if nums else 1
+                    horas_nb = float(st.session_state.get(f"org_nb_horas_{ctr_b}", 0.0))
                     st.session_state["org_organizacion_bloques"].append({
                         "numero": nuevo_num,
                         "nombre": nombre_nb,
-                        "horas": 0.0,
+                        "horas": horas_nb,
                         "subtemas": [],
                         "manual": True,
                     })
                     st.session_state["org_contador_add_bloque"] = ctr_b + 1
                     _org_actualizar_desde_bloques(slug)
                     st.rerun()
+
+        if st.button("💾 Aplicar cambios de edición", type="secondary", use_container_width=True):
+            if _org_sync_widgets_a_bloques(iter_key):
+                _org_actualizar_desde_bloques(slug)
+            st.success("Cambios aplicados al Markdown de la organización.")
+            st.rerun()
 
 
 def _render_asignatura_activa_banner(asignatura: str) -> None:
@@ -2266,17 +2345,26 @@ def _vista_organizador() -> None:
             )
             st.warning(
                 f"⚠️ **Normalización de horas aplicada:** el modelo asignó **{suma_antes:.1f}h** "
-                f"en lugar de **{total_obj:.0f}h** (diferencia: {diferencia:+.1f}h). "
-                f"Las horas se redistribuyeron proporcionalmente. "
-                + (f"Subtemas ajustados: {bloques_ajustados}." if bloques_ajustados else "")
+                f"en total de bloques en lugar de **{total_obj:.0f}h** (diferencia: {diferencia:+.1f}h). "
+                f"Las horas se redistribuyeron entre bloques. "
+                + (f"Bloques ajustados: {bloques_ajustados}." if bloques_ajustados else "")
             )
 
-        st.markdown("### Propuesta generada")
+        wt = st.session_state.get("org_warning_truncamiento")
+        if wt:
+            st.error(
+                f"⚠️ **Posible truncamiento en la generación:** {wt.get('motivo', '')} "
+                f"{wt.get('detalle', '')} Revisa el último bloque y usa Regenerar si la tabla quedó incompleta."
+            )
+
         st.caption(
             f"Versión {st.session_state['org_version_actual']} · "
             f"guardada en `data/{slug}/outputs/organizador/v{st.session_state['org_version_actual']}.md`"
         )
-        st.markdown(st.session_state["org_ultimo_output"])
+
+        org_confirmada = st.session_state.get("org_confirmada")
+        _org_render_vista_organizacion(slug, editable=not org_confirmada)
+
         st.download_button(
             label="Descargar resultado (.md)",
             data=st.session_state["org_ultimo_output"],
@@ -2285,17 +2373,11 @@ def _vista_organizador() -> None:
             key="org_download",
         )
 
-        st.divider()
-
-        org_confirmada = st.session_state.get("org_confirmada")
-
-        # ── Edición manual (solo en fase de revisión, antes de confirmar) ──────
-        # Misma restricción de diseño que el standalone: una vez confirmada y
-        # pasada a Contenido (vía BD), la estructura queda congelada y ni la
-        # edición manual ni el refinamiento por prompt deben tener efecto.
         if not org_confirmada:
-            _org_render_editor_manual(slug)
-            st.divider()
+            with st.expander("Ver Markdown generado"):
+                st.markdown(st.session_state["org_ultimo_output"])
+
+        st.divider()
 
         # ── Confirmar organización ─────────────────────────────────────────────
         st.subheader("¿La organización es correcta?")
@@ -2307,7 +2389,7 @@ def _vista_organizador() -> None:
             )
             st.info(
                 "🔒 **Estructura congelada.** La organización se ha pasado al Agente "
-                "Contenido. La edición manual de bloques/subbloques y el refinamiento "
+                "Contenido. La edición de bloques/subbloques y el refinamiento "
                 "por prompt quedan deshabilitados. Descarga el resultado o sube nuevos "
                 "archivos para empezar otra organización."
             )
@@ -2316,6 +2398,8 @@ def _vista_organizador() -> None:
                 "✅ Confirmar organización como definitiva",
                 type="primary", use_container_width=True, key="org_btn_confirmar_org",
             ):
+                _org_sync_widgets_a_bloques(st.session_state["org_iteracion"])
+                _org_actualizar_desde_bloques(slug)
                 output_id = st.session_state.get("org_output_id")
                 if not output_id:
                     st.error("No hay output registrado en la base de datos — genera la organización primero.")
@@ -2345,9 +2429,9 @@ def _vista_organizador() -> None:
                 "Si quieres mejorar algo, descríbelo aquí (opcional):",
                 placeholder=(
                     "Ejemplos:\n"
-                    "- 'Aumenta las horas de [subtema] porque a los alumnos les cuesta más'\n"
-                    "- 'Divide [subtema] en dos partes separadas'\n"
-                    "- 'El bloque [N] necesita más granularidad'"
+                    "- 'Divide el bloque 3 en dos partes más granulares'\n"
+                    "- 'Renombra el subtema X a Y'\n"
+                    "- 'El bloque 2 necesita más subtemas según el material'"
                 ),
                 key=f"org_feedback_{st.session_state['org_iteracion']}",
             )
