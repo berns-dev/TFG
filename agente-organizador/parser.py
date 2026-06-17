@@ -1,3 +1,4 @@
+import difflib
 import io
 import re
 import unicodedata
@@ -81,14 +82,14 @@ def extraer_texto(archivo_bytes, nombre_archivo) -> str:
 # Patrón replicado de agente-contenido/chunker.py (_NUMBERED_HEADER_RE).
 # ---------------------------------------------------------------------------
 
-_SUBTEMA_NUM_RE = re.compile(r"^\d+(?:\.\d+)*\.\s+\S")
+_SUBTEMA_NUM_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
 
 
 def normalizar_subtema(texto: str) -> str:
     """Elimina prefijo numérico, acentos y puntuación; convierte a minúsculas.
     Usada para comparar candidatos entre fuentes (guía vs material).
     """
-    s = re.sub(r"^\d+(?:\.\d+)*\.\s*", "", (texto or "")).lower()
+    s = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", (texto or "")).lower()
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     return re.sub(r"[^a-z0-9 ]", " ", s).strip()
@@ -199,7 +200,7 @@ def extraer_subtemas_candidatos(texto: str) -> list[str]:
         linea = linea.strip()
         if not _SUBTEMA_NUM_RE.match(linea):
             continue
-        nombre = re.sub(r"^\d+(?:\.\d+)*\.\s*", "", linea).strip()
+        nombre = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", linea).strip()
         if not nombre or not es_subtema_valido(nombre):
             continue
         clave = normalizar_subtema(nombre)
@@ -357,9 +358,9 @@ def extraer_candidatos_con_evidencia(
         linea = linea.strip()
         if not _SUBTEMA_NUM_RE.match(linea):
             continue
-        m_pref = re.match(r"^(\d+(?:\.\d+)*\.)\s*", linea)
-        prefijo = m_pref.group(1).rstrip(".") if m_pref else ""
-        nombre = re.sub(r"^\d+(?:\.\d+)*\.\s*", "", linea).strip()
+        m_pref = re.match(r"^(\d+(?:\.\d+)*)\.?\s*", linea)
+        prefijo = m_pref.group(1) if m_pref else ""
+        nombre = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", linea).strip()
         if not nombre or not es_subtema_valido(nombre):
             continue
         clave = normalizar_subtema(nombre)
@@ -389,6 +390,117 @@ def extraer_candidatos_con_evidencia(
             vistos.add(clave)
 
     return candidatos  # lista vacía → fallback obligatorio
+
+
+# ---------------------------------------------------------------------------
+# Enriquecimiento de evidencia al confirmar la organización (app-unificada).
+# La detección determinista ocurre antes del LLM; el Markdown generado suele
+# dejar la columna Evidencia en «—». Estas funciones reasignan la evidencia
+# real sin depender de que el modelo la copie fielmente.
+# ---------------------------------------------------------------------------
+
+_EVIDENCIA_VACIA = frozenset({
+    "",
+    "—",
+    "-",
+    "–",
+    "sin señal verificable",
+    "sin senal verificable",
+    "fallback",
+    "sin señal",
+    "sin senal",
+})
+
+
+def evidencia_es_vacia(evidencia: str) -> bool:
+    """True si la evidencia no aporta una frontera estructural utilizable."""
+    return (evidencia or "").strip().lower() in _EVIDENCIA_VACIA
+
+
+def resolver_archivo_bloque(nombre_bloque: str, archivos: list[str], idx: int) -> str:
+    """Asocia un bloque temático al PDF/PPTX de teoría más probable."""
+    if not archivos:
+        return ""
+    nb = normalizar_subtema(nombre_bloque)
+    mejor, score = "", 0.0
+    for ar in archivos:
+        stem_norm = normalizar_subtema(Path(ar).stem)
+        r = difflib.SequenceMatcher(None, nb, stem_norm).ratio()
+        if r > score:
+            score, mejor = r, ar
+    if score >= 0.35:
+        return mejor
+    return archivos[idx] if idx < len(archivos) else archivos[0]
+
+
+def _mapa_evidencia_candidatos(candidatos: list[dict]) -> dict[str, str]:
+    """Índice nombre_normalizado → evidencia para un material."""
+    mapa: dict[str, str] = {}
+    for cand in candidatos:
+        clave = normalizar_subtema(cand.get("nombre", ""))
+        ev = (cand.get("evidencia") or "").strip()
+        if clave and ev and not evidencia_es_vacia(ev):
+            mapa[clave] = ev
+    return mapa
+
+
+def _buscar_evidencia_subtema(nombre: str, mapa: dict[str, str]) -> str:
+    """Resuelve la evidencia de un subtema por coincidencia exacta o fuzzy."""
+    clave = normalizar_subtema(nombre)
+    if not clave:
+        return ""
+    if clave in mapa:
+        return mapa[clave]
+    mejor_ev, mejor_ratio = "", 0.0
+    for cand_clave, ev in mapa.items():
+        ratio = difflib.SequenceMatcher(None, clave, cand_clave).ratio()
+        if ratio > mejor_ratio:
+            mejor_ratio, mejor_ev = ratio, ev
+    if mejor_ratio >= 0.85:
+        return mejor_ev
+    return ""
+
+
+def enriquecer_bloques_con_evidencia_detectada(
+    bloques: list[dict],
+    candidatos_por_material: list[list[dict]],
+    archivos_teoria: list[str],
+) -> list[dict]:
+    """Completa evidencia vacía en subtemas con la detección determinista del material.
+
+    Añade ``archivo_origen`` a cada bloque para persistir el vínculo bloque→PDF.
+  """
+    if not bloques:
+        return bloques
+
+    mapas_por_archivo = {
+        archivos_teoria[i]: _mapa_evidencia_candidatos(
+            candidatos_por_material[i] if i < len(candidatos_por_material) else []
+        )
+        for i in range(len(archivos_teoria))
+    }
+
+    enriquecidos: list[dict] = []
+    for idx_bloque, bloque in enumerate(bloques):
+        bloque_out = dict(bloque)
+        archivo = resolver_archivo_bloque(
+            bloque_out.get("nombre", ""), archivos_teoria, idx_bloque
+        )
+        bloque_out["archivo_origen"] = archivo
+        mapa = mapas_por_archivo.get(archivo, {})
+
+        subtemas_out: list[dict] = []
+        for sub in bloque_out.get("subtemas", []):
+            sub_out = dict(sub)
+            if evidencia_es_vacia(sub_out.get("evidencia", "")):
+                ev = _buscar_evidencia_subtema(sub_out.get("nombre", ""), mapa)
+                if ev:
+                    sub_out["evidencia"] = ev
+            subtemas_out.append(sub_out)
+        bloque_out["subtemas"] = subtemas_out
+        enriquecidos.append(bloque_out)
+
+    return enriquecidos
 
 
 # ---------------------------------------------------------------------------
