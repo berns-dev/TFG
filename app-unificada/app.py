@@ -144,7 +144,10 @@ except Exception as _e:
 try:
     _cnt_mods = _cargar_modulos_agente(
         RAIZ_CONTENIDO, "contenido",
-        ["config", "cleaner", "extractor", "chunker", "classifier", "assembler", "validator"],
+        [
+            "config", "cleaner", "extractor", "chunker", "classifier",
+            "assembler", "validator", "segmentor",
+        ],
     )
     _cnt_config = _cnt_mods["config"]
     _cnt_cleaner = _cnt_mods["cleaner"]
@@ -153,10 +156,11 @@ try:
     _cnt_classifier = _cnt_mods["classifier"]
     _cnt_assembler = _cnt_mods["assembler"]
     _cnt_validator = _cnt_mods["validator"]
+    _cnt_segmentor = _cnt_mods["segmentor"]
     _CNT_ERROR: str | None = None
 except Exception as _ce:
     _cnt_config = _cnt_cleaner = _cnt_extractor = _cnt_chunker = _cnt_classifier = None
-    _cnt_assembler = _cnt_validator = None
+    _cnt_assembler = _cnt_validator = _cnt_segmentor = None
     _CNT_ERROR = str(_ce)
 
 
@@ -828,7 +832,8 @@ def _db_cnt_get_subbloques(tema_id: int) -> list[dict]:
         return [
             dict(r)
             for r in conn.execute(
-                "SELECT id, nombre, orden FROM subbloques WHERE tema_id = ? ORDER BY orden",
+                "SELECT id, nombre, orden, horas, evidencia, origen, es_fallback "
+                "FROM subbloques WHERE tema_id = ? ORDER BY orden",
                 (tema_id,),
             ).fetchall()
         ]
@@ -945,33 +950,40 @@ def _db_cnt_aprobar_subbloque(subbloque_id: int) -> None:
 # Lógica de curación por sub-bloque — Agente Contenido
 # =============================================================================
 
-def _cnt_curar_subbloque(
-    subbloque_nombre: str,
-    tema_nombre: str,
-    tema_horas: float | None,
+_CNT_EVIDENCIAS_FALLBACK = frozenset({
+    "sin señal verificable", "sin senal verificable",
+    "fallback", "sin señal", "sin senal", "",
+})
+
+
+def _cnt_metas_para_segmentacion(subbloques: list[dict]) -> list[dict]:
+    """Adapta filas de BD al formato que espera segment_text_by_subbloques."""
+    return [
+        {
+            "nombre": sb["nombre"],
+            "horas": float(sb.get("horas") or 0.0),
+            "evidencia": sb.get("evidencia") or "",
+            "origen": sb.get("origen") or "",
+        }
+        for sb in subbloques
+    ]
+
+
+def _cnt_extraer_segmento_subbloque(
+    subbloque_meta: dict,
+    todos_subbloques: list[dict],
     rutas_material: list[str],
-) -> tuple[str, float | None]:
-    """Genera markdown curado para un sub-bloque reutilizando la pipeline del Agente Contenido.
-
-    Se prepende un contexto de sub-bloque a cada chunk antes de clasificar, para
-    guiar al modelo hacia el alcance concreto sin inventar contenido ausente.
-    La SYSTEM_PROMPT y toda la lógica de clasificación/ensamblado son las originales
-    de agente-contenido/classifier.py y assembler.py — sin modificar esos archivos.
-
-    Devuelve (markdown, fidelidad). La fidelidad es la media de los coverage_score
-    de `validator.validate_items` sobre los chunks originales del sub-bloque (sin el
-    prefijo de contexto), o None si no hubo nada que validar. El cálculo de fidelidad
-    vive en `agente-contenido/validator.py` — aquí solo se invoca.
-    """
-    sub_ctx = (
-        f"[CONTEXTO SUBTEMA: Este fragmento pertenece al subtema «{subbloque_nombre}» "
-        f"del bloque «{tema_nombre}». "
-        f"Extrae y estructura únicamente el contenido relevante para este subtema.]\n\n"
+) -> str:
+    """Acota el texto de entrada al tramo del sub-bloque usando evidencia estructural."""
+    target_idx = next(
+        (i for i, sb in enumerate(todos_subbloques) if sb["id"] == subbloque_meta["id"]),
+        None,
     )
-    max_w = getattr(_cnt_config, "MAX_WORKERS", 5)
+    if target_idx is None:
+        return ""
 
-    all_items: list[dict] = []
-    all_chunks_raw: list[str] = []  # chunks originales (sin contexto) alineados con all_items
+    sb_metas = _cnt_metas_para_segmentacion(todos_subbloques)
+    partes: list[str] = []
 
     for ruta in rutas_material:
         if not os.path.exists(ruta):
@@ -980,32 +992,82 @@ def _cnt_curar_subbloque(
             texto = _cnt_extractor.extract_text(ruta)
         except Exception:
             continue
-
-        chunks = _cnt_chunker.split_into_chunks(texto)
-        if not chunks:
+        if not (texto or "").strip():
             continue
 
-        chunks_con_ctx = [sub_ctx + c for c in chunks]
+        segments = _cnt_segmentor.segment_text_by_subbloques(texto, sb_metas)
+        if target_idx < len(segments):
+            _, seg_text = segments[target_idx]
+            if seg_text and seg_text.strip():
+                partes.append(seg_text.strip())
 
-        # Se preserva el orden (ordered[i]) para que validate_items pueda emparejar
-        # cada item con su chunk original por índice — as_completed llega desordenado.
-        ordered: list[dict | None] = [None] * len(chunks_con_ctx)
-        with ThreadPoolExecutor(max_workers=max_w) as ex:
-            future_to_i = {
-                ex.submit(_cnt_classifier.classify_and_format, chunk, tema_horas): i
-                for i, chunk in enumerate(chunks_con_ctx)
-            }
-            for fut in as_completed(future_to_i):
-                i = future_to_i[fut]
-                try:
-                    ordered[i] = fut.result()
-                except Exception:
-                    ordered[i] = None
+    return "\n\n".join(partes)
 
-        for item, chunk_raw in zip(ordered, chunks):
-            if item is not None:
-                all_items.append(item)
-                all_chunks_raw.append(chunk_raw)
+
+def _cnt_curar_subbloque(
+    subbloque_meta: dict,
+    todos_subbloques: list[dict],
+    tema_nombre: str,
+    tema_horas: float | None,
+    rutas_material: list[str],
+) -> tuple[str, float | None]:
+    """Genera markdown curado para un sub-bloque reutilizando la pipeline del Agente Contenido.
+
+    Segmenta el material con `segment_text_by_subbloques` (igual que el standalone)
+    antes de clasificar, de modo que cada sub-bloque solo recibe el tramo de texto
+    acotado por su evidencia estructural. Sobre ese segmento se prepende un contexto
+    de sub-bloque a cada chunk antes de clasificar.
+
+    Devuelve (markdown, fidelidad). La fidelidad es la media de los coverage_score
+    de `validator.validate_items` sobre los chunks originales del sub-bloque (sin el
+    prefijo de contexto), o None si no hubo nada que validar.
+    """
+    subbloque_nombre = subbloque_meta["nombre"]
+    sb_horas = float(subbloque_meta.get("horas") or 0.0)
+    effective_horas = sb_horas if sb_horas > 0 else tema_horas
+
+    seg_text = _cnt_extraer_segmento_subbloque(subbloque_meta, todos_subbloques, rutas_material)
+    if not seg_text.strip():
+        return (
+            f"# {subbloque_nombre}\n\n*No se pudo extraer contenido del material de entrada.*",
+            None,
+        )
+
+    sub_ctx = (
+        f"[CONTEXTO SUBTEMA: Este fragmento pertenece al subtema «{subbloque_nombre}» "
+        f"del bloque «{tema_nombre}». "
+        f"Extrae y estructura únicamente el contenido relevante para este subtema.]\n\n"
+    )
+    max_w = getattr(_cnt_config, "MAX_WORKERS", 5)
+
+    chunks = _cnt_chunker.split_into_chunks(seg_text)
+    if not chunks:
+        return (
+            f"# {subbloque_nombre}\n\n*No se pudo extraer contenido del material de entrada.*",
+            None,
+        )
+
+    chunks_con_ctx = [sub_ctx + c for c in chunks]
+    all_items: list[dict] = []
+    all_chunks_raw: list[str] = []
+
+    ordered: list[dict | None] = [None] * len(chunks_con_ctx)
+    with ThreadPoolExecutor(max_workers=max_w) as ex:
+        future_to_i = {
+            ex.submit(_cnt_classifier.classify_and_format, chunk, effective_horas): i
+            for i, chunk in enumerate(chunks_con_ctx)
+        }
+        for fut in as_completed(future_to_i):
+            i = future_to_i[fut]
+            try:
+                ordered[i] = fut.result()
+            except Exception:
+                ordered[i] = None
+
+    for item, chunk_raw in zip(ordered, chunks):
+        if item is not None:
+            all_items.append(item)
+            all_chunks_raw.append(chunk_raw)
 
     if not all_items:
         return (
@@ -1114,9 +1176,25 @@ def _vista_contenido() -> None:
                         f"Generando borrador: {sub['nombre']}…", expanded=True
                     ) as status:
                         try:
-                            st.write("📚 Extrayendo y clasificando material…")
+                            st.write("📚 Segmentando y clasificando material…")
+                            ev_norm = (sub.get("evidencia") or "").strip().lower()
+                            if (
+                                not sub.get("es_fallback")
+                                and ev_norm not in _CNT_EVIDENCIAS_FALLBACK
+                            ):
+                                seg_previo = _cnt_extraer_segmento_subbloque(
+                                    sub, subbloques, rutas_material
+                                )
+                                if not seg_previo.strip():
+                                    st.warning(
+                                        f"⚠️ La referencia «{sub.get('evidencia', '')}» "
+                                        f"no se encontró en el material. "
+                                        "El borrador puede quedar vacío — "
+                                        "puedes editarlo manualmente tras generarlo."
+                                    )
                             md, fidelidad = _cnt_curar_subbloque(
-                                subbloque_nombre=sub["nombre"],
+                                subbloque_meta=sub,
+                                todos_subbloques=subbloques,
                                 tema_nombre=tema_nombre,
                                 tema_horas=tema_horas,
                                 rutas_material=rutas_material,
@@ -1198,8 +1276,6 @@ def _vista_contenido() -> None:
             f"**{sub['nombre']}** — {etiqueta}",
             expanded=bool(cs is not None and cs.get("markdown_borrador")),
         ):
-            # El key único por sub-bloque preserva la edición independiente en
-            # cada rerender. value solo se aplica la primera vez que aparece el key.
             ta_key = f"contenido_{sub['id']}"
             if ta_key not in st.session_state:
                 st.session_state[ta_key] = texto_inicial
@@ -1211,8 +1287,6 @@ def _vista_contenido() -> None:
                 label_visibility="collapsed",
             )
 
-            # Botón "Aprobar" disponible cuando hay borrador generado o contenido
-            # editado — no cuando el sub-bloque ya está aprobado.
             if estado_actual in ("generado", "editado") and cs is not None:
                 if st.button(
                     "✅ Aprobar este sub-bloque",
