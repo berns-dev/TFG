@@ -306,6 +306,21 @@ def assemble_multiple(resultados: list[dict[str, Any]]) -> str:
     return f"{unified_fm}\n\n{cuerpo}"
 
 
+def _strip_frontmatter_only(md: str) -> str:
+    """Elimina solo el bloque YAML frontmatter (---...---) preservando todo lo demás.
+
+    A diferencia de _body_after_frontmatter(), esta función NO llama a _strip_h1_lines
+    y por tanto conserva los encabezados H2 canónicos del Markdown ensamblado.
+    """
+    stripped = md.strip()
+    if not stripped.startswith("---"):
+        return stripped
+    parts = stripped.split("---", 2)
+    if len(parts) >= 3:
+        return parts[2].lstrip("\n")
+    return stripped
+
+
 def _strip_h1_from_body(body: str) -> str:
     """Elimina líneas de encabezado H1 (# pero no ##) de un cuerpo Markdown."""
     lines = body.split("\n")
@@ -326,12 +341,15 @@ def assemble_subbloque_body(
     """Ensambla el cuerpo Markdown de un subbloque (sin frontmatter YAML propio).
 
     Reutiliza assemble_markdown() para toda la lógica de secciones canónicas,
-    luego extrae el cuerpo y sustituye el H1 detectado por el nombre del subbloque.
+    luego extrae el cuerpo (conservando H2) y sustituye el H1 detectado
+    por el nombre del subbloque.
     """
     full_md = assemble_markdown(
         items, nombre_del_archivo=nombre_del_archivo or nombre_subbloque or "subbloque"
     )
-    body = _body_after_frontmatter(full_md)
+    # _strip_frontmatter_only preserva los H2 canónicos que assemble_markdown emitió.
+    # _body_after_frontmatter no sirve aquí porque también ejecuta _strip_h1_lines.
+    body = _strip_frontmatter_only(full_md)
     body_no_h1 = _strip_h1_from_body(body)
     h1 = f"# {nombre_subbloque}\n\n" if nombre_subbloque else ""
     return (h1 + body_no_h1).strip()

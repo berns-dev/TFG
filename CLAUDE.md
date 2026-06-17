@@ -56,8 +56,10 @@ Este es el contrato que el Agente Contenido lee con `parse_organization_md()` (p
 formato exacto no será parseado correctamente por el Agente Contenido.
 
 **Nota:** la tabla de subbloques dentro de cada bloque usa columnas `| Subtema | Horas | Evidencia | Origen |`
-(o `| Subtema | Horas | Origen |` tras edición manual). El Agente Contenido NO parsea
-estas filas, por lo que el cambio de columnas no rompe el contrato.
+(o `| Subtema | Horas | Origen |` tras edición manual). El Agente Contenido parsea ambos
+formatos vía `_parse_subbloques_table()` en `app.py`. La columna `Evidencia` se usa para
+segmentar el texto del material por subbloque. Si falta la columna `Evidencia`, la segmentación
+no puede localizar boundaries y los subbloques quedan con estado `pendiente`.
 
 ---
 
@@ -138,8 +140,11 @@ TFG/
 │   ├── cleaner.py
 │   ├── assembler.py
 │   ├── validator.py
+│   ├── segmentor.py              ← segmentación de texto por subbloque (evidencia estructural)
+│   ├── subblock_state.py         ← SubbloqueResult, calcular_progreso_bloque/asignatura
 │   ├── tools/
-│   │   └── validate_pdf.py       ← debug CLI (extract → chunk, sin API)
+│   │   ├── validate_pdf.py       ← debug CLI (extract → chunk, sin API)
+│   │   └── validate_subbloques.py ← validación pipeline de subbloques (sin API)
 │   ├── fixtures/
 │   │   └── Tema_3_curado.md      ← artefacto de validación
 │   ├── config.py
@@ -171,5 +176,5 @@ TFG/
 | Agente | Estado | Validado con |
 |--------|--------|-------------|
 | Organizador | Funcional — subbloques anclados a evidencia estructural; edición manual bloques/subbloques; fase cerrado | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
-| Contenido | Funcional — validado con PDF y PPTX | Temas 1 y 2 de Tecnología de Materiales (PDF) |
+| Contenido | Funcional — granularidad de subbloque: segmentación por evidencia, estados pendiente/generado/editado/aprobado, cálculo de progreso; pipeline clásico preservado como fallback | Temas 1 y 2 de Tecnología de Materiales (PDF); lógica de subbloques validada programáticamente (53/53 checks) |
 | Presentación | Funcional — 3 outputs (PDF institucional UO, HTML interactivo, HTML presentación completa); LaTeX con matplotlib mathtext | Tema 1 (Tec. Materiales), TEMA7 (Elementos de Máquinas) |
