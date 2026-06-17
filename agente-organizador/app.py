@@ -14,10 +14,13 @@ from shared.ui_hero import render_hero
 from agente import ejecutar_agente
 from parser import (
     clasificar_archivo,
+    extraer_candidatos_con_evidencia,
     extraer_subtemas_candidatos,
     extraer_texto,
     hay_discrepancia,
     normalizar_subtema,
+    parsear_bloques_desde_markdown,
+    regenerar_markdown_desde_bloques,
 )
 from prompts import construir_prompt, construir_prompt_refinamiento
 
@@ -408,6 +411,12 @@ if "subtemas_editor" not in st.session_state:
     st.session_state["subtemas_editor"] = []
 if "fase" not in st.session_state:
     st.session_state["fase"] = None
+if "organizacion_bloques" not in st.session_state:
+    st.session_state["organizacion_bloques"] = []
+if "contador_add_subtema" not in st.session_state:
+    st.session_state["contador_add_subtema"] = {}
+if "contador_add_bloque" not in st.session_state:
+    st.session_state["contador_add_bloque"] = 0
 
 
 def _validar_y_persistir(resultado: str, n_esperados: int, nombre_descarga: str | None = None) -> None:
@@ -424,6 +433,12 @@ def _validar_y_persistir(resultado: str, n_esperados: int, nombre_descarga: str 
     st.session_state["ultimo_output"] = resultado
     if nombre_descarga is not None:
         st.session_state["ultimo_nombre_descarga"] = nombre_descarga
+
+    # Parsear en estado estructurado para edición manual y establecer fase "resultado".
+    st.session_state["organizacion_bloques"] = parsear_bloques_desde_markdown(resultado)
+    st.session_state["contador_add_subtema"] = {}
+    st.session_state["contador_add_bloque"] = 0
+    st.session_state["fase"] = "resultado"
 
 
 def extraer_y_detectar(guia_docente, materiales_teoria) -> bool:
@@ -444,11 +459,13 @@ def extraer_y_detectar(guia_docente, materiales_teoria) -> bool:
             st.write("📚 Extrayendo y clasificando materiales de teoría...")
             textos_teoria_raw: list[str] = []
             archivos_teoria: list[str] = []
+            archivos_teoria_bytes: list[bytes] = []
             archivos_contexto: list[str] = []
 
             for archivo in materiales_teoria:
                 try:
-                    texto_material = extraer_texto(archivo.getvalue(), archivo.name)
+                    archivo_bytes = archivo.getvalue()
+                    texto_material = extraer_texto(archivo_bytes, archivo.name)
                     categoria = clasificar_archivo(archivo.name, texto_material)
                     if categoria == "contexto":
                         archivos_contexto.append(archivo.name)
@@ -456,6 +473,7 @@ def extraer_y_detectar(guia_docente, materiales_teoria) -> bool:
                     else:
                         textos_teoria_raw.append(texto_material)
                         archivos_teoria.append(archivo.name)
+                        archivos_teoria_bytes.append(archivo_bytes)
                         st.write(f"  → {archivo.name} → teoría")
                 except Exception as error_archivo:
                     st.warning(f"No se pudo procesar '{archivo.name}': {error_archivo}")
@@ -465,28 +483,42 @@ def extraer_y_detectar(guia_docente, materiales_teoria) -> bool:
                 st.error("No se pudo extraer texto válido de ningún material de teoría.")
                 return False
 
-            st.write("🔍 Detectando subtemas por numeración jerárquica...")
+            st.write("🔍 Detectando señales estructurales (secciones numeradas, títulos de diapositiva)...")
             editor_data: list[dict] = []
-            for texto_mat, nombre_arch in zip(textos_teoria_raw, archivos_teoria):
-                cands_mat = extraer_subtemas_candidatos(texto_mat)
-                if cands_mat:
-                    candidatos = cands_mat
+            for texto_mat, nombre_arch, bytes_arch in zip(
+                textos_teoria_raw, archivos_teoria, archivos_teoria_bytes
+            ):
+                cands_con_ev = extraer_candidatos_con_evidencia(texto_mat, nombre_arch, bytes_arch)
+
+                if cands_con_ev:
+                    candidatos = [c["nombre"] for c in cands_con_ev]
+                    cands_mat_orig = candidatos[:]  # para origen "Detectado"
                     origen_base = "material"
-                    discrepancia = hay_discrepancia(cands_mat, candidatos_guia)
+                    discrepancia = hay_discrepancia(candidatos, candidatos_guia)
                 elif candidatos_guia:
+                    cands_con_ev = [
+                        {"nombre": c, "evidencia": "Guía docente", "fuente": "guia"}
+                        for c in candidatos_guia
+                    ]
                     candidatos = candidatos_guia
+                    cands_mat_orig = []
                     origen_base = "guia"
                     discrepancia = False
                 else:
+                    cands_con_ev = []
                     candidatos = []
+                    cands_mat_orig = []
                     origen_base = "ninguno"
                     discrepancia = False
+
                 editor_data.append({
                     "archivo": nombre_arch,
                     "candidatos": candidatos,
-                    "candidatos_mat_orig": cands_mat,
+                    "candidatos_con_evidencia": cands_con_ev,
+                    "candidatos_mat_orig": cands_mat_orig,
                     "origen": origen_base,
                     "discrepancia": discrepancia,
+                    "tiene_senales_material": origen_base == "material",
                 })
 
             # Detectar horas ya en fase 1 para que el expander esté disponible.
@@ -706,6 +738,9 @@ with st.sidebar:
         st.session_state["warning_normalizacion"] = None
         st.session_state["subtemas_editor"] = []
         st.session_state["fase"] = None
+        st.session_state["organizacion_bloques"] = []
+        st.session_state["contador_add_subtema"] = {}
+        st.session_state["contador_add_bloque"] = 0
         st.session_state["session_id_archivos"] = session_id_actual
 
     puede_generar = guia_docente is not None and len(materiales_teoria or []) > 0
@@ -778,16 +813,20 @@ st.divider()
 if st.session_state.get("fase") == "editar" and st.session_state["ultimo_output"] is None:
     editor_data = st.session_state.get("subtemas_editor", [])
     if editor_data:
-        st.markdown("### Subtemas detectados — revisa y confirma")
+        st.markdown("### Subbloques detectados — revisa y confirma")
         st.caption(
-            "Los subtemas se han detectado por numeración jerárquica en los materiales "
-            "(ej. '3.2. Título'). Edita la lista antes de generar la propuesta."
+            "Los subbloques se han detectado por señales estructurales verificables en los "
+            "materiales (numeración jerárquica o títulos de diapositiva). Edita la lista "
+            "antes de generar la propuesta. Si no aparece ninguno, indica los subbloques "
+            "manualmente o deja el campo vacío para tratar el bloque como unidad completa."
         )
 
         for i, bloque_info in enumerate(editor_data):
             nombre_archivo = bloque_info["archivo"]
             candidatos = bloque_info["candidatos"]
+            cands_con_ev = bloque_info.get("candidatos_con_evidencia", [])
             discrepancia = bloque_info.get("discrepancia", False)
+            tiene_senales = bloque_info.get("tiene_senales_material", False)
 
             st.markdown(
                 f'<div style="font-family:\'DM Sans\',sans-serif; font-size:13px; '
@@ -802,14 +841,45 @@ if st.session_state.get("fase") == "editar" and st.session_state["ultimo_output"
                     "archivo. Se ha usado la lista del material como base — revísala."
                 )
 
+            if not tiene_senales:
+                st.warning(
+                    "⚠️ **Sin señales estructurales verificables.** No se encontraron "
+                    "secciones numeradas ni títulos de diapositiva reconocibles en este "
+                    "material. Si dejas el campo vacío, el bloque se tratará como un único "
+                    "subbloque sin subdivisión (recomendado para no inventar estructura). "
+                    "Puedes añadir subbloques manualmente si los conoces."
+                )
+            elif cands_con_ev:
+                # Mostrar tabla de señales detectadas como referencia (read-only)
+                fuente_label = {
+                    "numeracion": "📑 Sección numerada",
+                    "titulo_slide": "📎 Título de diapositiva",
+                    "guia": "📋 Guía docente",
+                }.get
+                st.markdown(
+                    '<span style="font-size:12px; opacity:0.7;">Señales estructurales detectadas '
+                    '(referencia — edita la lista de abajo si es necesario):</span>',
+                    unsafe_allow_html=True,
+                )
+                for cand in cands_con_ev:
+                    tipo = fuente_label(cand.get("fuente", ""), "📌 Señal")
+                    ev = cand.get("evidencia", "—")
+                    st.markdown(
+                        f'<div style="font-size:12px; margin-left:8px; opacity:0.85;">'
+                        f'{tipo} &nbsp;·&nbsp; <b>{cand["nombre"]}</b> '
+                        f'<span style="color:gray;">({ev})</span></div>',
+                        unsafe_allow_html=True,
+                    )
+
             if not candidatos:
                 st.info(
-                    "No se detectó numeración de subtemas en este material. "
-                    "Indica manualmente los subtemas del bloque (uno por línea)."
+                    "No se detectaron subbloques automáticamente. "
+                    "Indica los subbloques del bloque manualmente (uno por línea) "
+                    "o deja el campo vacío."
                 )
 
             st.text_area(
-                "Subtemas (uno por línea):",
+                "Subbloques (uno por línea — edita, añade o elimina):",
                 value="\n".join(candidatos),
                 key=f"subtemas_ta_{i}",
                 height=max(100, min(300, 30 * len(candidatos) + 60)),
@@ -817,7 +887,7 @@ if st.session_state.get("fase") == "editar" and st.session_state["ultimo_output"
 
         st.divider()
         if st.button(
-            "Confirmar subtemas y generar propuesta",
+            "Confirmar subbloques y generar propuesta",
             type="primary",
             use_container_width=True,
         ):
@@ -829,14 +899,17 @@ if st.session_state.get("fase") == "editar" and st.session_state["ultimo_output"
                     normalizar_subtema(c)
                     for c in bloque_info.get("candidatos_mat_orig", [])
                 }
+                # Mapa nombre_normalizado → evidencia para asignar la referencia correcta
+                ev_map = {
+                    normalizar_subtema(c["nombre"]): c.get("evidencia", "")
+                    for c in bloque_info.get("candidatos_con_evidencia", [])
+                }
                 lista: list[dict] = []
                 for linea in lineas:
-                    origen = (
-                        "Detectado"
-                        if normalizar_subtema(linea) in cands_orig_norm
-                        else "Manual"
-                    )
-                    lista.append({"nombre": linea, "origen": origen})
+                    clave = normalizar_subtema(linea)
+                    origen = "Detectado" if clave in cands_orig_norm else "Manual"
+                    evidencia = ev_map.get(clave, "Manual (profesor)" if origen == "Manual" else "")
+                    lista.append({"nombre": linea, "origen": origen, "evidencia": evidencia})
                 subtemas_confirmados.append(lista)
 
             if generar_organizacion(
@@ -846,34 +919,58 @@ if st.session_state.get("fase") == "editar" and st.session_state["ultimo_output"
             ):
                 st.rerun()
 
-if st.session_state["ultimo_output"]:
-    w = st.session_state.get("warning_cardinalidad")
-    if w:
-        st.warning(
-            f"⚠️ **Discrepancia de bloques detectada:** el output contiene "
-            f"**{w['generados']} bloques** pero se esperaban **{w['esperados']}** "
-            f"(uno por archivo de teoría subido). "
-            f"El modelo probablemente elevó una subsección a bloque independiente. "
-            f"Usa el campo de feedback para indicar qué bloque debe reintegrarse como subtema "
-            f"y pulsa Regenerar."
+def _actualizar_desde_bloques() -> None:
+    """Regenera ultimo_output desde organizacion_bloques tras una edición manual."""
+    bloques = st.session_state.get("organizacion_bloques", [])
+    output_actual = st.session_state.get("ultimo_output", "")
+    if bloques and output_actual:
+        st.session_state["ultimo_output"] = regenerar_markdown_desde_bloques(
+            bloques, output_actual
         )
 
-    wn = st.session_state.get("warning_normalizacion")
-    if wn:
-        diferencia = wn["diferencia"]
-        suma_antes = wn["suma_antes"]
-        total_obj = suma_antes - diferencia
-        bloques_ajustados = ", ".join(
-            f"**{nombre}** ({v['antes']}h → {v['despues']}h)"
-            for nombre, v in list(wn["ajustes"].items())[:6]
-        )
-        st.warning(
-            f"⚠️ **Normalización de horas aplicada:** el modelo asignó **{suma_antes:.1f}h** "
-            f"en lugar de **{total_obj:.0f}h** (diferencia: {diferencia:+.1f}h). "
-            f"Las horas se redistribuyeron proporcionalmente. "
-            + (f"Subtemas ajustados: {bloques_ajustados}." if bloques_ajustados else "")
+
+fase_actual = st.session_state.get("fase")
+
+if st.session_state["ultimo_output"] and fase_actual in ("resultado", "cerrado"):
+
+    # ── Aviso de organización cerrada ──────────────────────────────────────
+    if fase_actual == "cerrado":
+        st.info(
+            "✅ **Organización cerrada.** La estructura de bloques y subbloques ha quedado "
+            "congelada. Ya no puedes añadir, eliminar ni pedir cambios por prompt. "
+            "Descarga el archivo y úsalo como input del Agente Contenido."
         )
 
+    # ── Warnings de cardinalidad y normalización (solo en fase resultado) ──
+    if fase_actual == "resultado":
+        w = st.session_state.get("warning_cardinalidad")
+        if w:
+            st.warning(
+                f"⚠️ **Discrepancia de bloques detectada:** el output contiene "
+                f"**{w['generados']} bloques** pero se esperaban **{w['esperados']}** "
+                f"(uno por archivo de teoría subido). "
+                f"El modelo probablemente elevó una subsección a bloque independiente. "
+                f"Usa el campo de feedback para indicar qué bloque debe reintegrarse como subtema "
+                f"y pulsa Regenerar."
+            )
+
+        wn = st.session_state.get("warning_normalizacion")
+        if wn:
+            diferencia = wn["diferencia"]
+            suma_antes = wn["suma_antes"]
+            total_obj = suma_antes - diferencia
+            bloques_ajustados = ", ".join(
+                f"**{nombre}** ({v['antes']}h → {v['despues']}h)"
+                for nombre, v in list(wn["ajustes"].items())[:6]
+            )
+            st.warning(
+                f"⚠️ **Normalización de horas aplicada:** el modelo asignó **{suma_antes:.1f}h** "
+                f"en lugar de **{total_obj:.0f}h** (diferencia: {diferencia:+.1f}h). "
+                f"Las horas se redistribuyeron proporcionalmente. "
+                + (f"Subtemas ajustados: {bloques_ajustados}." if bloques_ajustados else "")
+            )
+
+    # ── Output + descarga (siempre visibles) ───────────────────────────────
     st.markdown("### Propuesta generada")
     st.markdown(st.session_state["ultimo_output"])
     st.download_button(
@@ -883,37 +980,176 @@ if st.session_state["ultimo_output"]:
         mime="text/markdown",
     )
 
-    st.divider()
-    st.subheader("¿La organización es correcta?")
-    feedback = st.text_area(
-        "Si quieres mejorar algo, descríbelo aquí (opcional):",
-        placeholder="""Ejemplos de ajustes que puedes pedir:
+    # ── Edición manual + refinamiento por IA (solo en fase resultado) ──────
+    if fase_actual == "resultado":
+        st.divider()
+
+        # --- Editor manual de bloques y subbloques ---
+        bloques_estado = st.session_state.get("organizacion_bloques", [])
+        if bloques_estado:
+            with st.expander("✏️ Editar estructura manualmente (añadir / eliminar bloques y subbloques)", expanded=False):
+                st.caption(
+                    "Los cambios manuales no requieren verificación de señal estructural — "
+                    "reflejan el criterio pedagógico del profesor. Coexisten con el refinamiento "
+                    "por prompt: ambos mecanismos operan sobre el mismo estado."
+                )
+
+                for idx_b, bloque in enumerate(bloques_estado):
+                    horas_b = sum(s["horas"] for s in bloque["subtemas"]) if bloque["subtemas"] else bloque["horas"]
+                    manual_tag = " *(añadido manualmente)*" if bloque.get("manual") else ""
+                    st.markdown(
+                        f'<div style="font-family:\'DM Sans\',sans-serif; font-weight:600; '
+                        f'font-size:13px; margin-top:14px; color:var(--text-color);">'
+                        f'Bloque {bloque["numero"]} — {bloque["nombre"]} · {horas_b:.1f}h'
+                        f'{manual_tag}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    # Listar subbloques con botón de eliminar
+                    iter_key = st.session_state["iteracion"]
+                    for idx_s, sub in enumerate(bloque["subtemas"]):
+                        col_sub, col_del = st.columns([6, 1])
+                        with col_sub:
+                            manual_s = " *(manual)*" if sub.get("manual") else ""
+                            st.markdown(
+                                f'<div style="font-size:12px; margin-left:12px; '
+                                f'padding:2px 0; color:var(--text-color);">'
+                                f'• {sub["nombre"]} ({sub["horas"]:.1f}h){manual_s}</div>',
+                                unsafe_allow_html=True,
+                            )
+                        with col_del:
+                            if st.button(
+                                "🗑",
+                                key=f"del_sub_{idx_b}_{idx_s}_{iter_key}",
+                                help=f"Eliminar subbloque '{sub['nombre']}'",
+                            ):
+                                st.session_state["organizacion_bloques"][idx_b]["subtemas"].pop(idx_s)
+                                _actualizar_desde_bloques()
+                                st.rerun()
+
+                    # Añadir nuevo subbloque
+                    ctr_s = st.session_state["contador_add_subtema"].get(idx_b, 0)
+                    col_ns1, col_ns2, col_ns3 = st.columns([3, 1, 1])
+                    with col_ns1:
+                        nuevo_sub_nombre = st.text_input(
+                            "Nuevo subbloque",
+                            key=f"ns_nombre_{idx_b}_{ctr_s}",
+                            label_visibility="collapsed",
+                            placeholder="Nombre del subbloque...",
+                        )
+                    with col_ns2:
+                        nuevo_sub_horas = st.number_input(
+                            "Horas",
+                            min_value=0.0,
+                            step=0.5,
+                            key=f"ns_horas_{idx_b}_{ctr_s}",
+                            label_visibility="collapsed",
+                        )
+                    with col_ns3:
+                        if st.button("+ Añadir", key=f"btn_ns_{idx_b}_{ctr_s}"):
+                            nombre_ns = st.session_state.get(f"ns_nombre_{idx_b}_{ctr_s}", "").strip()
+                            if nombre_ns:
+                                horas_ns = float(st.session_state.get(f"ns_horas_{idx_b}_{ctr_s}", 0.0))
+                                st.session_state["organizacion_bloques"][idx_b]["subtemas"].append({
+                                    "nombre": nombre_ns,
+                                    "horas": horas_ns,
+                                    "manual": True,
+                                })
+                                ctrs = st.session_state["contador_add_subtema"]
+                                ctrs[idx_b] = ctr_s + 1
+                                st.session_state["contador_add_subtema"] = ctrs
+                                _actualizar_desde_bloques()
+                                st.rerun()
+
+                    # Eliminar bloque completo
+                    if st.button(
+                        f"🗑 Eliminar bloque completo",
+                        key=f"del_bloque_{idx_b}_{iter_key}",
+                        help=f"Eliminar el bloque '{bloque['nombre']}' y todos sus subbloques",
+                    ):
+                        st.session_state["organizacion_bloques"].pop(idx_b)
+                        _actualizar_desde_bloques()
+                        st.rerun()
+
+                    st.markdown(
+                        '<hr style="border:none; border-top:1px solid rgba(128,128,128,0.15); margin:8px 0;">',
+                        unsafe_allow_html=True,
+                    )
+
+                # Añadir nuevo bloque
+                ctr_b = st.session_state["contador_add_bloque"]
+                st.markdown("**Añadir bloque:**")
+                col_nb1, col_nb2 = st.columns([4, 1])
+                with col_nb1:
+                    nuevo_bloque_nombre = st.text_input(
+                        "Nombre del nuevo bloque",
+                        key=f"nb_nombre_{ctr_b}",
+                        label_visibility="collapsed",
+                        placeholder="Nombre del nuevo bloque...",
+                    )
+                with col_nb2:
+                    if st.button("+ Añadir bloque", key=f"btn_nb_{ctr_b}"):
+                        nombre_nb = st.session_state.get(f"nb_nombre_{ctr_b}", "").strip()
+                        if nombre_nb:
+                            nums_existentes = [b["numero"] for b in st.session_state["organizacion_bloques"]]
+                            nuevo_num = max(nums_existentes) + 1 if nums_existentes else 1
+                            st.session_state["organizacion_bloques"].append({
+                                "numero": nuevo_num,
+                                "nombre": nombre_nb,
+                                "horas": 0.0,
+                                "subtemas": [],
+                                "manual": True,
+                            })
+                            st.session_state["contador_add_bloque"] = ctr_b + 1
+                            _actualizar_desde_bloques()
+                            st.rerun()
+        else:
+            st.info("La edición manual no está disponible porque el Markdown generado no pudo parsearse en bloques estructurados.")
+
+        st.divider()
+
+        # --- Refinamiento por IA ---
+        st.subheader("¿La organización es correcta?")
+        feedback = st.text_area(
+            "Si quieres mejorar algo, descríbelo aquí (opcional):",
+            placeholder="""Ejemplos de ajustes que puedes pedir:
 - 'Aumenta las horas de [subtema] porque a los alumnos les cuesta más, redistribuye el resto'
 - 'Divide [subtema] en dos partes separadas'
 - 'El bloque [N] necesita más granularidad'
 - 'Reduce [subtema] y añade más horas a [otro subtema]'""",
-        key=f"feedback_{st.session_state['iteracion']}",
-    )
+            key=f"feedback_{st.session_state['iteracion']}",
+        )
 
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        if st.session_state["iteracion"] < 5:
-            regenerar = st.button("🔄 Regenerar", type="secondary")
-        else:
-            regenerar = False
-    with col2:
-        if st.session_state["iteracion"] > 1:
-            st.caption(
-                f"Iteración {st.session_state['iteracion']} — "
-                f"{len(st.session_state['historial_feedback'])} refinamiento(s) aplicado(s)"
+        col1, col2, col3 = st.columns([1, 3, 2])
+        with col1:
+            if st.session_state["iteracion"] < 5:
+                regenerar = st.button("🔄 Regenerar", type="secondary")
+            else:
+                regenerar = False
+        with col2:
+            if st.session_state["iteracion"] > 1:
+                st.caption(
+                    f"Iteración {st.session_state['iteracion']} — "
+                    f"{len(st.session_state['historial_feedback'])} refinamiento(s) aplicado(s)"
+                )
+        with col3:
+            cerrar_org = st.button(
+                "✅ Dar organización por cerrada",
+                type="primary",
+                use_container_width=True,
+                help="Congela la estructura. No se podrán hacer más cambios en esta sesión.",
             )
 
-    if st.session_state["iteracion"] >= 5:
-        st.info("Has alcanzado el máximo de 5 iteraciones. Descarga el resultado actual o reinicia la app.")
+        if st.session_state["iteracion"] >= 5:
+            st.info("Has alcanzado el máximo de 5 iteraciones. Descarga el resultado actual o cierra la organización.")
 
-    if regenerar:
-        entrada_feedback = feedback.strip() if feedback and feedback.strip() else "[Sin feedback — regeneración directa]"
-        st.session_state["historial_feedback"].append(entrada_feedback)
-        st.session_state["iteracion"] += 1
-        if generar_organizacion(guia_docente, materiales_teoria, feedback_previo=st.session_state["historial_feedback"]):
+        if cerrar_org:
+            st.session_state["fase"] = "cerrado"
             st.rerun()
+
+        if regenerar:
+            entrada_feedback = feedback.strip() if feedback and feedback.strip() else "[Sin feedback — regeneración directa]"
+            st.session_state["historial_feedback"].append(entrada_feedback)
+            st.session_state["iteracion"] += 1
+            if generar_organizacion(guia_docente, materiales_teoria, feedback_previo=st.session_state["historial_feedback"]):
+                st.rerun()
