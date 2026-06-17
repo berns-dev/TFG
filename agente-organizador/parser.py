@@ -396,18 +396,27 @@ def extraer_candidatos_con_evidencia(
 # ---------------------------------------------------------------------------
 
 
+def _es_celda_horas(texto: str) -> bool:
+    """True si el texto de una celda parece una hora (p. ej. '2.5h' o '3')."""
+    raw = (texto or "").strip().lower().rstrip("h").strip()
+    if not raw:
+        return False
+    try:
+        float(raw.replace(",", "."))
+        return True
+    except ValueError:
+        return False
+
+
 def parsear_bloques_desde_markdown(markdown: str) -> list[dict]:
     """Parsea el Markdown de organización en una lista de bloques estructurados.
 
-    Retorna [{numero, nombre, horas, subtemas: [{nombre, horas, manual}], manual}].
-    Retorna [] si no se encuentran encabezados ## Bloque N.
+    Retorna [{numero, nombre, horas, subtemas: [{nombre, evidencia, origen, manual, aprobado}], manual}].
 
-    Tolerante a los dos formatos de tabla (3 columnas con Justificación/Origen,
-    4 columnas con Evidencia+Origen). Solo extrae nombre y horas de cada subtema;
-    el resto de metadatos no se necesita para la edición manual.
+    Compatible con el formato actual (| Subtema | Evidencia | Origen |) y con formatos
+    legados que incluían columna Horas por subtema.
     """
     BLOQUE_RE = re.compile(r"^## Bloque (\d+) — (.+?) · ([\d.]+)h", re.MULTILINE)
-    FILA_RE = re.compile(r"^\| (.+?) \| ([\d]+(?:[.,]\d+)?)h? \|")
     _EXCLUIR = {
         "subtema", "topic", "horas", "hours",
         "justificación", "justificacion", "justification",
@@ -427,17 +436,54 @@ def parsear_bloques_desde_markdown(markdown: str) -> list[dict]:
 
         subtemas: list[dict] = []
         for linea in seccion.splitlines():
-            fm = FILA_RE.match(linea.strip())
-            if not fm:
+            linea = linea.strip()
+            if not linea.startswith("|") or not linea.endswith("|"):
                 continue
-            col1 = fm.group(1).strip()
+            celdas = _parsear_celdas(linea)
+            if len(celdas) < 2:
+                continue
+            col1 = celdas[0].strip()
             if col1.lower() in _EXCLUIR or re.match(r"^-+$", col1.replace(" ", "")):
                 continue
-            try:
-                h = float(fm.group(2).replace(",", "."))
-            except ValueError:
+            if not col1:
                 continue
-            subtemas.append({"nombre": col1, "horas": h, "manual": False})
+
+            if len(celdas) >= 4:
+                # Legado: | Subtema | Horas | Evidencia | Origen |
+                subtemas.append({
+                    "nombre": col1,
+                    "evidencia": celdas[2].strip(),
+                    "origen": celdas[3].strip(),
+                    "manual": False,
+                    "aprobado": False,
+                })
+            elif len(celdas) == 3 and _es_celda_horas(celdas[1]):
+                # Legado: | Subtema | Horas | Origen |
+                subtemas.append({
+                    "nombre": col1,
+                    "evidencia": "",
+                    "origen": celdas[2].strip(),
+                    "manual": False,
+                    "aprobado": False,
+                })
+            elif len(celdas) >= 3:
+                # Actual: | Subtema | Evidencia | Origen |
+                subtemas.append({
+                    "nombre": col1,
+                    "evidencia": celdas[1].strip(),
+                    "origen": celdas[2].strip(),
+                    "manual": False,
+                    "aprobado": False,
+                })
+            elif len(celdas) == 2:
+                # Sin origen explícito: | Subtema | Evidencia |
+                subtemas.append({
+                    "nombre": col1,
+                    "evidencia": celdas[1].strip(),
+                    "origen": "Detectado",
+                    "manual": False,
+                    "aprobado": False,
+                })
 
         bloques.append({
             "numero": numero,
@@ -457,11 +503,10 @@ def regenerar_markdown_desde_bloques(
     """Regenera el Markdown de organización a partir del estado estructurado.
 
     Preserva la cabecera (título + resumen de horas) y el pie (nota PL) del
-    markdown original para no perder metadatos de la asignatura. Las horas
-    de cada bloque se recalculan como suma de sus subtemas.
+    markdown original. Las horas de cada bloque vienen del campo bloque['horas']
+    (solo a nivel de bloque, no por subtema).
 
-    Formato de salida: | Subtema | Horas | Origen | (3 columnas).
-    El origen es 'Manual' para subtemas añadidos a mano, 'Detectado' para el resto.
+    Formato de salida: | Subtema | Evidencia | Origen |
     """
     BLOQUE_RE = re.compile(r"^## Bloque \d+", re.MULTILINE)
     FOOTER_RE = re.compile(r"^> ", re.MULTILINE)
@@ -484,19 +529,20 @@ def regenerar_markdown_desde_bloques(
         partes.append(header + "\n\n---\n")
 
     for bloque in bloques:
-        horas_b = (
-            sum(s["horas"] for s in bloque["subtemas"])
-            if bloque["subtemas"]
-            else bloque["horas"]
-        )
+        horas_b = float(bloque.get("horas", 0))
         partes.append(
             f"\n## Bloque {bloque['numero']} — {bloque['nombre']} · {fmt_h(horas_b)}h\n\n"
         )
-        partes.append("| Subtema | Horas | Origen |\n")
-        partes.append("|---------|-------|--------|\n")
+        partes.append("| Subtema | Evidencia | Origen |\n")
+        partes.append("|---------|-----------|--------|\n")
         for sub in bloque["subtemas"]:
-            origen = "Manual" if sub.get("manual") else "Detectado"
-            partes.append(f"| {sub['nombre']} | {fmt_h(sub['horas'])}h | {origen} |\n")
+            if sub.get("manual"):
+                evidencia = sub.get("evidencia") or "Manual (profesor)"
+                origen = "Manual"
+            else:
+                evidencia = sub.get("evidencia") or "Sin señal verificable"
+                origen = sub.get("origen") or "Detectado"
+            partes.append(f"| {sub['nombre']} | {evidencia} | {origen} |\n")
         partes.append("\n")
 
     partes.append("---\n")
@@ -768,11 +814,13 @@ def construir_nombre_descarga(texto_guia: str) -> str:
 
 def normalizar_horas_output(markdown: str, total_horas: float) -> tuple[str, dict | None]:
     """
-    Verifica y normaliza la suma de horas de subtemas en el markdown generado.
+    Verifica y normaliza la suma de horas a nivel de BLOQUE en el markdown generado.
 
-    Si sum(horas_subtemas) != total_horas, redistribuye proporcionalmente (redondeo a
-    0.5h) y actualiza también los encabezados ## Bloque N · Xh. Si la suma ya es
-    correcta, devuelve el markdown sin modificar y None como diagnóstico.
+    Solo opera sobre los encabezados ## Bloque N — Nombre · Xh. Las horas por subtema
+    ya no forman parte del formato de salida.
+
+    Si sum(horas_bloques) != total_horas, redistribuye proporcionalmente (redondeo a
+    0.5h). Si la suma ya es correcta, devuelve el markdown sin modificar y None.
 
     Returns:
         (markdown_corregido, info_ajuste) si se aplicó corrección
@@ -781,35 +829,25 @@ def normalizar_horas_output(markdown: str, total_horas: float) -> tuple[str, dic
     if not total_horas or total_horas <= 0:
         return markdown, None
 
-    FILA_RE = re.compile(r"^\| (.+?) \| ([\d]+(?:[.,]\d+)?)h? \| (.+?) \|\s*$")
-    HDR_RE = re.compile(r"^(## Bloque \d+ — .+? · )([\d.]+)(h.*)$")
-    _CABECERAS = {
-        "subtema", "topic", "horas", "hours",
-        "justificación", "justificacion", "justification",
-        "origen", "origin",
-    }
+    HDR_RE = re.compile(r"^(## Bloque \d+ — .+? · )([\d.,]+)(h.*)$")
 
     lineas = markdown.splitlines(keepends=True)
+    indices_hdrs: list[tuple[int, float, re.Match]] = []
 
-    # -- Primera pasada: recoger (índice_línea, hora_original) de filas de datos --
-    indices_filas: list[tuple[int, float]] = []
     for i, linea in enumerate(lineas):
-        m = FILA_RE.match(linea.rstrip("\r\n"))
+        m = HDR_RE.match(linea.rstrip("\r\n"))
         if not m:
             continue
-        col1 = m.group(1).strip().lower()
-        col2_val = m.group(2).strip()
-        if col1 in _CABECERAS or re.match(r"^-+$", col1) or re.match(r"^-+$", col2_val):
-            continue
         try:
-            indices_filas.append((i, float(col2_val.replace(",", "."))))
+            h = float(m.group(2).replace(",", "."))
         except ValueError:
-            pass
+            continue
+        indices_hdrs.append((i, h, m))
 
-    if not indices_filas:
+    if not indices_hdrs:
         return markdown, None
 
-    horas_originales = [h for _, h in indices_filas]
+    horas_originales = [h for _, h, _ in indices_hdrs]
     suma_actual = sum(horas_originales)
 
     if abs(suma_actual - total_horas) < 0.01:
@@ -817,52 +855,32 @@ def normalizar_horas_output(markdown: str, total_horas: float) -> tuple[str, dic
 
     diferencia = suma_actual - total_horas
 
-    # -- Escalar proporcionalmente a 0.5h --
-    factor = total_horas / suma_actual
-    horas_nuevas = [round(h * factor * 2) / 2 for h in horas_originales]
-    # Compensar residuo de redondeo en el subtema con más horas
-    residuo = total_horas - sum(horas_nuevas)
-    if abs(residuo) >= 0.01:
-        idx_max = horas_nuevas.index(max(horas_nuevas))
-        horas_nuevas[idx_max] = round((horas_nuevas[idx_max] + residuo) * 2) / 2
-
     def fmt(v: float) -> str:
         return str(int(v)) if v == int(v) else f"{v:.1f}"
 
-    # -- Segunda pasada: reconstruir líneas con nuevas horas de subtema --
+    if suma_actual > 0:
+        factor = total_horas / suma_actual
+        horas_nuevas = [round(h * factor * 2) / 2 for h in horas_originales]
+    else:
+        n = len(horas_originales)
+        base = round((total_horas / n) * 2) / 2 if n else 0
+        horas_nuevas = [base] * n
+
+    # Ajuste fino para cuadrar el total exacto.
+    ajuste_residuo = total_horas - sum(horas_nuevas)
+    if horas_nuevas and abs(ajuste_residuo) >= 0.01:
+        horas_nuevas[-1] = round((horas_nuevas[-1] + ajuste_residuo) * 2) / 2
+
     ajustes: dict[str, dict] = {}
     nuevas_lineas = list(lineas)
 
-    for (idx_linea, h_antes), h_nueva in zip(indices_filas, horas_nuevas):
-        linea_orig = lineas[idx_linea]
-        m = FILA_RE.match(linea_orig.rstrip("\r\n"))
-        if not m:
-            continue
-        if abs(h_antes - h_nueva) >= 0.05:
-            nombre_sub = m.group(1).strip()
-            ajustes[nombre_sub] = {"antes": h_antes, "despues": h_nueva}
-        ending = linea_orig[len(linea_orig.rstrip("\r\n")):]
-        nuevas_lineas[idx_linea] = f"| {m.group(1)} | {fmt(h_nueva)}h | {m.group(3)} |{ending}"
-
-    # -- Actualizar encabezados de bloque con la suma de sus subtemas --
-    indices_hdrs = [i for i, l in enumerate(nuevas_lineas) if HDR_RE.match(l.rstrip("\r\n"))]
-    indices_hdrs.append(len(nuevas_lineas))  # sentinel
-
-    for k in range(len(indices_hdrs) - 1):
-        inicio_bloque = indices_hdrs[k]
-        fin_bloque = indices_hdrs[k + 1]
-        horas_bloque = [
-            horas_nuevas[sub_idx]
-            for sub_idx, (idx_linea, _) in enumerate(indices_filas)
-            if inicio_bloque < idx_linea < fin_bloque
-        ]
-        if not horas_bloque:
-            continue
-        linea_hdr = nuevas_lineas[inicio_bloque]
-        m = HDR_RE.match(linea_hdr.rstrip("\r\n"))
-        if m:
-            ending = linea_hdr[len(linea_hdr.rstrip("\r\n")):]
-            nuevas_lineas[inicio_bloque] = m.group(1) + fmt(sum(horas_bloque)) + m.group(3) + ending
+    for (idx_linea, h_orig, m), h_new in zip(indices_hdrs, horas_nuevas):
+        if abs(h_orig - h_new) >= 0.01:
+            nombre_bloque = re.search(r"## Bloque \d+ — (.+?) ·", m.group(0))
+            clave = nombre_bloque.group(1).strip() if nombre_bloque else f"Bloque {idx_linea}"
+            ajustes[clave] = {"antes": h_orig, "despues": h_new}
+        ending = lineas[idx_linea][len(lineas[idx_linea].rstrip("\r\n")):]
+        nuevas_lineas[idx_linea] = m.group(1) + fmt(h_new) + m.group(3) + ending
 
     return "".join(nuevas_lineas), {
         "diferencia": diferencia,
@@ -919,13 +937,14 @@ def parsear_bloques_organizador(markdown: str) -> list[dict]:
     """Extrae la lista de bloques y subtemas del output del Agente Organizador.
 
     Compatible con los formatos de tabla del Organizador:
-      - 3 columnas: | Subtema | Horas | Origen |
-      - 4 columnas: | Subtema | Horas | Evidencia | Origen |
-      - antiguo 3 cols: | Subtema | Horas | Justificación |
+      - Actual: | Subtema | Evidencia | Origen |
+      - Legado: | Subtema | Horas | Evidencia | Origen |
+      - Legado: | Subtema | Horas | Justificación |
 
     Returns:
         list[dict] con claves: numero (int), nombre (str), horas (float),
         subtemas (list[dict{nombre, horas, orden, evidencia, origen, es_fallback}])
+        — horas del subtema se deja en 0.0 (solo aplica a nivel de bloque).
     """
     bloques: list[dict] = []
     matches = list(_HDR_BLOQUE_RE.finditer(markdown))
@@ -946,7 +965,6 @@ def parsear_bloques_organizador(markdown: str) -> list[dict]:
                 continue
             col1 = celdas[0]
             col2 = celdas[1] if len(celdas) > 1 else ""
-            # Saltar cabeceras, separadores y filas vacías.
             if col1.lower() in _CABECERAS_TABLA:
                 continue
             if re.match(r"^-+$", col1) or re.match(r"^-+$", col2):
@@ -954,26 +972,24 @@ def parsear_bloques_organizador(markdown: str) -> list[dict]:
             if not col1:
                 continue
 
-            # Extraer horas del subtema (col2 puede tener "h" al final).
-            horas_sub_raw = re.sub(r"[^\d.,]", "", col2)
-            try:
-                horas_sub = float(horas_sub_raw.replace(",", ".")) if horas_sub_raw else 0.0
-            except ValueError:
-                horas_sub = 0.0
-
-            # Columnas opcionales: Evidencia (col3) y Origen (col4 ó col3).
-            if len(celdas) >= 4:
+            if len(celdas) >= 4 and _es_celda_horas(col2):
                 evidencia = celdas[2]
                 origen = celdas[3]
-            elif len(celdas) == 3:
-                # Formato antiguo o 3-cols: tercera columna es Origen/Justificación.
+            elif len(celdas) >= 4:
+                evidencia = celdas[2]
+                origen = celdas[3]
+            elif len(celdas) == 3 and _es_celda_horas(col2):
                 evidencia = ""
                 origen = celdas[2]
-            else:
-                evidencia = ""
+            elif len(celdas) >= 3:
+                evidencia = col2
+                origen = celdas[2]
+            elif len(celdas) == 2:
+                evidencia = col2
                 origen = "Detectado"
+            else:
+                continue
 
-            # Fallback: evidencia vacía o marcador explícito.
             _ev_norm = evidencia.strip().lower()
             es_fallback = int(
                 _ev_norm in {"sin señal verificable", "sin senal verificable", "fallback", ""}
@@ -982,7 +998,7 @@ def parsear_bloques_organizador(markdown: str) -> list[dict]:
 
             subtemas.append({
                 "nombre": col1,
-                "horas": horas_sub,
+                "horas": 0.0,
                 "orden": len(subtemas) + 1,
                 "evidencia": evidencia,
                 "origen": origen,
@@ -997,3 +1013,59 @@ def parsear_bloques_organizador(markdown: str) -> list[dict]:
         })
 
     return bloques
+
+
+def detectar_output_truncado(markdown: str, stop_reason: str | None = None) -> dict | None:
+    """Detecta si el Markdown de organización quedó incompleto o truncado.
+
+    Señales:
+      - stop_reason == 'max_tokens' en la respuesta de la API.
+      - Última fila de tabla de subtemas con celdas vacías o incompletas.
+      - Último bloque sin tabla de subtemas cerrada correctamente.
+
+    Returns:
+        dict con claves 'motivo' (str) y 'detalle' (str), o None si parece íntegro.
+    """
+    motivos: list[str] = []
+
+    if stop_reason == "max_tokens":
+        motivos.append("La respuesta del modelo se cortó por límite de tokens (max_tokens).")
+
+    lineas = [l.strip() for l in (markdown or "").splitlines() if l.strip()]
+    ultima_fila_tabla: str | None = None
+    cabecera_cols = 0
+
+    for linea in lineas:
+        if not linea.startswith("|"):
+            continue
+        celdas = _parsear_celdas(linea)
+        if not celdas:
+            continue
+        if celdas[0].lower() in _CABECERAS_TABLA or re.match(r"^-+$", celdas[0]):
+            cabecera_cols = len(celdas)
+            continue
+        ultima_fila_tabla = linea
+
+    if ultima_fila_tabla and cabecera_cols >= 3:
+        celdas = _parsear_celdas(ultima_fila_tabla)
+        nombre_corto = (celdas[0][:80] + "…") if celdas and len(celdas[0]) > 80 else (celdas[0] if celdas else "")
+        if len(celdas) < cabecera_cols:
+            motivos.append(
+                f"Última fila de subtemas incompleta ({len(celdas)} de {cabecera_cols} columnas): "
+                f"«{nombre_corto}»"
+            )
+        elif cabecera_cols == 3 and len(celdas) >= 3:
+            if celdas[0] and (not celdas[1].strip() or not celdas[2].strip()):
+                motivos.append(f"Fila de subtema sin evidencia u origen: «{nombre_corto}»")
+        elif cabecera_cols >= 4 and len(celdas) >= 4:
+            if celdas[0] and (not celdas[2].strip() or not celdas[3].strip()):
+                motivos.append(f"Fila de subtema sin evidencia u origen: «{nombre_corto}»")
+
+    if not motivos:
+        return None
+
+    return {
+        "motivo": motivos[0],
+        "detalle": " ".join(motivos),
+        "stop_reason": stop_reason or "",
+    }

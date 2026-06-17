@@ -178,13 +178,13 @@ def construir_prompt(
             "material de teoría. No añadas, elimines ni renombres ninguno.\n"
             "   - Si la lista SUBTEMAS CONFIRMADOS de un material está VACÍA, el modelo NO "
             "puede inferir subtemas libremente: crea UN único subtema con el nombre completo "
-            "del bloque, asígnale todas las horas del bloque, escribe "
+            "del bloque, escribe "
             "\"Sin señal verificable\" en la columna Evidencia y \"Fallback\" en Origen."
         )
         formato_tabla_subtemas = (
-            "  | Subtema | Horas | Evidencia | Origen |\n"
-            "  |---------|-------|----------|--------|\n"
-            "  | {subtema} | {horas} | {evidencia} | {origen} |"
+            "  | Subtema | Evidencia | Origen |\n"
+            "  |---------|-----------|--------|\n"
+            "  | {subtema} | {evidencia} | {origen} |"
         )
         instruccion_columna_subtemas = (
             "- La columna \"Evidencia\" copia el texto entre corchetes [Evidencia: ...] de "
@@ -193,6 +193,8 @@ def construir_prompt(
             "Si no hay señal verificable (fallback), escribe \"Sin señal verificable\".\n"
             "- La columna \"Origen\" copia exactamente el valor [Detectado] o [Manual] de "
             "la lista. Para el caso de fallback usa \"Fallback\". No modifiques estos valores.\n"
+            "- NO incluyas columna de horas por subtema. Las horas se asignan SOLO en el "
+            "encabezado del bloque (## Bloque N — Nombre · Xh).\n"
             "- Estas reglas aplican igual en la primera generación y en todos los refinamientos."
         )
     else:
@@ -204,9 +206,9 @@ def construir_prompt(
             "y escribe \"Sin señal verificable\" en la columna Evidencia."
         )
         formato_tabla_subtemas = (
-            "  | Subtema | Horas | Evidencia |\n"
-            "  |---------|-------|----------|\n"
-            "  | {subtema} | {horas} | {referencia estructural o 'Sin señal verificable'} |"
+            "  | Subtema | Evidencia |\n"
+            "  |---------|-----------|\n"
+            "  | {subtema} | {referencia estructural o 'Sin señal verificable'} |"
         )
         instruccion_columna_subtemas = (
             "- La columna \"Evidencia\" debe ser la referencia estructural verificable que "
@@ -214,6 +216,8 @@ def construir_prompt(
             "diapositiva (e.g. 'Slide 5'), o 'Sin señal verificable' si no hay señal clara.\n"
             "- NUNCA uses como evidencia conteos de páginas/slides ni inferencias temáticas "
             "propias (p. ej. 'este subtema cubre los fundamentos').\n"
+            "- NO incluyas columna de horas por subtema. Las horas se asignan SOLO en el "
+            "encabezado del bloque (## Bloque N — Nombre · Xh).\n"
             "- Estas reglas aplican igual en la primera generación y en todos los refinamientos."
         )
 
@@ -223,7 +227,8 @@ def construir_prompt(
 Instrucciones obligatorias:
 1) Identifica los bloques temáticos y sus horas SOLO a partir del texto de la guía docente.
 {instruccion_subtemas}
-3) Distribuye las horas de cada bloque de forma proporcional entre sus subtemas según el número de slides o páginas dedicadas a cada subtema en los materiales.
+3) Asigna las horas de cada bloque en su encabezado (## Bloque N — Nombre · Xh) de forma
+proporcional al volumen de material de ese bloque. NO repartas horas entre subtemas en la tabla.
 4) Si en los materiales no hay suficiente información para un bloque, indícalo de forma explícita.
 
 IMPORTANTE: Los materiales de contexto/outline son solo orientativos. 
@@ -272,7 +277,7 @@ Formato de salida:
 - Prohibido incluir: análisis previos, conteos de páginas/slides, cálculos intermedios, verificaciones finales, tablas de verificación, notas de ajuste o cualquier texto adicional.
 - El único contenido permitido es el que cabe dentro de la plantilla anterior.
 {instruccion_columna_subtemas}
-- Todos los valores numéricos de horas deben usar punto decimal (.) y nunca coma (,), tanto en las horas de subtemas como en las horas totales de cada bloque.
+- Todos los valores numéricos de horas deben usar punto decimal (.) y nunca coma (,), solo en las horas totales de cada bloque (encabezado ## Bloque N · Xh).
 - La suma de horas de todos los bloques debe ser EXACTAMENTE igual a las horas disponibles.
 - Si necesitas ajustar horas para cuadrar, hazlo internamente y no muestres esos ajustes en el output.
 
@@ -309,10 +314,10 @@ def construir_prompt_refinamiento(
 
     if horas_totales is not None:
         restriccion_horas = (
-            f"\nRESTRICCIÓN DE HORAS: la suma total de todos los bloques debe seguir\n"
-            f"siendo exactamente {horas_totales}h. Si el ajuste modifica las horas de\n"
-            f"un bloque o subtema, redistribuye la diferencia de forma proporcional\n"
-            f"entre los demás para que el total no varíe."
+            f"\nRESTRICCIÓN DE HORAS: la suma total de todos los bloques (encabezados ## Bloque N · Xh) "
+            f"debe seguir siendo exactamente {horas_totales}h. Si el ajuste modifica las horas de "
+            f"un bloque, redistribuye la diferencia de forma proporcional entre los demás bloques "
+            f"para que el total no varíe. No asignes horas a nivel de subtema en la tabla."
         )
     else:
         restriccion_horas = ""
