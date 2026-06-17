@@ -846,7 +846,7 @@ def _db_cnt_get_contenido_subbloque(subbloque_id: int) -> dict | None:
     try:
         r = conn.execute(
             "SELECT id, markdown_borrador, markdown_final, porcentaje_editado, "
-            "estado, fecha_actualizacion "
+            "puntuacion_profesor, estado, fecha_actualizacion "
             "FROM contenido_subbloque WHERE subbloque_id = ?",
             (subbloque_id,),
         ).fetchone()
@@ -928,8 +928,10 @@ def _db_cnt_guardar_final(
         conn.close()
 
 
-def _db_cnt_aprobar_subbloque(subbloque_id: int) -> None:
-    """Marca un subbloque como 'aprobado' sin cambiar su contenido Markdown."""
+def _db_cnt_aprobar_subbloque(subbloque_id: int, puntuacion: int) -> None:
+    """Marca un subbloque como 'aprobado' y guarda la valoración del profesor (1-10)."""
+    if not 1 <= puntuacion <= 10:
+        raise ValueError(f"Puntuación inválida: {puntuacion}")
     conn = db.get_connection(RUTA_DB)
     try:
         existe = conn.execute(
@@ -938,8 +940,9 @@ def _db_cnt_aprobar_subbloque(subbloque_id: int) -> None:
         if existe:
             conn.execute(
                 "UPDATE contenido_subbloque SET estado = 'aprobado', "
-                "fecha_actualizacion = CURRENT_TIMESTAMP WHERE subbloque_id = ?",
-                (subbloque_id,),
+                "puntuacion_profesor = ?, fecha_actualizacion = CURRENT_TIMESTAMP "
+                "WHERE subbloque_id = ?",
+                (puntuacion, subbloque_id),
             )
             conn.commit()
     finally:
@@ -1101,20 +1104,32 @@ def _cnt_init_edicion_state() -> None:
 def _cnt_subbloque_en_edicion(subbloque_id: int, estado: str) -> bool:
     """True si el sub-bloque debe mostrarse en textarea editable."""
     _cnt_init_edicion_state()
-    if estado == "editado":
+    if estado in ("editado", "generado"):
         return True
     return subbloque_id in st.session_state["cnt_en_edicion"]
 
 
-def _cnt_persistir_y_aprobar(subbloque_id: int, texto: str, borrador: str) -> None:
-    """Guarda el Markdown visible y marca el sub-bloque como aprobado."""
+def _cnt_etiqueta_modificacion(cs: dict | None) -> str:
+    """Texto breve sobre si el Markdown final difiere del borrador de la IA."""
+    if cs is None:
+        return ""
+    pct = cs.get("porcentaje_editado")
+    if pct is None or pct == 0:
+        return "sin modificaciones"
+    return f"modificado ({pct}%)"
+
+
+def _cnt_persistir_y_aprobar(
+    subbloque_id: int, texto: str, borrador: str, puntuacion: int
+) -> None:
+    """Guarda el Markdown visible, marca el sub-bloque como aprobado y registra la nota."""
     texto_limpio = texto.strip()
     if not texto_limpio:
         return
     ratio = difflib.SequenceMatcher(None, borrador, texto_limpio).ratio()
     pct = round((1 - ratio) * 100, 1)
     _db_cnt_guardar_final(subbloque_id, texto_limpio, pct)
-    _db_cnt_aprobar_subbloque(subbloque_id)
+    _db_cnt_aprobar_subbloque(subbloque_id, puntuacion)
     _cnt_init_edicion_state()
     st.session_state["cnt_en_edicion"].discard(subbloque_id)
 
@@ -1129,6 +1144,73 @@ def _cnt_persistir_edicion(subbloque_id: int, texto: str, borrador: str) -> None
     _db_cnt_guardar_final(subbloque_id, texto_limpio, pct)
     _cnt_init_edicion_state()
     st.session_state["cnt_en_edicion"].discard(subbloque_id)
+
+
+def _cnt_generar_borrador_subbloque(
+    sub: dict,
+    subbloques: list[dict],
+    tema_nombre: str,
+    tema_horas: float | None,
+    rutas_material: list[str],
+    asignatura_id: int,
+) -> None:
+    """Genera el borrador de un único sub-bloque (una llamada a la API por sub-bloque)."""
+    umbral = float(getattr(_cnt_config, "FIDELITY_THRESHOLD", 0.85))
+    ejecucion_id = _db_crear_ejecucion_contenido(asignatura_id)
+    hubo_error = False
+    with st.status(f"Generando: {sub['nombre']}…", expanded=True) as status:
+        try:
+            st.write("📚 Segmentando y clasificando material…")
+            ev_norm = (sub.get("evidencia") or "").strip().lower()
+            if (
+                not sub.get("es_fallback")
+                and ev_norm not in _CNT_EVIDENCIAS_FALLBACK
+            ):
+                seg_previo = _cnt_extraer_segmento_subbloque(
+                    sub, subbloques, rutas_material
+                )
+                if not seg_previo.strip():
+                    st.warning(
+                        f"⚠️ La referencia «{sub.get('evidencia', '')}» "
+                        "no se encontró en el material. "
+                        "El borrador puede quedar vacío — "
+                        "puedes editarlo manualmente tras generarlo."
+                    )
+            md, fidelidad = _cnt_curar_subbloque(
+                subbloque_meta=sub,
+                todos_subbloques=subbloques,
+                tema_nombre=tema_nombre,
+                tema_horas=tema_horas,
+                rutas_material=rutas_material,
+            )
+            _db_cnt_upsert_borrador(sub["id"], md)
+            if fidelidad is not None and fidelidad < umbral:
+                _db_registrar_validacion(
+                    ejecucion_id=ejecucion_id,
+                    tipo="fidelidad_baja",
+                    descripcion=(
+                        f"sub-bloque '{sub['nombre']}' con fidelidad {fidelidad}"
+                    ),
+                    valor_afectado=fidelidad,
+                    bloqueante=0,
+                )
+                status.update(
+                    label=(
+                        f"⚠️ Borrador listo (fidelidad {fidelidad} < {umbral}): "
+                        f"{sub['nombre']}"
+                    ),
+                    state="complete",
+                )
+            else:
+                status.update(
+                    label=f"✅ Borrador listo: {sub['nombre']}",
+                    state="complete",
+                )
+        except Exception as err:
+            hubo_error = True
+            status.update(label="❌ Error", state="error")
+            st.error(f"Error en «{sub['nombre']}»: {err}")
+    _db_actualizar_ejecucion(ejecucion_id, "error" if hubo_error else "completado")
 
 
 # =============================================================================
@@ -1189,90 +1271,22 @@ def _vista_contenido() -> None:
 
     rutas_material = _db_cnt_get_rutas_material(asignatura_id)
 
-    sin_borrador = [
-        s for s in subbloques
-        if _db_cnt_get_contenido_subbloque(s["id"]) is None
-    ]
+    # Estado de cada sub-bloque (orden de la organización)
+    estados_sb: list[dict] = []
+    for sub in subbloques:
+        cs = _db_cnt_get_contenido_subbloque(sub["id"])
+        estados_sb.append({
+            "sub": sub,
+            "cs": cs,
+            "estado": cs["estado"] if cs else "pendiente",
+        })
 
-    # ── Botón de generación de borradores ─────────────────────────────────────
-    if sin_borrador:
-        if not rutas_material:
-            st.warning(
-                f"Faltan borradores para {len(sin_borrador)} sub-bloques, pero no hay "
-                "materiales de teoría en disco. Sube los archivos en el **Agente Organizador** primero."
-            )
-        else:
-            if st.button(
-                f"Generar borradores ({len(sin_borrador)} sub-bloques sin procesar)",
-                type="primary",
-                use_container_width=True,
-                key="cnt_btn_generar",
-            ):
-                umbral = float(getattr(_cnt_config, "FIDELITY_THRESHOLD", 0.85))
-                ejecucion_id = _db_crear_ejecucion_contenido(asignatura_id)
-                hubo_error = False
-                for sub in sin_borrador:
-                    with st.status(
-                        f"Generando borrador: {sub['nombre']}…", expanded=True
-                    ) as status:
-                        try:
-                            st.write("📚 Segmentando y clasificando material…")
-                            ev_norm = (sub.get("evidencia") or "").strip().lower()
-                            if (
-                                not sub.get("es_fallback")
-                                and ev_norm not in _CNT_EVIDENCIAS_FALLBACK
-                            ):
-                                seg_previo = _cnt_extraer_segmento_subbloque(
-                                    sub, subbloques, rutas_material
-                                )
-                                if not seg_previo.strip():
-                                    st.warning(
-                                        f"⚠️ La referencia «{sub.get('evidencia', '')}» "
-                                        f"no se encontró en el material. "
-                                        "El borrador puede quedar vacío — "
-                                        "puedes editarlo manualmente tras generarlo."
-                                    )
-                            md, fidelidad = _cnt_curar_subbloque(
-                                subbloque_meta=sub,
-                                todos_subbloques=subbloques,
-                                tema_nombre=tema_nombre,
-                                tema_horas=tema_horas,
-                                rutas_material=rutas_material,
-                            )
-                            _db_cnt_upsert_borrador(sub["id"], md)
-                            # Persistir aviso si la fidelidad léxica cae bajo el umbral (0.85).
-                            if fidelidad is not None and fidelidad < umbral:
-                                _db_registrar_validacion(
-                                    ejecucion_id=ejecucion_id,
-                                    tipo="fidelidad_baja",
-                                    descripcion=(
-                                        f"sub-bloque '{sub['nombre']}' con fidelidad {fidelidad}"
-                                    ),
-                                    valor_afectado=fidelidad,
-                                    bloqueante=0,
-                                )
-                                status.update(
-                                    label=(
-                                        f"⚠️ Borrador listo (fidelidad {fidelidad} < {umbral}): "
-                                        f"{sub['nombre']}"
-                                    ),
-                                    state="complete",
-                                )
-                            else:
-                                status.update(
-                                    label=f"✅ Borrador listo: {sub['nombre']}",
-                                    state="complete",
-                                )
-                        except Exception as err:
-                            hubo_error = True
-                            status.update(label="❌ Error", state="error")
-                            st.error(f"Error en «{sub['nombre']}»: {err}")
-                _db_actualizar_ejecucion(
-                    ejecucion_id, "error" if hubo_error else "completado"
-                )
-                st.rerun()
+    pendientes = [e for e in estados_sb if e["cs"] is None]
+    en_revision_count = sum(
+        1 for e in estados_sb if e["estado"] in ("generado", "editado")
+    )
+    todos_aprobados = all(e["estado"] == "aprobado" for e in estados_sb)
 
-    # ── Sub-bloques — áreas de edición ────────────────────────────────────────
     st.divider()
 
     # Progreso del bloque en tiempo real.
@@ -1280,9 +1294,90 @@ def _vista_contenido() -> None:
     _pct = prog["porcentaje"]
     _col_prog, _col_info = st.columns([3, 1])
     with _col_prog:
-        st.progress(_pct / 100, text=f"Progreso del bloque: {prog['aprobados']}/{prog['total']} sub-bloques aprobados ({_pct}%)")
+        st.progress(
+            _pct / 100,
+            text=(
+                f"Progreso del bloque: {prog['aprobados']}/{prog['total']} "
+                f"sub-bloques aprobados ({_pct}%)"
+            ),
+        )
     with _col_info:
         st.caption(f"**{len(subbloques)} sub-bloques** del bloque *{tema_nombre}*")
+
+    # ── Índice de sub-bloques ─────────────────────────────────────────────────
+    st.markdown("**Sub-bloques de este tema**")
+    for i, e in enumerate(estados_sb, 1):
+        sub = e["sub"]
+        cs = e["cs"]
+        estado = e["estado"]
+        if estado == "aprobado":
+            nota = cs.get("puntuacion_profesor") if cs else None
+            mod = _cnt_etiqueta_modificacion(cs)
+            sufijo = f"✅ {nota}/10 — {mod}" if nota else f"✅ Aprobado — {mod}"
+        elif estado in ("generado", "editado"):
+            sufijo = "🔵 En revisión"
+        else:
+            sufijo = "⚪ Pendiente"
+        st.caption(f"{i}. **{sub['nombre']}** — {sufijo}")
+
+    st.divider()
+
+    # ── Generación por selección (cada sub-bloque = una llamada a la API) ───
+    if pendientes:
+        if not rutas_material:
+            st.warning(
+                "No hay materiales de teoría en disco. "
+                "Sube los archivos en el **Agente Organizador** primero."
+            )
+        else:
+            st.markdown("**Generar borradores**")
+            st.caption(
+                "Marca los sub-bloques pendientes que quieras procesar. "
+                "Cada uno se genera por separado (segmentación independiente)."
+            )
+            seleccionados: list[dict] = []
+            for i, e in enumerate(estados_sb, 1):
+                if e["cs"] is not None:
+                    continue
+                sub = e["sub"]
+                col_chk, col_lbl = st.columns([0.06, 0.94])
+                with col_chk:
+                    if st.checkbox(
+                        "Seleccionar",
+                        key=f"cnt_sel_{sub['id']}",
+                        label_visibility="collapsed",
+                    ):
+                        seleccionados.append(sub)
+                with col_lbl:
+                    st.markdown(f"{i}. **{sub['nombre']}** — ⚪ Pendiente")
+
+            n_sel = len(seleccionados)
+            if st.button(
+                f"Generar seleccionados ({n_sel})",
+                type="primary",
+                use_container_width=True,
+                key="cnt_btn_generar",
+                disabled=n_sel == 0,
+            ):
+                for sub in seleccionados:
+                    _cnt_generar_borrador_subbloque(
+                        sub=sub,
+                        subbloques=subbloques,
+                        tema_nombre=tema_nombre,
+                        tema_horas=tema_horas,
+                        rutas_material=rutas_material,
+                        asignatura_id=asignatura_id,
+                    )
+                st.rerun()
+    elif todos_aprobados:
+        st.success("Todos los sub-bloques de este tema están aprobados y valorados.")
+    elif en_revision_count > 0:
+        st.caption(
+            f"{en_revision_count} sub-bloque(s) en revisión — confírmalos cuando estés listo."
+        )
+
+    # ── Sub-bloques — áreas de edición ────────────────────────────────────────
+    st.divider()
 
     _ETIQUETAS_ESTADO = {
         "pendiente": "⚪ Sin borrador",
@@ -1299,7 +1394,12 @@ def _vista_contenido() -> None:
             etiqueta = _ETIQUETAS_ESTADO["pendiente"]
             texto_inicial = ""
         elif estado_actual == "aprobado":
-            etiqueta = _ETIQUETAS_ESTADO["aprobado"]
+            nota = cs.get("puntuacion_profesor")
+            mod = _cnt_etiqueta_modificacion(cs)
+            etiqueta = (
+                f"✅ Aprobado — {nota}/10 — {mod}" if nota
+                else f"✅ Aprobado — {mod}"
+            )
             texto_inicial = cs.get("markdown_final") or cs.get("markdown_borrador") or ""
         elif estado_actual == "editado":
             pct_ed = cs.get("porcentaje_editado") or 0
@@ -1312,23 +1412,24 @@ def _vista_contenido() -> None:
             etiqueta = _ETIQUETAS_ESTADO["pendiente"]
             texto_inicial = ""
 
+        es_activo = estado_actual in ("generado", "editado")
         with st.expander(
             f"**{sub['nombre']}** — {etiqueta}",
-            expanded=bool(cs is not None and cs.get("markdown_borrador")),
+            expanded=es_activo,
         ):
             en_edicion = _cnt_subbloque_en_edicion(sub["id"], estado_actual)
             tiene_contenido = bool(texto_inicial.strip())
 
-            if tiene_contenido and not en_edicion:
+            if estado_actual == "aprobado" and tiene_contenido:
                 st.text_area(
                     "Contenido Markdown (solo lectura):",
                     value=texto_inicial,
-                    height=350,
+                    height=300,
                     disabled=True,
                     key=f"cnt_view_{sub['id']}",
                     label_visibility="collapsed",
                 )
-            elif en_edicion:
+            elif en_edicion and tiene_contenido:
                 ta_key = f"contenido_{sub['id']}"
                 if ta_key not in st.session_state:
                     st.session_state[ta_key] = texto_inicial
@@ -1338,85 +1439,49 @@ def _vista_contenido() -> None:
                     height=350,
                     label_visibility="collapsed",
                 )
-            elif not tiene_contenido:
-                st.caption("Sin contenido todavía — genera el borrador o edítalo manualmente.")
-
-            if estado_actual in ("generado", "editado") and cs is not None:
-                borrador = cs.get("markdown_borrador") or ""
-                col_rechazar, col_guardar, col_aprobar = st.columns(3)
-
-                if not en_edicion:
-                    with col_rechazar:
-                        if st.button(
-                            "✏️ Rechazar y editar",
-                            key=f"cnt_btn_rechazar_{sub['id']}",
-                            type="secondary",
-                            use_container_width=True,
-                        ):
-                            st.session_state["cnt_en_edicion"].add(sub["id"])
-                            st.session_state[f"contenido_{sub['id']}"] = texto_inicial
-                            st.rerun()
-                    with col_aprobar:
-                        if st.button(
-                            "✅ Aprobar este sub-bloque",
-                            key=f"cnt_btn_aprobar_{sub['id']}",
-                            type="primary",
-                            use_container_width=True,
-                        ):
-                            _cnt_persistir_y_aprobar(sub["id"], texto_inicial, borrador)
-                            st.rerun()
+                borrador = (cs.get("markdown_borrador") or "") if cs else ""
+                texto_actual = st.session_state.get(ta_key, texto_inicial)
+                ratio_prev = difflib.SequenceMatcher(
+                    None, borrador, texto_actual.strip()
+                ).ratio()
+                pct_prev = round((1 - ratio_prev) * 100, 1)
+                if pct_prev > 0:
+                    st.caption(f"📝 Borrador modificado un {pct_prev}% respecto al original de la IA.")
                 else:
-                    texto_actual = st.session_state.get(
-                        f"contenido_{sub['id']}", texto_inicial
-                    )
-                    with col_guardar:
-                        if st.button(
-                            "💾 Guardar edición",
-                            key=f"cnt_btn_guardar_sub_{sub['id']}",
-                            type="secondary",
-                            use_container_width=True,
-                        ):
-                            _cnt_persistir_edicion(sub["id"], texto_actual, borrador)
-                            st.rerun()
-                    with col_aprobar:
-                        if st.button(
-                            "✅ Aprobar este sub-bloque",
-                            key=f"cnt_btn_aprobar_{sub['id']}",
-                            type="primary",
-                            use_container_width=True,
-                        ):
-                            _cnt_persistir_y_aprobar(sub["id"], texto_actual, borrador)
-                            st.rerun()
+                    st.caption("📝 Sin modificaciones respecto al borrador de la IA.")
 
-    # ── Botón de guardado global (lote) ─────────────────────────────────────
-    st.divider()
-    if st.button(
-        "Guardar contenido del bloque",
-        type="secondary",
-        use_container_width=True,
-        key="cnt_btn_guardar",
-    ):
-        guardados = 0
-        for sub in subbloques:
-            cs = _db_cnt_get_contenido_subbloque(sub["id"])
-            if cs is None:
-                continue
-            estado_sub = cs.get("estado") or "pendiente"
-            if estado_sub not in ("generado", "editado"):
-                continue
-            if not _cnt_subbloque_en_edicion(sub["id"], estado_sub):
-                continue
-            texto_final = st.session_state.get(f"contenido_{sub['id']}", "").strip()
-            if not texto_final:
-                continue
-            borrador = cs.get("markdown_borrador") or ""
-            _cnt_persistir_edicion(sub["id"], texto_final, borrador)
-            guardados += 1
-        if guardados:
-            st.success(f"✅ {guardados} sub-bloque(s) guardados.")
-        else:
-            st.info("No había sub-bloques en edición con contenido para guardar.")
-        st.rerun()
+                puntuacion = st.select_slider(
+                    "Valoración del sub-bloque (1-10):",
+                    options=list(range(1, 11)),
+                    value=7,
+                    key=f"cnt_valoracion_{sub['id']}",
+                )
+                col_guardar, col_confirmar = st.columns(2)
+                with col_guardar:
+                    if st.button(
+                        "💾 Guardar edición",
+                        key=f"cnt_btn_guardar_sub_{sub['id']}",
+                        type="secondary",
+                        use_container_width=True,
+                    ):
+                        _cnt_persistir_edicion(sub["id"], texto_actual, borrador)
+                        st.rerun()
+                with col_confirmar:
+                    if st.button(
+                        "✅ Confirmar y valorar",
+                        key=f"cnt_btn_confirmar_{sub['id']}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        _cnt_persistir_y_aprobar(
+                            sub["id"], texto_actual, borrador, puntuacion
+                        )
+                        st.rerun()
+            elif not tiene_contenido:
+                st.caption(
+                    "Sin contenido todavía — selecciónalo arriba y pulsa "
+                    "**Generar seleccionados**."
+                )
 
 
 # =============================================================================
