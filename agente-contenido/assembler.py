@@ -306,6 +306,97 @@ def assemble_multiple(resultados: list[dict[str, Any]]) -> str:
     return f"{unified_fm}\n\n{cuerpo}"
 
 
+def _strip_h1_from_body(body: str) -> str:
+    """Elimina líneas de encabezado H1 (# pero no ##) de un cuerpo Markdown."""
+    lines = body.split("\n")
+    filtered = []
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            continue
+        filtered.append(ln)
+    return "\n".join(filtered).strip()
+
+
+def assemble_subbloque_body(
+    items: list[dict[str, Any]],
+    nombre_subbloque: str,
+    nombre_del_archivo: str = "",
+) -> str:
+    """Ensambla el cuerpo Markdown de un subbloque (sin frontmatter YAML propio).
+
+    Reutiliza assemble_markdown() para toda la lógica de secciones canónicas,
+    luego extrae el cuerpo y sustituye el H1 detectado por el nombre del subbloque.
+    """
+    full_md = assemble_markdown(
+        items, nombre_del_archivo=nombre_del_archivo or nombre_subbloque or "subbloque"
+    )
+    body = _body_after_frontmatter(full_md)
+    body_no_h1 = _strip_h1_from_body(body)
+    h1 = f"# {nombre_subbloque}\n\n" if nombre_subbloque else ""
+    return (h1 + body_no_h1).strip()
+
+
+def assemble_block_with_subbloques(
+    subbloque_results: list[dict[str, Any]],
+    nombre_del_archivo: str,
+    nombre_bloque: str = "",
+    bloque_horas: float = 0.0,
+) -> str:
+    """Ensambla el Markdown final de un bloque como secuencia de subbloques.
+
+    Cada subbloque queda delimitado por marcadores HTML comment:
+        <!-- SUBBLOQUE_INICIO: id="N" nombre="..." horas="X" estado="..." -->
+        ...markdown del subbloque...
+        <!-- SUBBLOQUE_FIN: id="N" -->
+
+    Estos marcadores son invisibles al renderizar Markdown y permiten
+    parsear el documento de forma fiable por subbloque mediante regex:
+        re.findall(r'<!-- SUBBLOQUE_INICIO: (.*?) -->', md)
+
+    El frontmatter YAML del bloque incluye los campos canónicos del Agente
+    Contenido más los específicos del nivel bloque:
+        bloque, bloque_horas, total_subbloques.
+    """
+    all_idiomas: list[str] = []
+    for sb in subbloque_results:
+        for item in sb.get("items", []):
+            all_idiomas.append(str(item.get("idioma", "es")))
+    idioma_doc = Counter(all_idiomas).most_common(1)[0][0] if all_idiomas else "es"
+    if idioma_doc not in SECTION_NAMES:
+        idioma_doc = "es"
+
+    frontmatter = (
+        "---\n"
+        f"archivo_origen: {nombre_del_archivo}\n"
+        f"bloque: {nombre_bloque}\n"
+        f"bloque_horas: {bloque_horas}\n"
+        f"idioma: {idioma_doc}\n"
+        f"fecha_procesado: {date.today().isoformat()}\n"
+        f"total_subbloques: {len(subbloque_results)}\n"
+        "compatible_agente_organizador: true\n"
+        "---"
+    )
+
+    sections: list[str] = []
+    for i, sb in enumerate(subbloque_results):
+        nombre = sb.get("nombre", f"Subbloque {i + 1}")
+        horas = sb.get("horas", 0.0)
+        estado = sb.get("estado", "pendiente")
+        md = (sb.get("markdown") or "").strip()
+
+        inicio = (
+            f'<!-- SUBBLOQUE_INICIO: id="{i}" nombre="{nombre}" '
+            f'horas="{horas}" estado="{estado}" -->'
+        )
+        body = md if md else "*Contenido pendiente de procesar.*"
+        fin = f'<!-- SUBBLOQUE_FIN: id="{i}" -->'
+        sections.append(f"{inicio}\n\n{body}\n\n{fin}")
+
+    cuerpo = "\n\n---\n\n".join(sections)
+    return f"{frontmatter}\n\n{cuerpo}"
+
+
 def unified_download_filename(stems: list[str]) -> str:
     """Nombre de archivo para el .md unificado (varios archivos). Prefijo común o material_curado."""
     if len(stems) < 2:
