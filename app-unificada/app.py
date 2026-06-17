@@ -8,6 +8,7 @@ Arranque:
 """
 
 import difflib
+from datetime import datetime
 import importlib.util as _importlib_util
 import os
 import re
@@ -2452,7 +2453,26 @@ def _vista_resumen() -> None:
     fidelidad_txt = (
         f"{m['fidelidad_media']:.3f}" if m["fidelidad_media"] is not None else "—"
     )
-    ultima_txt = m["ultima_ejecucion"] or "—"
+    if m["ultima_ejecucion"]:
+        try:
+            _dt = datetime.strptime(m["ultima_ejecucion"], "%Y-%m-%d %H:%M:%S")
+            ultima_txt = f"{_dt.day} {_dt.strftime('%b, %H:%M')}"
+            _delta_s = int((datetime.now() - _dt).total_seconds())
+            if _delta_s < 60:
+                _relativo = "ahora mismo"
+            elif _delta_s < 3600:
+                _relativo = f"hace {_delta_s // 60} min"
+            elif _delta_s < 86400:
+                _relativo = f"hace {_delta_s // 3600}h"
+            else:
+                _d = _delta_s // 86400
+                _relativo = f"hace {_d} día{'s' if _d != 1 else ''}"
+        except ValueError:
+            ultima_txt = m["ultima_ejecucion"]
+            _relativo = None
+    else:
+        ultima_txt = "—"
+        _relativo = None
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
@@ -2475,6 +2495,8 @@ def _vista_resumen() -> None:
         help="Filas en `validaciones` ligadas a ejecuciones de esta asignatura.",
     )
     c4.metric("Última ejecución", ultima_txt)
+    if _relativo:
+        c4.caption(_relativo)
 
     st.divider()
 
