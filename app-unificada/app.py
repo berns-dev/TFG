@@ -41,7 +41,10 @@ RUTA_DB = os.path.join(RAIZ_MONOREPO, "data", "tfg.db")
 ACENTO = "#185FA5"
 ACENTO_OSCURO = "#0C447C"
 
-VISTAS = ["Resumen", "Inputs", "Organizador", "Contenido", "Presentación", "Base de datos"]
+VISTAS_NAV = ["Resumen", "Inputs", "Organizador", "Contenido", "Presentación"]
+# Vista de depuración (no aparece en la navegación lateral).
+VISTA_BASE_DATOS = "Base de datos"
+VISTAS = VISTAS_NAV
 
 TITULOS_SECCION = {
     "Resumen": "Resumen del pipeline",
@@ -2859,11 +2862,13 @@ with st.sidebar:
     st.divider()
 
     if "vista_actual" not in st.session_state:
-        st.session_state["vista_actual"] = VISTAS[0]
+        st.session_state["vista_actual"] = VISTAS_NAV[0]
+    elif st.session_state["vista_actual"] == VISTA_BASE_DATOS:
+        st.session_state["vista_actual"] = VISTAS_NAV[0]
 
     vista = st.radio(
         "Navegación",
-        VISTAS,
+        VISTAS_NAV,
         key="vista_actual",
         label_visibility="collapsed",
         format_func=lambda v: f"{ICONOS_VISTA.get(v, '·')} {v}",
@@ -2890,7 +2895,5 @@ elif vista == "Contenido":
     _vista_contenido()
 elif vista == "Presentación":
     _vista_presentacion()
-elif vista == "Base de datos":
-    _vista_base_datos()
 else:
     st.info("Vista en construcción — se integra en el siguiente paso.")
