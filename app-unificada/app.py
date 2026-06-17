@@ -9,6 +9,7 @@ Arranque:
 
 import difflib
 from datetime import datetime
+import html
 import importlib.util as _importlib_util
 import os
 import re
@@ -405,7 +406,13 @@ def _org_reset_state() -> None:
 # Organizador — persistencia de archivos
 # =============================================================================
 
-def _org_registrar_archivos(guia_docente, materiales_teoria, asignatura_id: int, slug: str) -> None:
+def _org_registrar_archivos(
+    guia_docente,
+    materiales_teoria,
+    asignatura_id: int,
+    slug: str,
+    asignatura_nombre: str,
+) -> None:
     """Guarda en disco y registra en BD los archivos que sean nuevos en esta sesión."""
     dir_inputs = os.path.join(RAIZ_MONOREPO, "data", slug, "inputs")
     os.makedirs(dir_inputs, exist_ok=True)
@@ -422,6 +429,7 @@ def _org_registrar_archivos(guia_docente, materiales_teoria, asignatura_id: int,
         except Exception:
             pass
         st.session_state["org_inputs_registrados"].add(clave)
+        st.success(f"**{archivo.name}** añadido a **{asignatura_nombre}**")
 
     if guia_docente is not None:
         _registrar(guia_docente, "guia_docente")
@@ -2050,6 +2058,24 @@ def _org_render_editor_manual(slug: str) -> None:
                     st.rerun()
 
 
+def _render_asignatura_activa_banner(asignatura: str) -> None:
+    """Muestra de forma destacada la asignatura a la que se asociarán los archivos subidos."""
+    nombre = html.escape(asignatura)
+    st.markdown(
+        f"""
+        <div class="asignatura-activa-banner">
+            <div class="barra"></div>
+            <div class="cuerpo">
+                <div class="etiqueta">Los archivos se asociarán a</div>
+                <div class="nombre">{nombre}</div>
+                <div class="aviso">Comprueba que es la asignatura correcta antes de subir archivos.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _vista_organizador() -> None:
     if _ORG_ERROR:
         st.error(f"No se pudo cargar el Agente Organizador: {_ORG_ERROR}")
@@ -2084,6 +2110,7 @@ def _vista_organizador() -> None:
     _render_stepper(["Guía docente", "Subtemas", "Propuesta"], _paso_org)
 
     # ── Uploaders ──────────────────────────────────────────────────────────────
+    _render_asignatura_activa_banner(asignatura)
     st.markdown(
         "<div style='font-family:\"DM Sans\",sans-serif; font-size:11px; font-weight:500; "
         "color:var(--text-color); opacity:0.55; letter-spacing:0.1em; text-transform:uppercase; "
@@ -2102,7 +2129,7 @@ def _vista_organizador() -> None:
             accept_multiple_files=True, key="org_uploader_materiales",
         )
 
-    _org_registrar_archivos(guia_docente, materiales_teoria, asignatura_id, slug)
+    _org_registrar_archivos(guia_docente, materiales_teoria, asignatura_id, slug, asignatura)
     _org_detectar_cambio(guia_docente, materiales_teoria)
 
     puede_generar = guia_docente is not None and bool(materiales_teoria)
@@ -2697,6 +2724,29 @@ st.markdown(
     .seccion .titulo {{
         font-family: 'Playfair Display', serif; font-size: 26px; font-weight: 500;
         color: var(--text-color); line-height: 1.1;
+    }}
+    .asignatura-activa-banner {{
+        display: flex; align-items: stretch; gap: 14px;
+        margin: 0 0 16px 0; padding: 14px 18px;
+        border-radius: 10px;
+        background: rgba(24, 95, 165, 0.10);
+        border: 1px solid rgba(24, 95, 165, 0.22);
+    }}
+    .asignatura-activa-banner .barra {{
+        width: 4px; border-radius: 2px; background: {ACENTO}; flex-shrink: 0;
+    }}
+    .asignatura-activa-banner .etiqueta {{
+        font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 500;
+        letter-spacing: 0.1em; text-transform: uppercase;
+        color: {ACENTO_OSCURO}; opacity: 0.85; margin-bottom: 4px;
+    }}
+    .asignatura-activa-banner .nombre {{
+        font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 500;
+        color: {ACENTO_OSCURO}; line-height: 1.2; margin-bottom: 6px;
+    }}
+    .asignatura-activa-banner .aviso {{
+        font-family: 'DM Sans', sans-serif; font-size: 13px;
+        color: var(--text-color); opacity: 0.65;
     }}
     </style>
     """,
