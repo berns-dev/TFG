@@ -5,6 +5,7 @@ import anthropic
 from dotenv import load_dotenv
 
 MODEL = "claude-sonnet-4-5"
+MAX_TOKENS = 8192  # alineado con Agente Presentación (HTML); margen para asignaturas largas
 
 SYSTEM_PROMPT = (
     "Eres un asistente especializado en organización docente para asignaturas "
@@ -15,7 +16,6 @@ SYSTEM_PROMPT = (
 )
 
 load_dotenv(Path(__file__).parent / ".env")
-# La API key se carga desde .env en la variable ANTHROPIC_API_KEY.
 _api_key = os.getenv("ANTHROPIC_API_KEY")
 
 if not _api_key:
@@ -24,11 +24,14 @@ if not _api_key:
 client = anthropic.Anthropic(api_key=_api_key)
 
 
-def ejecutar_agente(prompt: str) -> str:
+def ejecutar_agente(prompt: str) -> tuple[str, str]:
+    """Ejecuta el agente y devuelve (texto_respuesta, stop_reason)."""
     message = client.messages.create(
         model=MODEL,
-        max_tokens=4096,
+        max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    texto = message.content[0].text
+    stop_reason = getattr(message, "stop_reason", None) or ""
+    return texto, stop_reason
