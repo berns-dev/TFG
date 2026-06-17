@@ -324,6 +324,7 @@ def _db_confirmar_organizacion(asignatura_id: int, output_id: int, bloques: list
 
     Cada subtema puede incluir horas, evidencia, origen y es_fallback cuando
     procede del nuevo formato del Agente Organizador (v2+).
+    Cada bloque puede incluir ``archivo_origen`` para vincular su PDF (``input_id``).
     """
     conn = db.get_connection(RUTA_DB)
     try:
@@ -335,14 +336,27 @@ def _db_confirmar_organizacion(asignatura_id: int, output_id: int, bloques: list
         conn.execute("DELETE FROM temas WHERE asignatura_id = ?", (asignatura_id,))
 
         for orden, bloque in enumerate(bloques, start=1):
+            input_id: int | None = None
+            archivo = (bloque.get("archivo_origen") or "").strip()
+            if archivo:
+                fila = conn.execute(
+                    "SELECT id FROM inputs "
+                    "WHERE asignatura_id = ? AND tipo = 'material_teoria' "
+                    "AND nombre_fichero = ?",
+                    (asignatura_id, archivo),
+                ).fetchone()
+                if fila:
+                    input_id = fila["id"]
+
             cur = conn.execute(
                 """INSERT INTO temas
-                   (asignatura_id, organizador_output_id, nombre, horas, bloque, orden)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (asignatura_id, organizador_output_id, nombre, horas, bloque, orden, input_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     asignatura_id, output_id,
                     bloque["nombre"], bloque["horas"],
                     f"Bloque {bloque['numero']}", orden,
+                    input_id,
                 ),
             )
             tema_id = cur.lastrowid
@@ -394,6 +408,7 @@ _ORG_KEYS: dict[str, object] = {
     "org_organizacion_bloques": lambda: [],
     "org_contador_add_subtema": lambda: {},
     "org_contador_add_bloque": 0,
+    "org_subtemas_detectados": lambda: [],
 }
 
 
@@ -623,19 +638,64 @@ def _org_build_subtemas_confirmados(
 
 def _org_resolver_archivo_bloque(nombre_bloque: str, archivos: list[str], idx: int) -> str:
     """Asocia un bloque generado al PDF/PPTX de teoría más probable."""
+    return _org_parser.resolver_archivo_bloque(nombre_bloque, archivos, idx)
+
+
+def _org_cargar_candidatos_material_desde_disco(
+    asignatura_id: int,
+) -> tuple[list[str], list[list[dict]]]:
+    """Re-detecta candidatos con evidencia desde los inputs persistidos en BD."""
+    conn = db.get_connection(RUTA_DB)
+    try:
+        filas = conn.execute(
+            "SELECT nombre_fichero, ruta_disco FROM inputs "
+            "WHERE asignatura_id = ? AND tipo = 'material_teoria' "
+            "ORDER BY id",
+            (asignatura_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    archivos: list[str] = []
+    candidatos: list[list[dict]] = []
+    for fila in filas:
+        ruta = fila["ruta_disco"]
+        if not os.path.exists(ruta):
+            continue
+        nombre = fila["nombre_fichero"]
+        try:
+            with open(ruta, "rb") as fh:
+                archivo_bytes = fh.read()
+            texto = _org_parser.extraer_texto(archivo_bytes, nombre)
+            cands = _org_parser.extraer_candidatos_con_evidencia(
+                texto, nombre, archivo_bytes
+            )
+        except Exception:
+            cands = []
+        archivos.append(nombre)
+        candidatos.append(cands)
+    return archivos, candidatos
+
+
+def _org_preparar_bloques_para_confirmar(
+    markdown: str,
+    asignatura_id: int,
+) -> list[dict]:
+    """Parsea el Markdown de organización y completa evidencia desde detección determinista."""
+    bloques = _org_parser.parsear_bloques_organizador(markdown)
+    if not bloques:
+        return []
+
+    archivos = st.session_state.get("org_ultimos_archivos_teoria", [])
+    candidatos = st.session_state.get("org_subtemas_detectados", [])
     if not archivos:
-        return ""
-    nb = _org_parser.normalizar_subtema(nombre_bloque)
-    mejor, score = "", 0.0
-    for ar in archivos:
-        stem = Path(ar).stem
-        stem_norm = _org_parser.normalizar_subtema(stem)
-        r = difflib.SequenceMatcher(None, nb, stem_norm).ratio()
-        if r > score:
-            score, mejor = r, ar
-    if score >= 0.35:
-        return mejor
-    return archivos[idx] if idx < len(archivos) else archivos[0]
+        archivos, candidatos = _org_cargar_candidatos_material_desde_disco(asignatura_id)
+    elif not candidatos:
+        _, candidatos = _org_cargar_candidatos_material_desde_disco(asignatura_id)
+
+    return _org_parser.enriquecer_bloques_con_evidencia_detectada(
+        bloques, candidatos, archivos
+    )
 
 
 def _org_format_evidencia(sub: dict, archivo_bloque: str) -> str:
@@ -767,6 +827,7 @@ def _org_generar_organizacion(
                 subtemas_confirmados = _org_build_subtemas_confirmados(
                     textos_teoria, archivos_teoria, archivos_teoria_bytes
                 )
+            st.session_state["org_subtemas_detectados"] = subtemas_confirmados
 
             st.write("🌐 Detectando idioma de los materiales...")
             prompt, _idioma = _org_prompts.construir_prompt(
@@ -855,18 +916,25 @@ def _db_cnt_get_contenido_subbloque(subbloque_id: int) -> dict | None:
         conn.close()
 
 
-def _db_cnt_get_rutas_material(asignatura_id: int) -> list[str]:
-    """Rutas de archivos material_teoria guardadas en disco (filtra los que no existen)."""
+def _db_cnt_get_rutas_material(tema_id: int) -> list[str]:
+    """Ruta del PDF/PPTX vinculado al bloque temático (``temas.input_id``).
+
+    Si el bloque no tiene ``input_id`` (datos legados), devuelve lista vacía.
+    """
     conn = db.get_connection(RUTA_DB)
     try:
-        filas = conn.execute(
-            "SELECT ruta_disco FROM inputs "
-            "WHERE asignatura_id = ? AND tipo = 'material_teoria'",
-            (asignatura_id,),
-        ).fetchall()
+        fila = conn.execute(
+            "SELECT i.ruta_disco FROM temas t "
+            "JOIN inputs i ON i.id = t.input_id "
+            "WHERE t.id = ? AND i.tipo = 'material_teoria'",
+            (tema_id,),
+        ).fetchone()
     finally:
         conn.close()
-    return [r["ruta_disco"] for r in filas if os.path.exists(r["ruta_disco"])]
+    if not fila:
+        return []
+    ruta = fila["ruta_disco"]
+    return [ruta] if os.path.exists(ruta) else []
 
 
 def _db_cnt_upsert_borrador(subbloque_id: int, markdown_borrador: str) -> None:
@@ -1269,7 +1337,7 @@ def _vista_contenido() -> None:
         st.warning("Este bloque no tiene sub-bloques registrados.")
         return
 
-    rutas_material = _db_cnt_get_rutas_material(asignatura_id)
+    rutas_material = _db_cnt_get_rutas_material(tema_id)
 
     # Estado de cada sub-bloque (orden de la organización)
     estados_sb: list[dict] = []
@@ -2668,7 +2736,10 @@ def _vista_organizador() -> None:
                     st.error("No hay output registrado en la base de datos — genera la organización primero.")
                 else:
                     try:
-                        bloques = _org_parser.parsear_bloques_organizador(st.session_state["org_ultimo_output"])
+                        bloques = _org_preparar_bloques_para_confirmar(
+                            st.session_state["org_ultimo_output"],
+                            asignatura_id,
+                        )
                         if not bloques:
                             st.warning(
                                 "No se pudieron extraer bloques del output. "
