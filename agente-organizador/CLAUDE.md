@@ -77,11 +77,16 @@ hacerlas importables).
    - Prioridad 1: secciones numeradas en el texto (`3.2. Título`) → evidencia = "Sección 3.2"
    - Prioridad 2 (solo PPTX): títulos de diapositiva → evidencia = "Slide N"
    - Fallback: si ninguna fuente ofrece señal verificable, retorna `[]`; el bloque se trata como un único subbloque
-4. **Editor de subbloques** — interfaz de revisión (fase `"editar"`): el profesor ve las señales detectadas con su evidencia, edita la lista en un textarea, y confirma
-5. **Detección de horas** — `extraer_horas_docencia()` en `parser.py`
-6. **Generación** — `construir_prompt()` → `ejecutar_agente()` → Sonnet
-7. **Validación de cardinalidad** — `contar_bloques_output()` compara `## Bloque N` con `len(textos_teoria)`
-8. **Refinamiento** — loop hasta 5 iteraciones; `construir_prompt_refinamiento()` (camino rápido)
+4. **Detección de horas** — `extraer_horas_docencia()` en `parser.py`
+5. **Generación** — `construir_prompt()` → `ejecutar_agente()` → Sonnet
+6. **Validación de cardinalidad** — `contar_bloques_output()` compara `## Bloque N` con `len(textos_teoria)`
+7. **Refinamiento** — loop hasta 5 iteraciones; `construir_prompt_refinamiento()` (camino rápido)
+
+**Standalone:** conserva un paso intermedio (fase `"editar"`) con textarea por archivo antes de generar.
+**App-unificada (junio 2026):** eliminada esa pantalla; tras «Generar organización» va directo a la vista
+unificada. Los subtemas para el prompt se construyen con `_org_build_subtemas_confirmados()` →
+`extraer_candidatos_con_evidencia()` (misma ruta validada que el standalone, sin el regex simple
+`extraer_subtemas_candidatos` de la pantalla antigua).
 
 ---
 
@@ -103,25 +108,23 @@ El modelo nunca debe agrupar contenido por similitud temática libre. Cada subbl
 ```
 extraer_candidatos_con_evidencia()
   → [{nombre, evidencia, fuente}]  ← parser.py
-  → editor_data[i]["candidatos_con_evidencia"]  ← app.py
-  → mostrado en interfaz como referencia (read-only)
-  → al confirmar: subtemas_confirmados[i] = [{nombre, origen, evidencia}]
+  → subtemas_confirmados (app-unificada: automático; standalone: tras confirmar en fase "editar")
   → construir_prompt(): "SUBTEMAS CONFIRMADOS: - nombre [Evidencia: X] [origen]"
   → LLM: columna Evidencia en la tabla de subbloques
-  → output Markdown: | Subtema | Horas | Evidencia | Origen |
+  → output Markdown: | Subtema | Evidencia | Origen |
 ```
 
 ---
 
 ## Edición de la organización (Objetivo 2)
 
-**App unificada — vista única interactiva (junio 2026):** la sección Organizador de
-`app-unificada` muestra una sola superficie de edición tras generar la propuesta: por
-cada bloque, nombre y horas totales editables; debajo, tabla de subbloques con columnas
-Subtema / Evidencia / Origen, más acciones por fila (aprobar ✓, editar nombre, eliminar).
-Añadir subbloque o bloque nuevo integrado en la misma vista. El Markdown raw queda en un
-expander secundario; la vista principal es la tabla interactiva. El cuadro de
-redistribución total por prompt se mantiene aparte para cambios grandes.
+**App unificada — vista única interactiva (junio 2026):** tras «Generar organización» (sin paso
+intermedio de textareas por archivo), la sección Organizador muestra una sola superficie de
+edición: por cada bloque, nombre y horas totales editables, línea **Origen: {archivo.pdf}** a
+nivel de bloque (resuelto por similitud de nombre), y debajo tabla de subbloques con columnas
+Subtema / Evidencia (texto interpretable; si no hay señal: «Sin señal estructural — extraído de
+{archivo}»), más acciones por fila (aprobar ✓ en verde, eliminar ✕ en rojo). Unidad **h** junto
+al campo numérico de horas. Añadir subbloque o bloque nuevo integrado en la misma vista.
 
 **Standalone:** conserva el editor manual en expander (misma lógica pura de `parser.py`).
 
@@ -169,6 +172,7 @@ La app unificada no usa la variable `fase`; modela el mismo ciclo de vida con
 
 | Concepto | Standalone (`app.py`) | Unificada (`app-unificada/app.py`) |
 |----------|-----------------------|-------------------------------------|
+| Paso previo a generar | `fase == "editar"` (textarea por archivo) | Ninguno — generación directa |
 | Fase de revisión | `fase == "resultado"` | `org_ultimo_output` presente y `org_confirmada == False` |
 | Estructura congelada | `fase == "cerrado"` (botón "Dar por cerrada") | `org_confirmada == True` (botón "Confirmar como definitiva", que además escribe `temas`/`subtemas` en BD para el Agente Contenido) |
 | Edición + refinamiento | solo en `"resultado"` | vista unificada interactiva + prompt; solo si `not org_confirmada` |
@@ -354,8 +358,9 @@ La columna "Evidencia" contiene la referencia estructural detectada por el LLM (
 ## Interfaz (estado actual)
 
 ### Layout `layout="wide"`
-- **Sidebar:** branding + steps 1-2-3 + file uploaders + botón "Generar organización"
-- **Área principal:** hero + expanders de validación + editor de subbloques (fase "editar") + resultado con editor manual (fase "resultado") o vista congelada (fase "cerrado")
+- **Sidebar:** branding + steps 1-2 + file uploaders + botón "Generar organización"
+- **Área principal (standalone):** hero + expanders de validación + editor de subbloques (fase "editar") + resultado con editor manual (fase "resultado") o vista congelada (fase "cerrado")
+- **Área principal (app-unificada):** hero + vista unificada de revisión directamente tras generar (sin fase "editar") + refinamiento por prompt + confirmación definitiva
 
 ### Identidad visual compartida
 - **Tipografía:** Playfair Display + DM Sans
