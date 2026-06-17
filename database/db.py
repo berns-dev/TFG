@@ -3,9 +3,10 @@
 Almacén compartido de inputs, outputs, estados y progreso de los tres agentes
 (Organizador, Contenido, Presentación) cuando se unifican en una sola app Streamlit.
 
-Esquema actual: versión 3 (user_version = 3).
+Esquema actual: versión 4 (user_version = 4).
 Migración automática desde v1: añade columnas para evidencia/estado/interactivo.
 Migración v3: tabla valoraciones_profesor (puntuación 1-10 por asignatura y agente).
+Migración v4: puntuacion_profesor por sub-bloque en contenido_subbloque.
 
 Uso directo:
     python database/db.py
@@ -16,7 +17,7 @@ import sqlite3
 
 RUTA_DB_POR_DEFECTO = "data/tfg.db"
 
-VERSION_SCHEMA = 3
+VERSION_SCHEMA = 4
 
 # Asignaturas con las que se ha validado la suite (ver CLAUDE.md).
 ASIGNATURAS_CONOCIDAS = [
@@ -102,6 +103,7 @@ ESQUEMA = [
         markdown_borrador TEXT,
         markdown_final TEXT,
         porcentaje_editado REAL,
+        puntuacion_profesor INTEGER CHECK(puntuacion_profesor BETWEEN 1 AND 10),
         estado TEXT NOT NULL DEFAULT 'pendiente'
             CHECK(estado IN ('pendiente','generado','editado','aprobado')),
         fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
@@ -192,6 +194,10 @@ MIGRACIONES: dict[int, list[str]] = {
             UNIQUE(asignatura_id, agente)
         )
         """,
+    ],
+    4: [
+        "ALTER TABLE contenido_subbloque ADD COLUMN puntuacion_profesor INTEGER "
+        "CHECK(puntuacion_profesor BETWEEN 1 AND 10)",
     ],
 }
 
