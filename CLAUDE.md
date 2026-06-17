@@ -63,6 +63,28 @@ no puede localizar boundaries y los subbloques quedan con estado `pendiente`.
 
 ---
 
+## Reutilización de la lógica del Organizador (sin duplicación)
+
+El Organizador tiene dos interfaces: el **standalone** (`agente-organizador/app.py`)
+y la sección Organizador de la **app unificada** (`app-unificada/app.py`). Ambas
+comparten la misma lógica de cálculo y transformación, que vive **solo** en
+`agente-organizador/parser.py` (módulo importable, sin Streamlit):
+
+- `extraer_horas_docencia`, `normalizar_horas_output`, `contar_bloques_output`,
+  `construir_nombre_descarga`, `parsear_bloques_desde_markdown`,
+  `parsear_bloques_organizador`, `regenerar_markdown_desde_bloques`.
+
+`app-unificada` carga ese módulo vía `importlib` (`_org_parser`) y lo usa
+directamente; ya **no** mantiene copias literales de esas funciones (se eliminaron).
+La edición manual de bloques/subbloques existe en **ambas** interfaces, con la misma
+restricción: solo en fase de revisión; una vez cerrada/confirmada la organización
+(en la unificada, al confirmarla se persiste a BD para Contenido), la estructura
+queda congelada y se ocultan tanto la edición manual como el refinamiento por prompt.
+El detalle de la separación lógica pura↔UI y la equivalencia entre interfaces está
+en `agente-organizador/CLAUDE.md`.
+
+---
+
 ## Workflow entre agentes
 
 ```
@@ -124,15 +146,18 @@ TFG/
 │   ├── db.py                     ← motor SQLite (esquema v2, init, progreso, CRUD)
 │   └── validar_esquema.py        ← script de validación del esquema (no producto)
 ├── app-unificada/
-│   └── app.py                    ← app Streamlit unificada (todos los agentes + BD)
+│   └── app.py                    ← app Streamlit unificada (todos los agentes + BD).
+│                                    Importa la lógica pura del Organizador desde
+│                                    agente-organizador/parser.py (no la duplica).
 ├── data/
 │   └── tfg.db                    ← base de datos SQLite (generado, no versionado)
 ├── agente-organizador/
 │   ├── CLAUDE.md                 ← contexto específico del Agente Organizador
 │   ├── README.md
-│   ├── app.py
+│   ├── app.py                    ← UI standalone (solo interfaz; importa de parser.py)
 │   ├── agente.py
-│   ├── parser.py
+│   ├── parser.py                 ← FUENTE DE VERDAD importable: toda la lógica pura
+│   │                                (horas, normalización, conteo, parseo/serialización)
 │   ├── prompts.py
 │   ├── requirements.txt
 │   ├── .env.example
@@ -199,7 +224,7 @@ El contenido interactivo (`tiene_interactivo`) **no entra** en el cálculo de pr
 
 | Agente/módulo | Estado | Validado con |
 |---------------|--------|-------------|
-| Organizador | Funcional — subbloques anclados a evidencia estructural; edición manual bloques/subbloques; fase cerrado | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
+| Organizador | Funcional — subbloques anclados a evidencia estructural; edición manual bloques/subbloques en **ambas interfaces** (standalone y app-unificada); fase cerrado/confirmado. Lógica pura centralizada en `parser.py` (fuente de verdad importable); `app-unificada` la consume sin duplicar | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
 | Contenido | Funcional — granularidad de subbloque: segmentación por evidencia, estados pendiente/generado/editado/aprobado, cálculo de progreso; pipeline clásico preservado como fallback | Temas 1 y 2 de Tecnología de Materiales (PDF); lógica de subbloques validada programáticamente |
 | Presentación | Funcional — 3 outputs (PDF institucional UO, HTML interactivo, HTML presentación completa); LaTeX con matplotlib mathtext | Tema 1 (Tec. Materiales), TEMA7 (Elementos de Máquinas) |
 | Base de datos | Esquema v2 — jerarquía asignatura→bloque→subbloque + estado del ciclo de vida + progreso en tiempo real | Tecnología de Materiales (script `database/validar_esquema.py`, 8 validaciones) |

@@ -36,9 +36,36 @@ Extrae temas, subbloques y distribución horaria de una asignatura a partir de l
 ```
 app.py        — UI Streamlit + lógica de sesión + validación + edición manual
 agente.py     — cliente Anthropic, ejecutar_agente()
-parser.py     — extraer_texto(), clasificar_archivo(), señales estructurales
+parser.py     — TODA la lógica pura importable (ver abajo): extracción de texto,
+                señales estructurales, horas, normalización, parseo/serialización
 prompts.py    — construir_prompt(), construir_prompt_refinamiento()
 ```
+
+### Separación lógica pura ↔ interfaz (fuente de verdad importable)
+
+`parser.py` es el **único módulo importable** con toda la lógica de cálculo y
+transformación del Organizador. No depende de Streamlit, así que cualquier otra
+interfaz (en particular `app-unificada/app.py`) puede importarlo sin arrastrar
+`st.set_page_config()` ni estado de sesión. `app.py` (standalone) es solo UI:
+importa estas funciones en lugar de definirlas inline.
+
+Funciones puras que viven en `parser.py` (antes estaban definidas dentro de
+`app.py`, mezcladas con el módulo que ejecuta Streamlit al importarse):
+
+| Función | Entrada → salida |
+|---------|------------------|
+| `extraer_horas_docencia(texto_guia)` | texto guía → `{horas_teoria, horas_aula, horas_laboratorio}` |
+| `normalizar_horas_output(md, total)` | Markdown + horas objetivo → `(md_corregido, info_ajuste\|None)` |
+| `contar_bloques_output(md)` | Markdown → nº de `## Bloque N` |
+| `construir_nombre_descarga(texto_guia)` | texto guía → nombre de fichero |
+| `parsear_bloques_desde_markdown(md)` | Markdown → bloques simples `{numero,nombre,horas,subtemas:[{nombre,horas,manual}]}` (para edición manual) |
+| `parsear_bloques_organizador(md)` | Markdown → bloques enriquecidos `{…, subtemas:[{nombre,horas,orden,evidencia,origen,es_fallback}]}` (para persistir en BD) |
+| `regenerar_markdown_desde_bloques(bloques, md)` | estado estructurado → Markdown (preserva cabecera/pie) |
+
+**Consumo desde `app-unificada`:** la app unificada carga `parser.py` vía
+`importlib` como `_org_parser` y llama `_org_parser.<funcion>`. Ya **no** existen
+copias literales de estas funciones en `app-unificada/app.py` (se eliminaron al
+hacerlas importables).
 
 ---
 
@@ -51,7 +78,7 @@ prompts.py    — construir_prompt(), construir_prompt_refinamiento()
    - Prioridad 2 (solo PPTX): títulos de diapositiva → evidencia = "Slide N"
    - Fallback: si ninguna fuente ofrece señal verificable, retorna `[]`; el bloque se trata como un único subbloque
 4. **Editor de subbloques** — interfaz de revisión (fase `"editar"`): el profesor ve las señales detectadas con su evidencia, edita la lista en un textarea, y confirma
-5. **Detección de horas** — `extraer_horas_docencia()` en `app.py`
+5. **Detección de horas** — `extraer_horas_docencia()` en `parser.py`
 6. **Generación** — `construir_prompt()` → `ejecutar_agente()` → Sonnet
 7. **Validación de cardinalidad** — `contar_bloques_output()` compara `## Bloque N` con `len(textos_teoria)`
 8. **Refinamiento** — loop hasta 5 iteraciones; `construir_prompt_refinamiento()` (camino rápido)
@@ -88,7 +115,13 @@ extraer_candidatos_con_evidencia()
 
 ## Edición manual de la organización (Objetivo 2)
 
-### Controles disponibles (solo en fase `"resultado"`)
+**Disponible en las dos interfaces.** Implementada primero en el standalone
+(`app.py`) y, reutilizando la misma lógica pura de `parser.py`
+(`parsear_bloques_desde_markdown` + `regenerar_markdown_desde_bloques`), también
+en la sección Organizador de `app-unificada/app.py`. El comportamiento y la
+restricción temporal son equivalentes en ambas (ver tabla de fases más abajo).
+
+### Controles disponibles (solo en fase de revisión)
 
 - **Añadir subbloque** — texto + horas, dentro de un bloque existente. Origen = "Manual".
 - **Eliminar subbloque** — botón 🗑 por subbloque.
@@ -118,6 +151,30 @@ Los dos mecanismos coexisten sin pisarse. El estado es siempre consistente.
 
 **Restricción temporal de edición:** la edición (manual y por prompt) solo está disponible en fase `"resultado"`. En fase `"cerrado"` se muestran aviso informativo, output y descarga; los controles de edición no se renderizan.
 
+### Equivalencia con `app-unificada`
+
+La app unificada no usa la variable `fase`; modela el mismo ciclo de vida con
+`org_confirmada` (booleano) y la persistencia en BD:
+
+| Concepto | Standalone (`app.py`) | Unificada (`app-unificada/app.py`) |
+|----------|-----------------------|-------------------------------------|
+| Fase de revisión | `fase == "resultado"` | `org_ultimo_output` presente y `org_confirmada == False` |
+| Estructura congelada | `fase == "cerrado"` (botón "Dar por cerrada") | `org_confirmada == True` (botón "Confirmar como definitiva", que además escribe `temas`/`subtemas` en BD para el Agente Contenido) |
+| Edición manual + refinamiento | solo en `"resultado"` | solo si `not org_confirmada`; al confirmar se ocultan y se muestra aviso de "estructura congelada" |
+| Persistencia de cada edición manual | actualiza `ultimo_output` en sesión | actualiza `org_ultimo_output` **y** reescribe `data/{slug}/outputs/organizador/vN.md` |
+
+### Loop de refinamiento por IA — equivalencia funcional (Objetivo verificado)
+
+El comportamiento funcional del refinamiento es **idéntico** en ambas interfaces:
+mismo prompt (`construir_prompt_refinamiento`), misma normalización de horas, tope
+de **5 iteraciones**, mismo aviso al alcanzar el límite, y el camino rápido que no
+re-extrae documentos. La **única diferencia es intencional** y deriva del contexto
+de cada app: el standalone mantiene el estado solo en `session_state`, mientras que
+la unificada además versiona cada iteración en disco (`vN.md`) y en BD
+(`organizador_outputs`, con `feedback_texto` y registro de `ejecucion`). No se
+unifica esta gestión de estado porque las dos arquitecturas (sesión pura vs. BD)
+son legítimas para cada interfaz.
+
 ---
 
 ## Decisiones de implementación clave
@@ -126,7 +183,7 @@ Los dos mecanismos coexisten sin pisarse. El estado es siempre consistente.
 Sonnet para toda la generación y refinamiento. El razonamiento curricular requiere coherencia semántica que Haiku no garantiza con prompts de cardinalidad estricta.
 
 ### Código determinista para horas
-`extraer_horas_docencia()` resuelve la extracción de TE/PA/PL con código Python puro, sin LLM. Dos estrategias:
+`extraer_horas_docencia()` (en `parser.py`) resuelve la extracción de TE/PA/PL con código Python puro, sin LLM. Dos estrategias:
 1. **Estrategia 1 (preferente):** detecta tabla(s) MODALIDADES por cabecera y lee la columna Horas. Elige la ventana con mayor completitud y mayor confianza en la fila PA.
 2. **Estrategia 2 (fallback):** búsqueda en texto libre, exige señales horarias explícitas para evitar confundir "sesiones" con horas.
 
@@ -134,9 +191,14 @@ Sonnet para toda la generación y refinamiento. El razonamiento curricular requi
 `extraer_candidatos_con_evidencia()` en `parser.py`. Prioridad estricta de fuentes (no negociable). No llama al LLM. Si retorna `[]`, el bloque es un único subbloque — el modelo nunca infiere subbloques libres para bloques sin señal.
 
 ### Parseo/serialización para edición manual
-- `parsear_bloques_desde_markdown(markdown)` → `[{numero, nombre, horas, subtemas}]`
+- `parsear_bloques_desde_markdown(markdown)` → `[{numero, nombre, horas, subtemas}]` (forma simple para la edición manual; `manual=False` al parsear)
+- `parsear_bloques_organizador(markdown)` → forma enriquecida con `orden/evidencia/origen/es_fallback`; la usa `app-unificada` al confirmar para persistir en BD
 - `regenerar_markdown_desde_bloques(bloques, markdown_original)` → Markdown preservando cabecera y pie del original
 - Formato serializado: `| Subtema | Horas | Origen |` (3 columnas, Origen = "Manual"/"Detectado")
+
+Las dos funciones de parseo conviven en `parser.py` porque sirven a consumidores
+distintos (edición manual vs. persistencia en BD) y devuelven formas de dato
+distintas; la lógica de detección de cabeceras/filas es compartida en el módulo.
 
 ### Restricción de cardinalidad en el prompt (`prompts.py`)
 `instruccion_cardinalidad` tiene tres refuerzos desde la corrección del bug (28/05/2026):
