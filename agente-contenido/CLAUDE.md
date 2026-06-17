@@ -310,6 +310,24 @@ Uno o varios PDF/PPTX. Sin cambios respecto a la versión anterior.
 
 ---
 
+## App unificada — vista Contenido (`app-unificada/app.py`)
+
+Flujo de trabajo del profesor sobre un bloque temático:
+
+1. **Índice** de sub-bloques con estado (pendiente / en revisión / aprobado con nota y % modificación).
+2. **Generación por selección:** checkboxes solo en sub-bloques sin borrador previo + botón
+   «Generar seleccionados (N)». Cada sub-bloque marcado dispara **su propia** llamada a la API
+   (segmentación por evidencia independiente). No se regeneran los que ya tienen borrador.
+3. **Revisión paralela:** todos los sub-bloques en estado `generado`/`editado` quedan abiertos
+   a la vez; el profesor confirma y puntúa cada uno en el orden que prefiera.
+4. **Confirmación:** slider 1-10 + «Confirmar y valorar» → `puntuacion_profesor` en
+   `contenido_subbloque` (no en `valoraciones_profesor`).
+
+**Valoración:** Contenido puntúa por sub-bloque. La tabla global `valoraciones_profesor` es solo
+para el Organizador (zoom out curricular). Ver `database/CLAUDE.md` — no unificar sin decisión explícita.
+
+---
+
 ## Interfaz (estado actual)
 
 ### Identidad visual compartida con Agente Organizador

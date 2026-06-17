@@ -45,7 +45,7 @@ asignaturas(id, nombre)
 
 ```
 contenido_subbloque(id, subbloque_id, markdown_borrador, markdown_final,
-                    porcentaje_editado, estado, fecha_actualizacion)
+                    porcentaje_editado, puntuacion_profesor, estado, fecha_actualizacion)
 ```
 
 **Ciclo de vida del campo `estado`:**
@@ -59,8 +59,23 @@ pendiente → generado → aprobado
 - `generado` — la API produjo un borrador; pendiente de revisión del profesor
 - `editado` — el profesor modificó el Markdown (porcentaje_editado > 0)
 - `aprobado` — el profesor aceptó el contenido (sin o con ediciones previas)
+- `puntuacion_profesor INTEGER (1-10)` — v4: nota del profesor al confirmar el sub-bloque.
+  **Solo Contenido (y Presentación en el futuro).** No confundir con `valoraciones_profesor`.
 
 El progreso se calcula exclusivamente sobre `estado = 'aprobado'`.
+
+### Valoración del profesor — granularidad por agente
+
+La puntuación 1-10 **no** usa el mismo almacén en todos los agentes. Es intencional:
+
+| Agente | Dónde vive la nota | Granularidad |
+|--------|-------------------|--------------|
+| Organizador | `valoraciones_profesor` (`UNIQUE(asignatura_id, agente)`) | Global por asignatura — la organización se evalúa como conjunto curricular |
+| Contenido | `contenido_subbloque.puntuacion_profesor` | Por sub-bloque — cada pieza de Markdown se revisa y puntúa de forma independiente |
+| Presentación (futuro) | Por sub-bloque (mismo patrón que Contenido) | Por sub-bloque — cada pieza de presentación es independiente |
+
+**No unificar** estas dos tablas/columnas sin decisión explícita de diseño: el Organizador
+sigue usando `valoraciones_profesor`; Contenido **no** escribe en esa tabla.
 
 ### Contenido interactivo
 
@@ -82,8 +97,9 @@ aplica automáticamente las migraciones pendientes al arrancar la app.
 
 Versiones:
 - `v1` (implícita) — esquema inicial sin horas/evidencia/estado/interactivo
-- `v2` (actual) — añade columnas mediante `ALTER TABLE ADD COLUMN`; sentencias
-  idempotentes (si la columna ya existe, la excepción se silencia)
+- `v2` — añade columnas mediante `ALTER TABLE ADD COLUMN`; sentencias idempotentes
+- `v3` — tabla `valoraciones_profesor` (nota global Organizador/Presentación/Contenido a nivel asignatura; en la práctica solo la usa Organizador)
+- `v4` (actual) — columna `puntuacion_profesor` en `contenido_subbloque`
 
 Para forzar una migración en caliente sobre una BD existente:
 ```bash
@@ -149,10 +165,13 @@ db.set_interactivo_subbloque(subbloque_id, html_path=None, ruta=...)
 ### Agente Contenido (app-unificada/app.py)
 
 - Al generar borrador: `_db_cnt_upsert_borrador(subbloque_id, markdown)` → estado `generado`
+  (solo sub-bloques sin borrador previo; el profesor elige cuáles con checkboxes)
 - Al guardar (profesor edita): `_db_cnt_guardar_final(subbloque_id, markdown, pct_editado)`
   - `pct_editado == 0` → estado `aprobado`
   - `pct_editado > 0` → estado `editado`
-- Al aprobar directamente (botón): `_db_cnt_aprobar_subbloque(subbloque_id)` → estado `aprobado`
+- Al confirmar: `_db_cnt_aprobar_subbloque(subbloque_id, puntuacion)` → estado `aprobado`
+  y `puntuacion_profesor` en la fila del sub-bloque
+- **No usa** `valoraciones_profesor` — ver sección «Valoración del profesor» arriba
 
 ### Agente Presentación (app-unificada/app.py)
 

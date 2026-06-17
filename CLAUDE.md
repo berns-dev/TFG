@@ -218,6 +218,15 @@ Resumen de las funciones de progreso (nunca almacenado, siempre calculado):
 El progreso se calcula sobre `estado = 'aprobado'` en `contenido_subbloque`.
 El contenido interactivo (`tiene_interactivo`) **no entra** en el cálculo de progreso.
 
+### Valoración del profesor (granularidad por agente)
+
+- **Organizador:** nota global 1-10 en `valoraciones_profesor` (una por asignatura).
+- **Contenido:** nota 1-10 por sub-bloque en `contenido_subbloque.puntuacion_profesor`.
+  Contenido no escribe en `valoraciones_profesor`.
+- **Presentación (futuro):** por sub-bloque, mismo patrón que Contenido.
+
+Detalle del esquema y APIs: **`database/CLAUDE.md`**.
+
 ---
 
 ## Estado del proyecto (2026-06-17)
@@ -225,6 +234,6 @@ El contenido interactivo (`tiene_interactivo`) **no entra** en el cálculo de pr
 | Agente/módulo | Estado | Validado con |
 |---------------|--------|-------------|
 | Organizador | Funcional — subbloques anclados a evidencia estructural; edición manual bloques/subbloques en **ambas interfaces** (standalone y app-unificada); fase cerrado/confirmado. Lógica pura centralizada en `parser.py` (fuente de verdad importable); `app-unificada` la consume sin duplicar | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
-| Contenido | Funcional — granularidad de subbloque: segmentación por evidencia, estados pendiente/generado/editado/aprobado, cálculo de progreso; pipeline clásico preservado como fallback | Temas 1 y 2 de Tecnología de Materiales (PDF); lógica de subbloques validada programáticamente |
+| Contenido | Funcional — granularidad de subbloque: segmentación por evidencia, generación por selección (cada sub-bloque = llamada API independiente), valoración 1-10 por sub-bloque, estados pendiente/generado/editado/aprobado | Temas 1 y 2 de Tecnología de Materiales (PDF) |
 | Presentación | Funcional — 3 outputs (PDF institucional UO, HTML interactivo, HTML presentación completa); LaTeX con matplotlib mathtext | Tema 1 (Tec. Materiales), TEMA7 (Elementos de Máquinas) |
-| Base de datos | Esquema v2 — jerarquía asignatura→bloque→subbloque + estado del ciclo de vida + progreso en tiempo real | Tecnología de Materiales (script `database/validar_esquema.py`, 8 validaciones) |
+| Base de datos | Esquema v4 — jerarquía asignatura→bloque→subbloque + estado del ciclo de vida + progreso en tiempo real + valoración por agente | Tecnología de Materiales (script `database/validar_esquema.py`) |
