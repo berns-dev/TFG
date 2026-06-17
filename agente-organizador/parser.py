@@ -94,9 +94,104 @@ def normalizar_subtema(texto: str) -> str:
     return re.sub(r"[^a-z0-9 ]", " ", s).strip()
 
 
+# ---------------------------------------------------------------------------
+# Filtro de calidad de subtemas candidatos.
+#
+# Causa raíz de dos fallos observados (Elementos de Máquinas, junio 2026):
+#  1. Boilerplate administrativo de las guías docentes UniOvi tratado como
+#     subtema técnico (Identificación, Contextualización, Requisitos,
+#     Competencias, Metodología, Evaluación, Recursos/bibliografía). Estas
+#     secciones se numeran en la guía y el regex de numeración las capturaba.
+#  2. Fragmentos de texto corrido del material (p. ej. un paso de un ejemplo
+#     resuelto "5.6. Además, de acuerdo a la tabla...") aceptados como subtema
+#     porque empezaban por un número, sin validar que fueran un encabezado.
+#
+# Decisión de diseño documentada: un subtema candidato debe ser un encabezado
+# real, no boilerplate administrativo ni prosa. Estos nombres administrativos
+# son muy estables entre guías de la misma universidad, así que se filtran por
+# patrón; la prosa se descarta por señales estructurales (conector inicial,
+# ruido numérico, fragmento truncado).
+# ---------------------------------------------------------------------------
+
+# Secciones administrativas estándar de las guías docentes UniOvi. Prefijos
+# (distintivos, no prefijan contenido técnico real) y nombres exactos cortos.
+_GUIA_SECCIONES_ADMIN_PREFIJOS = (
+    "identificacion de la asignatura",
+    "competencias y resultados de aprendizaje",
+    "metodologia y plan de trabajo",
+    "evaluacion del aprendizaje",
+    "recursos bibliografia",
+    "distribucion de los contenidos",
+)
+_GUIA_SECCIONES_ADMIN_EXACTAS = {
+    "contenidos", "contextualizacion", "requisitos", "competencias",
+    "metodologia", "evaluacion", "recursos", "bibliografia",
+    "presenciales", "no presenciales", "clases expositivas",
+    "practicas de aula", "practicas de aula seminarios",
+    "practicas de laboratorio", "practicas de laboratorio campo",
+    "tutorias grupales", "sesiones de evaluacion",
+    "trabajo autonomo", "trabajo en grupo",
+    "exposicion de trabajos realizados en grupo",
+    "evaluacion continua", "evaluacion extraordinaria", "evaluacion diferenciada",
+}
+
+# Conectores discursivos: una frase que empieza por uno de estos es prosa
+# (texto corrido), nunca un título/encabezado de subtema.
+_CONECTORES_PROSA = (
+    "ademas", "asimismo", "por tanto", "por lo tanto", "sin embargo",
+    "no obstante", "es decir", "de acuerdo", "por ejemplo", "en consecuencia",
+    "por consiguiente", "entonces", "asi pues", "de hecho", "en este caso",
+    "con ello", "con lo que", "de esta forma", "de esta manera", "de este modo",
+    "por ultimo", "finalmente", "en resumen", "en definitiva", "a continuacion",
+)
+
+# Palabras-función con las que un encabezado real no termina; si una línea corta
+# acaba en una de ellas es un fragmento truncado (típico de columnas de tabla).
+_PALABRAS_FUNCION_FINAL = {
+    "de", "del", "la", "el", "los", "las", "y", "o", "en", "a", "con",
+    "por", "para", "que", "su", "sus", "un", "una", "al",
+}
+
+
+def _es_seccion_administrativa(norm: str) -> bool:
+    """True si `norm` (nombre ya normalizado) es una sección administrativa de guía."""
+    if norm in _GUIA_SECCIONES_ADMIN_EXACTAS:
+        return True
+    return any(norm.startswith(p) for p in _GUIA_SECCIONES_ADMIN_PREFIJOS)
+
+
+def es_subtema_valido(nombre: str) -> bool:
+    """True si `nombre` parece un subtema/encabezado técnico real.
+
+    Filtro de calidad común a todos los caminos de detección. Rechaza:
+      1. Secciones administrativas estándar de la guía docente UniOvi.
+      2. Fragmentos de prosa que empiezan por un conector discursivo.
+      3. Filas de datos numéricos (p. ej. filas de tablas de horas).
+      4. Fragmentos cortos y truncados que terminan en palabra-función.
+    """
+    norm = normalizar_subtema(nombre)
+    if not norm:
+        return False
+    if _es_seccion_administrativa(norm):
+        return False
+    if any(norm == c or norm.startswith(c + " ") for c in _CONECTORES_PROSA):
+        return False
+    tokens = norm.split()
+    # Ruido numérico: 3+ tokens con dígitos → fila de tabla / fragmento de cálculo.
+    n_num = sum(1 for t in tokens if any(ch.isdigit() for ch in t))
+    if n_num >= 3:
+        return False
+    # Fragmento truncado: corto y acaba en palabra-función.
+    if len(norm) <= 30 and tokens and tokens[-1] in _PALABRAS_FUNCION_FINAL:
+        return False
+    return True
+
+
 def extraer_subtemas_candidatos(texto: str) -> list[str]:
     """Detecta subtemas con numeración jerárquica ('3.2. Título').
     Devuelve nombres limpios (sin prefijo numérico), deduplicados por normalización.
+    Aplica el filtro de calidad es_subtema_valido() para descartar boilerplate
+    administrativo y fragmentos de texto corrido.
     """
     candidatos: list[str] = []
     vistos: set[str] = set()
@@ -105,12 +200,58 @@ def extraer_subtemas_candidatos(texto: str) -> list[str]:
         if not _SUBTEMA_NUM_RE.match(linea):
             continue
         nombre = re.sub(r"^\d+(?:\.\d+)*\.\s*", "", linea).strip()
-        if not nombre:
+        if not nombre or not es_subtema_valido(nombre):
             continue
         clave = normalizar_subtema(nombre)
         if clave and clave not in vistos:
             candidatos.append(nombre)
             vistos.add(clave)
+    return candidatos
+
+
+def extraer_subtemas_guia(texto: str) -> list[str]:
+    """Extrae los subtemas reales de la sección 'Contenidos' de una guía docente.
+
+    Las guías UniOvi numeran TODAS sus secciones de primer nivel (1..8), de las
+    cuales solo 'Contenidos' contiene temario real; el resto es boilerplate
+    administrativo. Acotar la extracción a la sección 'Contenidos' excluye de
+    raíz cabeceras, filas de tablas de horas y prosa de metodología/evaluación.
+
+    Estrategia: localizar la cabecera 'N. Contenidos' y recoger los subtemas
+    numerados hasta la siguiente cabecera de sección administrativa. Si no se
+    encuentra 'Contenidos' (guía con otro formato), se degrada a
+    extraer_subtemas_candidatos() sobre todo el texto. En ambos caminos se aplica
+    el filtro de calidad es_subtema_valido().
+    """
+    lineas = [l.strip() for l in (texto or "").splitlines()]
+
+    inicio = None
+    for i, ln in enumerate(lineas):
+        m = re.match(r"^\d+\.\s+(\S.*)$", ln)
+        if m and normalizar_subtema(m.group(1)).startswith("contenidos"):
+            inicio = i
+            break
+
+    if inicio is None:
+        # Formato no reconocido: degradar a extracción genérica (ya filtrada).
+        return extraer_subtemas_candidatos(texto)
+
+    candidatos: list[str] = []
+    vistos: set[str] = set()
+    for ln in lineas[inicio + 1:]:
+        if not _SUBTEMA_NUM_RE.match(ln):
+            continue
+        nombre = re.sub(r"^\d+(?:\.\d+)*\.\s*", "", ln).strip()
+        norm = normalizar_subtema(nombre)
+        if not norm:
+            continue
+        # Fin de la sección 'Contenidos': siguiente cabecera administrativa.
+        if _es_seccion_administrativa(norm):
+            break
+        if not es_subtema_valido(nombre) or norm in vistos:
+            continue
+        candidatos.append(nombre)
+        vistos.add(norm)
     return candidatos
 
 
@@ -219,7 +360,7 @@ def extraer_candidatos_con_evidencia(
         m_pref = re.match(r"^(\d+(?:\.\d+)*\.)\s*", linea)
         prefijo = m_pref.group(1).rstrip(".") if m_pref else ""
         nombre = re.sub(r"^\d+(?:\.\d+)*\.\s*", "", linea).strip()
-        if not nombre:
+        if not nombre or not es_subtema_valido(nombre):
             continue
         clave = normalizar_subtema(nombre)
         if not clave or clave in vistos:
@@ -235,6 +376,8 @@ def extraer_candidatos_con_evidencia(
     ext = Path(nombre_archivo).suffix.lower() if nombre_archivo else ""
     if ext == ".pptx" and archivo_bytes is not None:
         for item in extraer_titulos_slides_pptx(archivo_bytes):
+            if not es_subtema_valido(item["titulo"]):
+                continue
             clave = normalizar_subtema(item["titulo"])
             if not clave or clave in vistos:
                 continue
