@@ -1182,7 +1182,8 @@ def _db_cnt_get_contenido_subbloque(subbloque_id: int) -> dict | None:
     try:
         r = conn.execute(
             "SELECT id, markdown_borrador, markdown_final, porcentaje_editado, "
-            "fecha_actualizacion FROM contenido_subbloque WHERE subbloque_id = ?",
+            "estado, fecha_actualizacion "
+            "FROM contenido_subbloque WHERE subbloque_id = ?",
             (subbloque_id,),
         ).fetchone()
         return dict(r) if r else None
@@ -1205,6 +1206,7 @@ def _db_cnt_get_rutas_material(asignatura_id: int) -> list[str]:
 
 
 def _db_cnt_upsert_borrador(subbloque_id: int, markdown_borrador: str) -> None:
+    """Guarda el borrador generado por IA y actualiza el estado a 'generado'."""
     conn = db.get_connection(RUTA_DB)
     try:
         existe = conn.execute(
@@ -1212,13 +1214,14 @@ def _db_cnt_upsert_borrador(subbloque_id: int, markdown_borrador: str) -> None:
         ).fetchone()
         if existe:
             conn.execute(
-                "UPDATE contenido_subbloque SET markdown_borrador = ?, "
+                "UPDATE contenido_subbloque SET markdown_borrador = ?, estado = 'generado', "
                 "fecha_actualizacion = CURRENT_TIMESTAMP WHERE subbloque_id = ?",
                 (markdown_borrador, subbloque_id),
             )
         else:
             conn.execute(
-                "INSERT INTO contenido_subbloque (subbloque_id, markdown_borrador) VALUES (?, ?)",
+                "INSERT INTO contenido_subbloque (subbloque_id, markdown_borrador, estado) "
+                "VALUES (?, ?, 'generado')",
                 (subbloque_id, markdown_borrador),
             )
         conn.commit()
@@ -1229,6 +1232,13 @@ def _db_cnt_upsert_borrador(subbloque_id: int, markdown_borrador: str) -> None:
 def _db_cnt_guardar_final(
     subbloque_id: int, markdown_final: str, porcentaje_editado: float
 ) -> None:
+    """Guarda el contenido final editado por el profesor.
+
+    Estado resultante:
+    - porcentaje_editado == 0 → 'aprobado' (sin cambios sobre el borrador).
+    - porcentaje_editado > 0  → 'editado' (el profesor modificó el borrador).
+    """
+    estado = "aprobado" if porcentaje_editado == 0 else "editado"
     conn = db.get_connection(RUTA_DB)
     try:
         existe = conn.execute(
@@ -1237,18 +1247,37 @@ def _db_cnt_guardar_final(
         if existe:
             conn.execute(
                 "UPDATE contenido_subbloque SET markdown_final = ?, "
-                "porcentaje_editado = ?, fecha_actualizacion = CURRENT_TIMESTAMP "
+                "porcentaje_editado = ?, estado = ?, "
+                "fecha_actualizacion = CURRENT_TIMESTAMP "
                 "WHERE subbloque_id = ?",
-                (markdown_final, porcentaje_editado, subbloque_id),
+                (markdown_final, porcentaje_editado, estado, subbloque_id),
             )
         else:
             conn.execute(
                 "INSERT INTO contenido_subbloque "
-                "(subbloque_id, markdown_borrador, markdown_final, porcentaje_editado) "
-                "VALUES (?, '', ?, ?)",
-                (subbloque_id, markdown_final, porcentaje_editado),
+                "(subbloque_id, markdown_borrador, markdown_final, porcentaje_editado, estado) "
+                "VALUES (?, '', ?, ?, ?)",
+                (subbloque_id, markdown_final, porcentaje_editado, estado),
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def _db_cnt_aprobar_subbloque(subbloque_id: int) -> None:
+    """Marca un subbloque como 'aprobado' sin cambiar su contenido Markdown."""
+    conn = db.get_connection(RUTA_DB)
+    try:
+        existe = conn.execute(
+            "SELECT id FROM contenido_subbloque WHERE subbloque_id = ?", (subbloque_id,)
+        ).fetchone()
+        if existe:
+            conn.execute(
+                "UPDATE contenido_subbloque SET estado = 'aprobado', "
+                "fecha_actualizacion = CURRENT_TIMESTAMP WHERE subbloque_id = ?",
+                (subbloque_id,),
+            )
+            conn.commit()
     finally:
         conn.close()
 
@@ -1468,25 +1497,43 @@ def _vista_contenido() -> None:
 
     # ── Sub-bloques — áreas de edición ────────────────────────────────────────
     st.divider()
-    st.markdown(
-        f"**{len(subbloques)} sub-bloques** del bloque *{tema_nombre}*"
-    )
+
+    # Progreso del bloque en tiempo real.
+    prog = db.get_progreso_bloque(tema_id, RUTA_DB)
+    _pct = prog["porcentaje"]
+    _col_prog, _col_info = st.columns([3, 1])
+    with _col_prog:
+        st.progress(_pct / 100, text=f"Progreso del bloque: {prog['aprobados']}/{prog['total']} sub-bloques aprobados ({_pct}%)")
+    with _col_info:
+        st.caption(f"**{len(subbloques)} sub-bloques** del bloque *{tema_nombre}*")
+
+    _ETIQUETAS_ESTADO = {
+        "pendiente": "⚪ Sin borrador",
+        "generado": "🤖 Borrador generado por IA",
+        "editado": "✏️ Editado por el profesor",
+        "aprobado": "✅ Aprobado",
+    }
 
     for sub in subbloques:
         cs = _db_cnt_get_contenido_subbloque(sub["id"])
+        estado_actual = cs["estado"] if cs else "pendiente"
 
         if cs is None:
-            etiqueta = "⚪ Sin borrador"
+            etiqueta = _ETIQUETAS_ESTADO["pendiente"]
             texto_inicial = ""
-        elif cs["markdown_final"] is None:
-            etiqueta = "🤖 Borrador generado por IA"
-            texto_inicial = cs["markdown_borrador"] or ""
-        elif cs["porcentaje_editado"] == 0:
-            etiqueta = "✅ Aceptado sin cambios"
-            texto_inicial = cs["markdown_final"] or cs["markdown_borrador"] or ""
+        elif estado_actual == "aprobado":
+            etiqueta = _ETIQUETAS_ESTADO["aprobado"]
+            texto_inicial = cs.get("markdown_final") or cs.get("markdown_borrador") or ""
+        elif estado_actual == "editado":
+            pct_ed = cs.get("porcentaje_editado") or 0
+            etiqueta = f"✏️ Editado ({pct_ed}% modificado)"
+            texto_inicial = cs.get("markdown_final") or cs.get("markdown_borrador") or ""
+        elif estado_actual == "generado":
+            etiqueta = _ETIQUETAS_ESTADO["generado"]
+            texto_inicial = cs.get("markdown_borrador") or ""
         else:
-            etiqueta = f"✏️ Editado por el profesor · {cs['porcentaje_editado']}% modificado"
-            texto_inicial = cs["markdown_final"] or cs["markdown_borrador"] or ""
+            etiqueta = _ETIQUETAS_ESTADO["pendiente"]
+            texto_inicial = ""
 
         with st.expander(
             f"**{sub['nombre']}** — {etiqueta}",
@@ -1504,6 +1551,17 @@ def _vista_contenido() -> None:
                 height=350,
                 label_visibility="collapsed",
             )
+
+            # Botón "Aprobar" disponible cuando hay borrador generado o contenido
+            # editado — no cuando el sub-bloque ya está aprobado.
+            if estado_actual in ("generado", "editado") and cs is not None:
+                if st.button(
+                    "✅ Aprobar este sub-bloque",
+                    key=f"cnt_btn_aprobar_{sub['id']}",
+                    type="secondary",
+                ):
+                    _db_cnt_aprobar_subbloque(sub["id"])
+                    st.rerun()
 
     # ── Botón de guardado ─────────────────────────────────────────────────────
     st.divider()
