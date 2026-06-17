@@ -206,7 +206,7 @@ def generar_organizacion(
                 )
 
                 st.write("🤖 Aplicando ajuste sobre la organización actual...")
-                resultado = ejecutar_agente(prompt)
+                resultado, stop_reason = ejecutar_agente(prompt)
 
                 resultado, info_norm = normalizar_horas_output(
                     resultado, horas_totales or 0
@@ -296,7 +296,7 @@ def generar_organizacion(
             )
 
             st.write("🤖 Consultando al agente (esto puede tardar ~15s)...")
-            resultado = ejecutar_agente(prompt)
+            resultado, stop_reason = ejecutar_agente(prompt)
 
             resultado, info_norm = normalizar_horas_output(
                 resultado, horas_totales if horas_totales else 0
@@ -638,7 +638,7 @@ if st.session_state["ultimo_output"] and fase_actual in ("resultado", "cerrado")
                 )
 
                 for idx_b, bloque in enumerate(bloques_estado):
-                    horas_b = sum(s["horas"] for s in bloque["subtemas"]) if bloque["subtemas"] else bloque["horas"]
+                    horas_b = float(bloque.get("horas", 0))
                     manual_tag = " *(añadido manualmente)*" if bloque.get("manual") else ""
                     st.markdown(
                         f'<div style="font-family:\'DM Sans\',sans-serif; font-weight:600; '
@@ -657,7 +657,7 @@ if st.session_state["ultimo_output"] and fase_actual in ("resultado", "cerrado")
                             st.markdown(
                                 f'<div style="font-size:12px; margin-left:12px; '
                                 f'padding:2px 0; color:var(--text-color);">'
-                                f'• {sub["nombre"]} ({sub["horas"]:.1f}h){manual_s}</div>',
+                                f'• {sub["nombre"]}{manual_s}</div>',
                                 unsafe_allow_html=True,
                             )
                         with col_del:
@@ -672,7 +672,7 @@ if st.session_state["ultimo_output"] and fase_actual in ("resultado", "cerrado")
 
                     # Añadir nuevo subbloque
                     ctr_s = st.session_state["contador_add_subtema"].get(idx_b, 0)
-                    col_ns1, col_ns2, col_ns3 = st.columns([3, 1, 1])
+                    col_ns1, col_ns2 = st.columns([4, 1])
                     with col_ns1:
                         nuevo_sub_nombre = st.text_input(
                             "Nuevo subbloque",
@@ -681,22 +681,15 @@ if st.session_state["ultimo_output"] and fase_actual in ("resultado", "cerrado")
                             placeholder="Nombre del subbloque...",
                         )
                     with col_ns2:
-                        nuevo_sub_horas = st.number_input(
-                            "Horas",
-                            min_value=0.0,
-                            step=0.5,
-                            key=f"ns_horas_{idx_b}_{ctr_s}",
-                            label_visibility="collapsed",
-                        )
-                    with col_ns3:
                         if st.button("+ Añadir", key=f"btn_ns_{idx_b}_{ctr_s}"):
                             nombre_ns = st.session_state.get(f"ns_nombre_{idx_b}_{ctr_s}", "").strip()
                             if nombre_ns:
-                                horas_ns = float(st.session_state.get(f"ns_horas_{idx_b}_{ctr_s}", 0.0))
                                 st.session_state["organizacion_bloques"][idx_b]["subtemas"].append({
                                     "nombre": nombre_ns,
-                                    "horas": horas_ns,
+                                    "evidencia": "Manual (profesor)",
+                                    "origen": "Manual",
                                     "manual": True,
+                                    "aprobado": False,
                                 })
                                 ctrs = st.session_state["contador_add_subtema"]
                                 ctrs[idx_b] = ctr_s + 1
