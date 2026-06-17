@@ -1865,6 +1865,14 @@ def _vista_presentacion() -> None:
         st.warning("Este bloque no tiene sub-bloques registrados.")
         return
 
+    _paso_prs = 1
+    for _s in subbloques:
+        _prs_r = _db_prs_get_presentacion_subbloque(_s["id"])
+        if _prs_r and _prs_r.get("html_path"):
+            _paso_prs = 2
+            break
+    _render_stepper(["Bloque", "Configuración", "Generación"], _paso_prs)
+
     st.divider()
 
     for sub in subbloques:
@@ -2083,6 +2091,46 @@ def _vista_presentacion() -> None:
 
 
 # =============================================================================
+# Stepper contextual — flujos multi-paso
+# =============================================================================
+
+def _render_stepper(pasos: list[str], paso_actual: int) -> None:
+    """Fila de tarjetas conectadas por flechas: activo en color de acento, resto en gris."""
+    partes: list[str] = []
+    for i, paso in enumerate(pasos):
+        if i < paso_actual:
+            estilo = (
+                f"background:rgba(24,95,165,0.08);color:{ACENTO};"
+                "border-radius:8px;padding:5px 15px;font-size:12px;font-weight:500;"
+                "font-family:'DM Sans',sans-serif;opacity:0.7;"
+            )
+        elif i == paso_actual:
+            estilo = (
+                f"background:{ACENTO};color:#ffffff;"
+                "border-radius:8px;padding:5px 15px;font-size:12px;font-weight:600;"
+                "font-family:'DM Sans',sans-serif;"
+            )
+        else:
+            estilo = (
+                "background:rgba(128,128,128,0.08);color:var(--text-color);"
+                "border-radius:8px;padding:5px 15px;font-size:12px;"
+                "font-family:'DM Sans',sans-serif;opacity:0.4;"
+            )
+        partes.append(f'<span style="{estilo}">{paso}</span>')
+        if i < len(pasos) - 1:
+            partes.append(
+                '<span style="color:rgba(128,128,128,0.3);font-size:16px;'
+                'padding:0 2px;line-height:1;">›</span>'
+            )
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:4px;margin:0 0 18px 0;flex-wrap:wrap;">'
+        + "".join(partes)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# =============================================================================
 # Vista Organizador
 # =============================================================================
 
@@ -2110,6 +2158,14 @@ def _vista_organizador() -> None:
         st.session_state["org_asignatura"] = asignatura
 
     _org_init_state()
+
+    if st.session_state.get("org_ultimo_output"):
+        _paso_org = 2
+    elif st.session_state.get("org_fase") == "editar":
+        _paso_org = 1
+    else:
+        _paso_org = 0
+    _render_stepper(["Guía docente", "Subtemas", "Propuesta"], _paso_org)
 
     # ── Uploaders ──────────────────────────────────────────────────────────────
     st.markdown(
