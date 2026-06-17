@@ -113,22 +113,33 @@ extraer_candidatos_con_evidencia()
 
 ---
 
-## Edición manual de la organización (Objetivo 2)
+## Edición de la organización (Objetivo 2)
 
-**Disponible en las dos interfaces.** Implementada primero en el standalone
-(`app.py`) y, reutilizando la misma lógica pura de `parser.py`
-(`parsear_bloques_desde_markdown` + `regenerar_markdown_desde_bloques`), también
-en la sección Organizador de `app-unificada/app.py`. El comportamiento y la
-restricción temporal son equivalentes en ambas (ver tabla de fases más abajo).
+**App unificada — vista única interactiva (junio 2026):** la sección Organizador de
+`app-unificada` muestra una sola superficie de edición tras generar la propuesta: por
+cada bloque, nombre y horas totales editables; debajo, tabla de subbloques con columnas
+Subtema / Evidencia / Origen, más acciones por fila (aprobar ✓, editar nombre, eliminar).
+Añadir subbloque o bloque nuevo integrado en la misma vista. El Markdown raw queda en un
+expander secundario; la vista principal es la tabla interactiva. El cuadro de
+redistribución total por prompt se mantiene aparte para cambios grandes.
+
+**Standalone:** conserva el editor manual en expander (misma lógica pura de `parser.py`).
+
+**Horas solo a nivel de bloque (junio 2026):** se eliminó la columna Horas por subtema
+del formato de salida, del prompt, del parser y de la UI. Motivo: con el material
+disponible el reparto horario por subtema producía muchos valores en 0 y no era fiable;
+las horas viven únicamente en el encabezado `## Bloque N — Nombre · Xh`.
+`normalizar_horas_output()` redistribuye solo entre bloques.
 
 ### Controles disponibles (solo en fase de revisión)
 
-- **Añadir subbloque** — texto + horas, dentro de un bloque existente. Origen = "Manual".
-- **Eliminar subbloque** — botón 🗑 por subbloque.
-- **Añadir bloque** — nombre; se añade con horas=0 y subbloques vacíos. Se numera como max+1.
-- **Eliminar bloque** — botón 🗑 elimina bloque + todos sus subbloques.
+- **Editar bloque** — nombre y horas totales del bloque (app unificada).
+- **Añadir / eliminar subbloque** — nombre; evidencia/origen solo lectura salvo manual.
+- **Aprobar subbloque** — marca ✓ (app unificada).
+- **Añadir / eliminar bloque** — con horas a nivel de bloque.
 
-La edición manual NO requiere verificación de señal estructural — refleja el criterio pedagógico del profesor. No aplica el principio de anclaje a evidencia del Objetivo 1.
+La edición manual NO requiere verificación de señal estructural para filas añadidas a
+mano — refleja el criterio pedagógico del profesor.
 
 ### Coexistencia con refinamiento por prompt
 
@@ -160,7 +171,7 @@ La app unificada no usa la variable `fase`; modela el mismo ciclo de vida con
 |----------|-----------------------|-------------------------------------|
 | Fase de revisión | `fase == "resultado"` | `org_ultimo_output` presente y `org_confirmada == False` |
 | Estructura congelada | `fase == "cerrado"` (botón "Dar por cerrada") | `org_confirmada == True` (botón "Confirmar como definitiva", que además escribe `temas`/`subtemas` en BD para el Agente Contenido) |
-| Edición manual + refinamiento | solo en `"resultado"` | solo si `not org_confirmada`; al confirmar se ocultan y se muestra aviso de "estructura congelada" |
+| Edición + refinamiento | solo en `"resultado"` | vista unificada interactiva + prompt; solo si `not org_confirmada` |
 | Persistencia de cada edición manual | actualiza `ultimo_output` en sesión | actualiza `org_ultimo_output` **y** reescribe `data/{slug}/outputs/organizador/vN.md` |
 
 ### Loop de refinamiento por IA — equivalencia funcional (Objetivo verificado)
@@ -278,9 +289,33 @@ si tampoco hay, bloque sin subdivisión marcado). Nunca se aceptan fragmentos de
 **Verificación (PDF reales):** Elementos/Tec. Materiales → 12 temas limpios; Oleohidráulica →
 4 temas limpios (antes 7/12 eran boilerplate); Tornillos → el fragmento `d/R` se descarta.
 
-**Nota de datos (no es bug):** el fichero `data/elementos-de-maquinas/inputs/Guia docente.pdf`
-contiene en realidad el temario de Tecnología de Materiales (mecánica de fractura, fatiga,
-corrosión). Es un error en los datos de prueba, no del agente.
+**Nota de sesión de prueba (no es bug):** en la sesión donde se detectó el problema se
+mezclaron archivos de Elementos de Máquinas y Tecnología de Materiales porque no se cambió
+la asignatura en la app antes de subir la guía. Eso explica que apareciera temario de
+fractura/fatiga/corrosión al probar con PDFs de tornillos o resortes; no era un fallo del
+agente ni de los ficheros en disco.
+
+---
+
+## Bug documentado y corregido: truncamiento de bloques al final del output
+
+**Bug (detectado junio 2026):** en asignaturas con muchos bloques/subbloques, el último
+bloque podía quedar cortado a mitad de una fila de la tabla (nombre incompleto, sin
+evidencia ni origen). Patrón equivalente al fix del Agente Presentación (HTML truncado por
+`max_tokens`).
+
+**Causa raíz:** `ejecutar_agente()` usaba `max_tokens=4096`, insuficiente para
+organizaciones largas; `stop_reason` no se comprobaba y no había validación posterior.
+
+**Fix (junio 2026):**
+- `max_tokens` subido a **8192** (criterio alineado con `_MAX_TOKENS_HTML` del Agente
+  Presentación).
+- `ejecutar_agente()` devuelve `(texto, stop_reason)`.
+- `detectar_output_truncado()` en `parser.py` señala `stop_reason == max_tokens` y filas
+  de tabla con celdas vacías al final; la app unificada muestra `st.error` visible.
+
+**Nota:** el caso observado con guía mal asociada pudo inflar el volumen; conviene validar
+con material limpio, pero el límite bajo y la ausencia de verificación eran reales.
 
 ---
 
@@ -298,9 +333,9 @@ Fuente de verdad: plantilla en `prompts.py` → `construir_prompt()`.
 
 ## Bloque {N} — {NOMBRE_BLOQUE} · {HORAS_BLOQUE}h
 
-| Subtema | Horas | Evidencia | Origen |
-|---------|-------|----------|--------|
-| {subtema} | {horas} | {Sección X.X / Slide N / Sin señal verificable} | {Detectado / Manual / Fallback} |
+| Subtema | Evidencia | Origen |
+|---------|-----------|--------|
+| {subtema} | {Sección X.X / Slide N / Sin señal verificable} | {Detectado / Manual / Fallback} |
 
 *(repetir por bloque)*
 

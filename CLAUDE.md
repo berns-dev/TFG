@@ -55,11 +55,10 @@ Este es el contrato que el Agente Contenido lee con `parse_organization_md()` (p
 `^##\s+Bloque\s+\d+\s+—\s+(.+?)\s*·\s*([\d,.]+)h`). Un archivo que no siga este
 formato exacto no será parseado correctamente por el Agente Contenido.
 
-**Nota:** la tabla de subbloques dentro de cada bloque usa columnas `| Subtema | Horas | Evidencia | Origen |`
-(o `| Subtema | Horas | Origen |` tras edición manual). El Agente Contenido parsea ambos
-formatos vía `_parse_subbloques_table()` en `app.py`. La columna `Evidencia` se usa para
-segmentar el texto del material por subbloque. Si falta la columna `Evidencia`, la segmentación
-no puede localizar boundaries y los subbloques quedan con estado `pendiente`.
+**Nota:** la tabla de subbloques usa `| Subtema | Evidencia | Origen |` (sin horas por
+subtema — las horas viven solo en el encabezado del bloque). Formatos legados con
+columna Horas siguen parseándose. El Agente Contenido usa `Evidencia` para segmentar
+el material; si falta, los subbloques quedan en estado `pendiente`.
 
 ---
 
@@ -76,8 +75,9 @@ comparten la misma lógica de cálculo y transformación, que vive **solo** en
 
 `app-unificada` carga ese módulo vía `importlib` (`_org_parser`) y lo usa
 directamente; ya **no** mantiene copias literales de esas funciones (se eliminaron).
-La edición manual de bloques/subbloques existe en **ambas** interfaces, con la misma
-restricción: solo en fase de revisión; una vez cerrada/confirmada la organización
+La edición de la organización en **app-unificada** es una vista única interactiva
+(tabla por bloque/subbloque); el standalone conserva el editor en expander. En ambas
+solo en fase de revisión; una vez cerrada/confirmada la organización
 (en la unificada, al confirmarla se persiste a BD para Contenido), la estructura
 queda congelada y se ocultan tanto la edición manual como el refinamiento por prompt.
 El detalle de la separación lógica pura↔UI y la equivalencia entre interfaces está
