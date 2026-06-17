@@ -355,6 +355,68 @@ def test_fallback_sin_subbloques() -> None:
     check("Fallback: 1 marcador INICIO", len(inicios) == 1)
 
 
+# ── 6. Detección de boundary no encontrado (condición de aviso UI) ───────────
+#
+# Esta sección valida la lógica de detección que app.py usa para emitir st.warning()
+# cuando una evidencia estructural no se localiza en el texto. No es posible testear
+# el st.warning() directamente (requiere Streamlit), pero sí la condición que lo activa.
+
+_EVIDENCIAS_FALLBACK_TEST = frozenset({
+    "sin señal verificable", "sin senal verificable",
+    "fallback", "sin señal", "sin senal", "",
+})
+
+
+def _detectar_avisos(segs: list) -> list[str]:
+    """Reproduce la lógica de detección de app.py: retorna nombres de subbloques
+    cuya evidencia no se encontró (seg vacío + evidencia no-fallback)."""
+    avisos: list[str] = []
+    for sb_meta, seg_text in segs:
+        ev = (sb_meta.get("evidencia") or "").strip().lower()
+        if not seg_text.strip() and ev not in _EVIDENCIAS_FALLBACK_TEST:
+            avisos.append(sb_meta.get("nombre", "?"))
+    return avisos
+
+
+def test_deteccion_boundary_no_encontrado() -> None:
+    print("\n[6] Detección de boundary no encontrado (condición de aviso)")
+
+    # Texto sin secciones numeradas ni marcadores de slide
+    texto_sin_estructura = (
+        "Contenido general sin secciones numeradas ni marcadores de diapositiva. "
+        "Este texto no contiene ni '5.1.' ni '[SLIDE 7]'."
+    )
+
+    # 6a. Ningún boundary encontrado: primer sub recibe todo; resto vacíos
+    sb_ninguno = [
+        {"nombre": "Sub A", "horas": 1.0, "evidencia": "Sección 5.1", "origen": "Detectado"},
+        {"nombre": "Sub B", "horas": 1.0, "evidencia": "Slide 7", "origen": "Detectado"},
+        {"nombre": "Sub C", "horas": 1.0, "evidencia": "Sin señal verificable", "origen": "Fallback"},
+    ]
+    segs_ninguno = segment_text_by_subbloques(texto_sin_estructura, sb_ninguno)
+    avisos = _detectar_avisos(segs_ninguno)
+
+    check("Sub A (recibe texto, no avisa aunque boundary no encontrado)", "Sub A" not in avisos)
+    check("Sub B (Slide 7 no encontrado, avisa)", "Sub B" in avisos)
+    check("Sub C (fallback, no avisa)", "Sub C" not in avisos)
+    check("Solo 1 aviso generado", len(avisos) == 1)
+
+    # 6b. Caso mixto: una evidencia encontrada, otra no
+    texto_con_seccion = (
+        "[PAGINA 1]\n3.1. Sección primera\nContenido de la sección primera.\n"
+    )
+    sb_mixto = [
+        {"nombre": "Sub D", "horas": 1.0, "evidencia": "Sección 3.1", "origen": "Detectado"},
+        {"nombre": "Sub E", "horas": 1.0, "evidencia": "Sección 99.99", "origen": "Detectado"},
+    ]
+    segs_mixto = segment_text_by_subbloques(texto_con_seccion, sb_mixto)
+    avisos_mixto = _detectar_avisos(segs_mixto)
+
+    check("Sub D (Sección 3.1 encontrada, no avisa)", "Sub D" not in avisos_mixto)
+    check("Sub E (Sección 99.99 no encontrada, avisa)", "Sub E" in avisos_mixto)
+    check("Solo 1 aviso en caso mixto", len(avisos_mixto) == 1)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -367,6 +429,7 @@ if __name__ == "__main__":
     test_ensamblado()
     test_progreso()
     test_fallback_sin_subbloques()
+    test_deteccion_boundary_no_encontrado()
 
     total = len(_results)
     passed = sum(1 for _, ok in _results if ok)

@@ -41,6 +41,14 @@ _BLOCK_HEADER_RE = re.compile(
 )
 _TABLE_SEPARATOR_RE = re.compile(r"^\|[\s|:-]+\|$")
 
+# Valores de evidencia que indican ausencia de señal estructural verificable.
+# Se replican aquí (en lugar de importar _FALLBACK_EVIDENCIAS de segmentor) para
+# mantener la UI independiente de detalles privados del módulo de segmentación.
+_EVIDENCIAS_FALLBACK = frozenset({
+    "sin señal verificable", "sin senal verificable",
+    "fallback", "sin señal", "sin senal", "",
+})
+
 
 def _parse_subbloques_table(section: str) -> list[dict]:
     """Parsea la tabla de subbloques de la sección de un bloque.
@@ -438,6 +446,20 @@ def main() -> None:
                             # ── Pipeline con subbloques ───────────────────────
                             status.write("Segmentación por subbloques…")
                             segments = segment_text_by_subbloques(text, bloque_subbloques)
+
+                            # Avisar cuando una evidencia estructural no se localiza en el texto.
+                            # Esto ocurre si el extractor del Contenido y el del Organizador
+                            # producen texto con formato distinto para el mismo material.
+                            for _sb_chk, _seg_chk in segments:
+                                _ev_chk = (_sb_chk.get("evidencia") or "").strip().lower()
+                                if not _seg_chk.strip() and _ev_chk not in _EVIDENCIAS_FALLBACK:
+                                    st.warning(
+                                        f"⚠️ Subbloque «{_sb_chk.get('nombre', '?')}»: "
+                                        f"la referencia \"{_sb_chk.get('evidencia', '')}\" "
+                                        "no se encontró en el texto extraído. "
+                                        "El subbloque queda pendiente — "
+                                        "puedes editarlo manualmente."
+                                    )
 
                             sb_results: list[SubbloqueResult] = []
                             all_items: list[dict] = []
