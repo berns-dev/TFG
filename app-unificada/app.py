@@ -377,8 +377,6 @@ _ORG_KEYS: dict[str, object] = {
     "org_warning_cardinalidad": None,
     "org_warning_normalizacion": None,
     "org_warning_truncamiento": None,
-    "org_subtemas_editor": [],
-    "org_fase": None,
     "org_ejecucion_id": None,
     "org_version_actual": 0,
     "org_output_id": None,
@@ -430,7 +428,6 @@ def _org_registrar_archivos(
         except Exception:
             pass
         st.session_state["org_inputs_registrados"].add(clave)
-        st.success(f"**{archivo.name}** añadido a **{asignatura_nombre}**")
 
     if guia_docente is not None:
         _registrar(guia_docente, "guia_docente")
@@ -453,8 +450,6 @@ def _org_detectar_cambio(guia_docente, materiales_teoria) -> None:
         st.session_state["org_iteracion"] = 1
         st.session_state["org_warning_cardinalidad"] = None
         st.session_state["org_warning_normalizacion"] = None
-        st.session_state["org_subtemas_editor"] = []
-        st.session_state["org_fase"] = None
         st.session_state["org_ejecucion_id"] = None
         st.session_state["org_version_actual"] = 0
         st.session_state["org_output_id"] = None
@@ -542,6 +537,9 @@ def _org_validar_y_persistir(
     # Reutiliza parsear_bloques_desde_markdown del Organizador: deriva la lista
     # de bloques/subtemas editables del Markdown recién generado.
     st.session_state["org_organizacion_bloques"] = _org_parser.parsear_bloques_desde_markdown(resultado)
+    archivos = st.session_state.get("org_ultimos_archivos_teoria", [])
+    for i, bloque in enumerate(st.session_state["org_organizacion_bloques"]):
+        bloque["archivo_origen"] = _org_resolver_archivo_bloque(bloque["nombre"], archivos, i)
     st.session_state["org_contador_add_subtema"] = {}
     st.session_state["org_contador_add_bloque"] = 0
 
@@ -584,82 +582,66 @@ def _org_actualizar_desde_bloques(slug: str) -> None:
     )
 
 
-def _org_extraer_y_detectar(guia_docente, materiales_teoria) -> bool:
-    """Fase 1: extrae texto y detecta subtemas sin llamar al LLM."""
-    if guia_docente is None or not materiales_teoria:
-        st.error("Debes subir guía docente y materiales de teoría.")
-        return False
+def _org_build_subtemas_confirmados(
+    textos_teoria: list[str],
+    archivos_teoria: list[str],
+    archivos_bytes: list[bytes],
+) -> list[list[dict]]:
+    """Construye la lista de subtemas confirmados para el prompt del LLM.
 
-    with st.status("Extrayendo y detectando subtemas...", expanded=True) as status:
-        try:
-            st.write("📄 Extrayendo texto de la guía docente...")
-            texto_guia = _org_parser.extraer_texto(guia_docente.getvalue(), guia_docente.name)
-            candidatos_guia = _org_parser.extraer_subtemas_guia(texto_guia)
+    Usa extraer_candidatos_con_evidencia (misma ruta que el standalone validado):
+    señales estructurales con evidencia verificable, no el regex simple
+    extraer_subtemas_candidatos de la pantalla intermedia eliminada.
+    """
+    resultado: list[list[dict]] = []
+    for texto_mat, nombre_arch, bytes_arch in zip(
+        textos_teoria, archivos_teoria, archivos_bytes
+    ):
+        cands_con_ev = _org_parser.extraer_candidatos_con_evidencia(
+            texto_mat, nombre_arch, bytes_arch
+        )
+        if cands_con_ev:
+            resultado.append([
+                {
+                    "nombre": c["nombre"],
+                    "evidencia": c["evidencia"],
+                    "origen": "Detectado",
+                }
+                for c in cands_con_ev
+            ])
+        else:
+            resultado.append([])
+    return resultado
 
-            st.write("📚 Extrayendo y clasificando materiales de teoría...")
-            textos_teoria_raw: list[str] = []
-            archivos_teoria: list[str] = []
-            archivos_contexto: list[str] = []
 
-            for archivo in materiales_teoria:
-                try:
-                    texto_material = _org_parser.extraer_texto(archivo.getvalue(), archivo.name)
-                    categoria = _org_parser.clasificar_archivo(archivo.name, texto_material)
-                    if categoria == "contexto":
-                        archivos_contexto.append(archivo.name)
-                        st.write(f"  → {archivo.name} → contexto")
-                    else:
-                        textos_teoria_raw.append(texto_material)
-                        archivos_teoria.append(archivo.name)
-                        st.write(f"  → {archivo.name} → teoría")
-                except Exception as err:
-                    st.warning(f"No se pudo procesar '{archivo.name}': {err}")
+def _org_resolver_archivo_bloque(nombre_bloque: str, archivos: list[str], idx: int) -> str:
+    """Asocia un bloque generado al PDF/PPTX de teoría más probable."""
+    if not archivos:
+        return ""
+    nb = _org_parser.normalizar_subtema(nombre_bloque)
+    mejor, score = "", 0.0
+    for ar in archivos:
+        stem = Path(ar).stem
+        stem_norm = _org_parser.normalizar_subtema(stem)
+        r = difflib.SequenceMatcher(None, nb, stem_norm).ratio()
+        if r > score:
+            score, mejor = r, ar
+    if score >= 0.35:
+        return mejor
+    return archivos[idx] if idx < len(archivos) else archivos[0]
 
-            if not textos_teoria_raw:
-                status.update(label="❌ Error", state="error")
-                st.error("No se pudo extraer texto válido de ningún material de teoría.")
-                return False
 
-            st.write("🔍 Detectando subtemas por numeración jerárquica...")
-            editor_data: list[dict] = []
-            for texto_mat, nombre_arch in zip(textos_teoria_raw, archivos_teoria):
-                cands_mat = _org_parser.extraer_subtemas_candidatos(texto_mat)
-                if cands_mat:
-                    candidatos = cands_mat
-                    origen_base = "material"
-                    discrepancia = _org_parser.hay_discrepancia(cands_mat, candidatos_guia)
-                elif candidatos_guia:
-                    candidatos = candidatos_guia
-                    origen_base = "guia"
-                    discrepancia = False
-                else:
-                    candidatos = []
-                    origen_base = "ninguno"
-                    discrepancia = False
-                editor_data.append({
-                    "archivo": nombre_arch,
-                    "candidatos": candidatos,
-                    "candidatos_mat_orig": cands_mat,
-                    "origen": origen_base,
-                    "discrepancia": discrepancia,
-                })
-
-            horas_docencia = _org_parser.extraer_horas_docencia(texto_guia)
-            st.session_state["org_ultimas_horas_teoria"] = horas_docencia
-            st.session_state["org_ultimos_archivos_teoria"] = archivos_teoria
-            st.session_state["org_ultimos_archivos_contexto"] = archivos_contexto
-            st.session_state["org_subtemas_editor"] = editor_data
-            st.session_state["org_fase"] = "editar"
-
-            status.update(
-                label="✅ Subtemas detectados — revisa y confirma en el área principal",
-                state="complete",
-            )
-            return True
-        except Exception as err:
-            status.update(label="❌ Error en la extracción", state="error")
-            st.error(f"Error durante la extracción: {err}")
-            return False
+def _org_format_evidencia(sub: dict, archivo_bloque: str) -> str:
+    """Texto interpretable para la columna Evidencia en la vista unificada."""
+    ev = (sub.get("evidencia") or "").strip()
+    if sub.get("manual"):
+        return ev or "Manual (profesor)"
+    vacios = {"", "—", "-", "Sin señal verificable", "Sin senal verificable"}
+    if ev and ev not in vacios:
+        return ev
+    if archivo_bloque:
+        return f"Sin señal estructural — extraído de {archivo_bloque}"
+    return "Sin señal estructural"
 
 
 def _org_generar_organizacion(
@@ -726,11 +708,13 @@ def _org_generar_organizacion(
             textos_teoria: list[str] = []
             textos_contexto: list[str] = []
             archivos_teoria: list[str] = []
+            archivos_teoria_bytes: list[bytes] = []
             archivos_contexto: list[str] = []
 
             for archivo in materiales_teoria:
                 try:
-                    texto_material = _org_parser.extraer_texto(archivo.getvalue(), archivo.name)
+                    archivo_bytes = archivo.getvalue()
+                    texto_material = _org_parser.extraer_texto(archivo_bytes, archivo.name)
                     categoria = _org_parser.clasificar_archivo(archivo.name, texto_material)
                     if categoria == "contexto":
                         textos_contexto.append(texto_material)
@@ -739,6 +723,7 @@ def _org_generar_organizacion(
                     else:
                         textos_teoria.append(texto_material)
                         archivos_teoria.append(archivo.name)
+                        archivos_teoria_bytes.append(archivo_bytes)
                         st.write(f"  → {archivo.name} → teoría")
                 except Exception as err:
                     st.warning(f"No se pudo procesar '{archivo.name}': {err}")
@@ -769,6 +754,12 @@ def _org_generar_organizacion(
                 st.warning("⚠️ No se detectaron horas lectivas (TE/PA) en la guía docente.")
             st.session_state["org_ultimas_horas_teoria"] = horas_docencia
             st.session_state["org_ultimas_horas_totales"] = horas_totales if horas_totales > 0 else None
+
+            if subtemas_confirmados is None:
+                st.write("🔍 Detectando señales estructurales en los materiales...")
+                subtemas_confirmados = _org_build_subtemas_confirmados(
+                    textos_teoria, archivos_teoria, archivos_teoria_bytes
+                )
 
             st.write("🌐 Detectando idioma de los materiales...")
             prompt, _idioma = _org_prompts.construir_prompt(
@@ -1978,6 +1969,29 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
     iter_key = st.session_state["org_iteracion"]
 
     if editable:
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stCheckbox"] input[type="checkbox"] {
+                accent-color: #16a34a;
+                width: 1.15rem;
+                height: 1.15rem;
+            }
+            button[title="Eliminar subtema"],
+            button[title="Eliminar bloque"] {
+                background-color: #dc2626 !important;
+                color: #fff !important;
+                border-color: #dc2626 !important;
+            }
+            button[title="Eliminar subtema"]:hover,
+            button[title="Eliminar bloque"]:hover {
+                background-color: #b91c1c !important;
+                border-color: #b91c1c !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
         st.markdown("### Revisa y edita la organización")
         st.caption(
             "Marca cada subbloque como correcto (✓), edita nombres, elimina filas o añade "
@@ -1988,9 +2002,10 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
         st.markdown("### Organización confirmada")
 
     for idx_b, bloque in enumerate(bloques):
+        archivo_bloque = bloque.get("archivo_origen", "")
         with st.container(border=True):
             if editable:
-                c_tit, c_horas, c_del_b = st.columns([5, 1.2, 0.5])
+                c_tit, c_horas, c_del_b = st.columns([5, 1.5, 0.5])
                 with c_tit:
                     st.text_input(
                         f"Nombre — Bloque {bloque['numero']}",
@@ -1999,17 +2014,28 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                         label_visibility="collapsed",
                     )
                 with c_horas:
-                    st.number_input(
-                        "Horas del bloque",
-                        min_value=0.0,
-                        step=0.5,
-                        value=float(bloque.get("horas", 0)),
-                        key=f"org_bh_{idx_b}_{iter_key}",
-                        label_visibility="collapsed",
-                    )
+                    ch_val, ch_unit = st.columns([4, 1])
+                    with ch_val:
+                        st.number_input(
+                            "Horas del bloque",
+                            min_value=0.0,
+                            step=0.5,
+                            value=float(bloque.get("horas", 0)),
+                            key=f"org_bh_{idx_b}_{iter_key}",
+                            label_visibility="collapsed",
+                        )
+                    with ch_unit:
+                        st.markdown(
+                            "<p style='margin-top:28px;margin-bottom:0;color:var(--text-color);'>h</p>",
+                            unsafe_allow_html=True,
+                        )
                 with c_del_b:
                     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"org_del_bloque_{idx_b}_{iter_key}", help="Eliminar bloque"):
+                    if st.button(
+                        "✕",
+                        key=f"org_del_bloque_{idx_b}_{iter_key}",
+                        help="Eliminar bloque",
+                    ):
                         _org_sync_widgets_a_bloques(iter_key)
                         st.session_state["org_organizacion_bloques"].pop(idx_b)
                         _org_actualizar_desde_bloques(slug)
@@ -2019,19 +2045,21 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                 h_fmt = str(int(h)) if h == int(h) else f"{h:.1f}"
                 st.markdown(f"**Bloque {bloque['numero']} — {bloque['nombre']} · {h_fmt}h**")
 
-            # Cabecera de tabla
-            h1, h2, h3, h4, h5 = st.columns([3.2, 2, 1.2, 0.5, 0.5])
+            if bloque.get("manual"):
+                st.caption("Origen: Añadido manualmente")
+            elif archivo_bloque:
+                st.caption(f"Origen: {archivo_bloque}")
+
+            h1, h2, h3, h4 = st.columns([3.5, 2.8, 0.55, 0.55])
             h1.markdown("**Subtema**")
             h2.markdown("**Evidencia**")
-            h3.markdown("**Origen**")
             if editable:
-                h4.markdown("**✓**")
-                h5.markdown("")
+                h3.markdown("**✓**")
+                h4.markdown("")
 
             for idx_s, sub in enumerate(bloque.get("subtemas", [])):
-                r1, r2, r3, r4, r5 = st.columns([3.2, 2, 1.2, 0.5, 0.5])
-                evidencia = sub.get("evidencia") or ("Manual (profesor)" if sub.get("manual") else "—")
-                origen = "Manual" if sub.get("manual") else sub.get("origen", "Detectado")
+                r1, r2, r3, r4 = st.columns([3.5, 2.8, 0.55, 0.55])
+                evidencia = _org_format_evidencia(sub, archivo_bloque)
                 with r1:
                     if editable:
                         st.text_input(
@@ -2045,18 +2073,20 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                         st.markdown(f"{sub['nombre']}{marca}")
                 with r2:
                     st.caption(evidencia)
-                with r3:
-                    st.caption(origen)
                 if editable:
-                    with r4:
+                    with r3:
                         st.checkbox(
-                            "OK",
+                            "Aprobar",
                             value=sub.get("aprobado", False),
                             key=f"org_ok_{idx_b}_{idx_s}_{iter_key}",
                             label_visibility="collapsed",
                         )
-                    with r5:
-                        if st.button("✕", key=f"org_del_sub_{idx_b}_{idx_s}_{iter_key}"):
+                    with r4:
+                        if st.button(
+                            "✕",
+                            key=f"org_del_sub_{idx_b}_{idx_s}_{iter_key}",
+                            help="Eliminar subtema",
+                        ):
                             _org_sync_widgets_a_bloques(iter_key)
                             st.session_state["org_organizacion_bloques"][idx_b]["subtemas"].pop(idx_s)
                             _org_actualizar_desde_bloques(slug)
@@ -2093,7 +2123,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
     if editable:
         ctr_b = st.session_state["org_contador_add_bloque"]
         st.markdown("**Añadir bloque**")
-        nb1, nb2, nb3 = st.columns([4, 1.2, 1])
+        nb1, nb2, nb3 = st.columns([4, 1.5, 1])
         with nb1:
             st.text_input(
                 "Nombre del nuevo bloque",
@@ -2102,14 +2132,21 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                 placeholder="Nombre del nuevo bloque…",
             )
         with nb2:
-            st.number_input(
-                "Horas",
-                min_value=0.0,
-                step=0.5,
-                value=0.0,
-                key=f"org_nb_horas_{ctr_b}",
-                label_visibility="collapsed",
-            )
+            nbh_val, nbh_unit = st.columns([4, 1])
+            with nbh_val:
+                st.number_input(
+                    "Horas",
+                    min_value=0.0,
+                    step=0.5,
+                    value=0.0,
+                    key=f"org_nb_horas_{ctr_b}",
+                    label_visibility="collapsed",
+                )
+            with nbh_unit:
+                st.markdown(
+                    "<p style='margin-top:28px;margin-bottom:0;color:var(--text-color);'>h</p>",
+                    unsafe_allow_html=True,
+                )
         with nb3:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             if st.button("+ Añadir bloque", key=f"org_btn_nb_{ctr_b}"):
@@ -2125,6 +2162,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                         "horas": horas_nb,
                         "subtemas": [],
                         "manual": True,
+                        "archivo_origen": "",
                     })
                     st.session_state["org_contador_add_bloque"] = ctr_b + 1
                     _org_actualizar_desde_bloques(slug)
@@ -2181,12 +2219,10 @@ def _vista_organizador() -> None:
     _org_init_state()
 
     if st.session_state.get("org_ultimo_output"):
-        _paso_org = 2
-    elif st.session_state.get("org_fase") == "editar":
         _paso_org = 1
     else:
         _paso_org = 0
-    _render_stepper(["Guía docente", "Subtemas", "Propuesta"], _paso_org)
+    _render_stepper(["Guía docente", "Organización"], _paso_org)
 
     # ── Uploaders ──────────────────────────────────────────────────────────────
     _render_asignatura_activa_banner(asignatura)
@@ -2253,80 +2289,15 @@ def _vista_organizador() -> None:
         st.session_state["org_historial_feedback"] = []
         st.session_state["org_iteracion"] = 1
         st.session_state["org_ultimo_output"] = None
-        st.session_state["org_fase"] = None
         st.session_state["org_confirmada"] = False
-        if _org_extraer_y_detectar(guia_docente, materiales_teoria):
+        if _org_generar_organizacion(
+            guia_docente, materiales_teoria,
+            asignatura_id=asignatura_id, slug=slug,
+        ):
             st.rerun()
 
     if not puede_generar and not st.session_state.get("org_ultimo_output"):
         st.info("Sube los archivos arriba y pulsa **Generar organización** para comenzar.")
-
-    # ── Fase: editor de subtemas ──────────────────────────────────────────────
-    if st.session_state.get("org_fase") == "editar" and not st.session_state.get("org_ultimo_output"):
-        editor_data = st.session_state.get("org_subtemas_editor", [])
-        if editor_data:
-            st.markdown("### Subtemas detectados — revisa y confirma")
-            st.caption(
-                "Los subtemas se han detectado por numeración jerárquica en los materiales "
-                "(ej. '3.2. Título'). Edita la lista antes de generar la propuesta."
-            )
-            for i, bloque_info in enumerate(editor_data):
-                nombre_archivo = bloque_info["archivo"]
-                candidatos = bloque_info["candidatos"]
-                discrepancia = bloque_info.get("discrepancia", False)
-
-                st.markdown(
-                    f'<div style="font-family:\'DM Sans\',sans-serif; font-size:13px; '
-                    f'font-weight:500; margin:16px 0 4px 0; color:var(--text-color);">'
-                    f'Material {i + 1}: <code>{nombre_archivo}</code></div>',
-                    unsafe_allow_html=True,
-                )
-                if discrepancia:
-                    st.warning(
-                        "⚠️ La guía docente y el material discrepan en los subtemas de este "
-                        "archivo. Se ha usado la lista del material como base — revísala."
-                    )
-                if not candidatos:
-                    st.info(
-                        "No se detectó numeración de subtemas en este material. "
-                        "Indica manualmente los subtemas del bloque (uno por línea)."
-                    )
-                st.text_area(
-                    "Subtemas (uno por línea):",
-                    value="\n".join(candidatos),
-                    key=f"org_subtemas_ta_{i}",
-                    height=max(100, min(300, 30 * len(candidatos) + 60)),
-                )
-
-            st.divider()
-            if st.button(
-                "Confirmar subtemas y generar propuesta",
-                type="primary", use_container_width=True, key="org_btn_confirmar_subs",
-            ):
-                subtemas_confirmados: list[list[dict]] = []
-                for i, bloque_info in enumerate(editor_data):
-                    ta_valor = st.session_state.get(f"org_subtemas_ta_{i}", "")
-                    lineas = [l.strip() for l in ta_valor.splitlines() if l.strip()]
-                    cands_orig_norm = {
-                        _org_parser.normalizar_subtema(c)
-                        for c in bloque_info.get("candidatos_mat_orig", [])
-                    }
-                    lista: list[dict] = []
-                    for linea in lineas:
-                        origen = (
-                            "Detectado"
-                            if _org_parser.normalizar_subtema(linea) in cands_orig_norm
-                            else "Manual"
-                        )
-                        lista.append({"nombre": linea, "origen": origen})
-                    subtemas_confirmados.append(lista)
-
-                if _org_generar_organizacion(
-                    guia_docente, materiales_teoria,
-                    asignatura_id=asignatura_id, slug=slug,
-                    subtemas_confirmados=subtemas_confirmados,
-                ):
-                    st.rerun()
 
     # ── Output generado ────────────────────────────────────────────────────────
     if st.session_state.get("org_ultimo_output"):
