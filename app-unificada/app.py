@@ -2212,6 +2212,36 @@ def _render_asignatura_activa_banner(asignatura: str) -> None:
     )
 
 
+def _render_valoracion_profesor(
+    asignatura_id: int,
+    agente: str,
+    *,
+    etiqueta: str,
+    key_prefix: str,
+) -> None:
+    """Control reutilizable de valoración 1-10 (persistente por asignatura y agente)."""
+    valor_guardada = db.get_valoracion_profesor(asignatura_id, agente, RUTA_DB)
+    st.subheader("Valoración del resultado")
+    if valor_guardada is not None:
+        st.caption(f"Valoración guardada: **{valor_guardada}/10**")
+    puntuacion = st.select_slider(
+        etiqueta,
+        options=list(range(1, 11)),
+        value=valor_guardada if valor_guardada is not None else 7,
+        key=f"{key_prefix}_slider_{asignatura_id}",
+    )
+    if st.button(
+        "Guardar valoración",
+        key=f"{key_prefix}_btn_{asignatura_id}",
+        type="secondary",
+    ):
+        try:
+            db.upsert_valoracion_profesor(asignatura_id, agente, puntuacion, RUTA_DB)
+            st.success(f"Valoración guardada: {puntuacion}/10")
+        except (ValueError, Exception) as e:
+            st.error(f"No se pudo guardar la valoración: {e}")
+
+
 def _vista_organizador() -> None:
     if _ORG_ERROR:
         st.error(f"No se pudo cargar el Agente Organizador: {_ORG_ERROR}")
@@ -2382,6 +2412,13 @@ def _vista_organizador() -> None:
                 "Contenido. La edición de bloques/subbloques y el refinamiento "
                 "por prompt quedan deshabilitados. Descarga el resultado o sube nuevos "
                 "archivos para empezar otra organización."
+            )
+            st.divider()
+            _render_valoracion_profesor(
+                asignatura_id,
+                "organizador",
+                etiqueta="¿Cómo valoras la organización generada? (1 = muy deficiente, 10 = excelente)",
+                key_prefix="org_valoracion",
             )
         else:
             if st.button(
