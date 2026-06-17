@@ -585,7 +585,7 @@ def _org_extraer_y_detectar(guia_docente, materiales_teoria) -> bool:
         try:
             st.write("📄 Extrayendo texto de la guía docente...")
             texto_guia = _org_parser.extraer_texto(guia_docente.getvalue(), guia_docente.name)
-            candidatos_guia = _org_parser.extraer_subtemas_candidatos(texto_guia)
+            candidatos_guia = _org_parser.extraer_subtemas_guia(texto_guia)
 
             st.write("📚 Extrayendo y clasificando materiales de teoría...")
             textos_teoria_raw: list[str] = []

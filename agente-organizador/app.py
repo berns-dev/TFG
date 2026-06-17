@@ -16,7 +16,7 @@ from parser import (
     contar_bloques_output,
     extraer_candidatos_con_evidencia,
     extraer_horas_docencia,
-    extraer_subtemas_candidatos,
+    extraer_subtemas_guia,
     extraer_texto,
     hay_discrepancia,
     normalizar_horas_output,
@@ -97,7 +97,7 @@ def extraer_y_detectar(guia_docente, materiales_teoria) -> bool:
         try:
             st.write("📄 Extrayendo texto de la guía docente...")
             texto_guia = extraer_texto(guia_docente.getvalue(), guia_docente.name)
-            candidatos_guia = extraer_subtemas_candidatos(texto_guia)
+            candidatos_guia = extraer_subtemas_guia(texto_guia)
 
             st.write("📚 Extrayendo y clasificando materiales de teoría...")
             textos_teoria_raw: list[str] = []
