@@ -119,6 +119,14 @@ TFG/
 ├── CLAUDE.md                     ← este archivo — contexto global para Claude Code
 ├── shared/
 │   └── ui_hero.py                ← render_hero() compartido entre los tres agentes
+├── database/
+│   ├── CLAUDE.md                 ← esquema SQLite, migraciones, APIs de progreso
+│   ├── db.py                     ← motor SQLite (esquema v2, init, progreso, CRUD)
+│   └── validar_esquema.py        ← script de validación del esquema (no producto)
+├── app-unificada/
+│   └── app.py                    ← app Streamlit unificada (todos los agentes + BD)
+├── data/
+│   └── tfg.db                    ← base de datos SQLite (generado, no versionado)
 ├── agente-organizador/
 │   ├── CLAUDE.md                 ← contexto específico del Agente Organizador
 │   ├── README.md
@@ -171,10 +179,27 @@ TFG/
 
 ---
 
+## Base de datos compartida
+
+La app unificada (`app-unificada/`) usa SQLite en `data/tfg.db`. El esquema vive en
+`database/db.py`. Para el detalle completo del esquema y las APIs de progreso, ver
+**`database/CLAUDE.md`**.
+
+Resumen de las funciones de progreso (nunca almacenado, siempre calculado):
+- `db.get_progreso_bloque(tema_id)` → `{total, aprobados, porcentaje}`
+- `db.get_progreso_asignatura(asignatura_id)` → `{total, aprobados, porcentaje}`
+- `db.get_desglose_progreso_asignatura(asignatura_id)` → lista por bloque
+
+El progreso se calcula sobre `estado = 'aprobado'` en `contenido_subbloque`.
+El contenido interactivo (`tiene_interactivo`) **no entra** en el cálculo de progreso.
+
+---
+
 ## Estado del proyecto (2026-06-17)
 
-| Agente | Estado | Validado con |
-|--------|--------|-------------|
+| Agente/módulo | Estado | Validado con |
+|---------------|--------|-------------|
 | Organizador | Funcional — subbloques anclados a evidencia estructural; edición manual bloques/subbloques; fase cerrado | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
-| Contenido | Funcional — granularidad de subbloque: segmentación por evidencia, estados pendiente/generado/editado/aprobado, cálculo de progreso; pipeline clásico preservado como fallback | Temas 1 y 2 de Tecnología de Materiales (PDF); lógica de subbloques validada programáticamente (53/53 checks) |
+| Contenido | Funcional — granularidad de subbloque: segmentación por evidencia, estados pendiente/generado/editado/aprobado, cálculo de progreso; pipeline clásico preservado como fallback | Temas 1 y 2 de Tecnología de Materiales (PDF); lógica de subbloques validada programáticamente |
 | Presentación | Funcional — 3 outputs (PDF institucional UO, HTML interactivo, HTML presentación completa); LaTeX con matplotlib mathtext | Tema 1 (Tec. Materiales), TEMA7 (Elementos de Máquinas) |
+| Base de datos | Esquema v2 — jerarquía asignatura→bloque→subbloque + estado del ciclo de vida + progreso en tiempo real | Tecnología de Materiales (script `database/validar_esquema.py`, 8 validaciones) |
