@@ -46,7 +46,8 @@ def construir_prompt(
             lista_sub = subtemas_por_material[indice - 1]
             if lista_sub:
                 lineas_sub = "\n".join(
-                    f"- {s['nombre']} [{s['origen']}]" for s in lista_sub
+                    f"- {s['nombre']} [Evidencia: {s.get('evidencia', '—')}] [{s['origen']}]"
+                    for s in lista_sub
                 )
                 bloque += (
                     f"\n\nSUBTEMAS CONFIRMADOS PARA ESTA TEORÍA (lista cerrada):\n"
@@ -174,38 +175,46 @@ def construir_prompt(
     if subtemas_por_material:
         instruccion_subtemas = (
             "2) Usa ÚNICAMENTE los subtemas listados bajo «SUBTEMAS CONFIRMADOS» en cada "
-            "material de teoría. No añadas, elimines ni renombres ninguno. Si un material "
-            "no tiene subtemas confirmados, indica [MATERIAL SIN SUBTEMAS] en la tabla."
+            "material de teoría. No añadas, elimines ni renombres ninguno.\n"
+            "   - Si la lista SUBTEMAS CONFIRMADOS de un material está VACÍA, el modelo NO "
+            "puede inferir subtemas libremente: crea UN único subtema con el nombre completo "
+            "del bloque, asígnale todas las horas del bloque, escribe "
+            "\"Sin señal verificable\" en la columna Evidencia y \"Fallback\" en Origen."
         )
         formato_tabla_subtemas = (
-            "  | Subtema | Horas | Origen |\n"
-            "  |---------|-------|--------|\n"
-            "  | {subtema} | {horas} | {origen} |"
+            "  | Subtema | Horas | Evidencia | Origen |\n"
+            "  |---------|-------|----------|--------|\n"
+            "  | {subtema} | {horas} | {evidencia} | {origen} |"
         )
         instruccion_columna_subtemas = (
-            "- La columna \"Origen\" copia exactamente el valor [Detectado] o [Manual] que "
-            "aparece junto a cada subtema en la lista «SUBTEMAS CONFIRMADOS» del material. "
-            "No modifiques estos valores.\n"
+            "- La columna \"Evidencia\" copia el texto entre corchetes [Evidencia: ...] de "
+            "la lista «SUBTEMAS CONFIRMADOS» para ese subtema. Si el subtema fue añadido "
+            "manualmente por el profesor (origen Manual), escribe \"Manual (profesor)\". "
+            "Si no hay señal verificable (fallback), escribe \"Sin señal verificable\".\n"
+            "- La columna \"Origen\" copia exactamente el valor [Detectado] o [Manual] de "
+            "la lista. Para el caso de fallback usa \"Fallback\". No modifiques estos valores.\n"
             "- Estas reglas aplican igual en la primera generación y en todos los refinamientos."
         )
     else:
         instruccion_subtemas = (
             "2) Para cada bloque temático, identifica subtemas que aparezcan EXPLÍCITAMENTE "
-            "como títulos de sección o apartados en los materiales del profesor."
+            "como títulos de sección, apartados numerados o títulos de diapositiva en los "
+            "materiales del profesor. Si para algún bloque no hay señales estructurales "
+            "claras y verificables, crea UN único subtema con el nombre del bloque completo "
+            "y escribe \"Sin señal verificable\" en la columna Evidencia."
         )
         formato_tabla_subtemas = (
-            "  | Subtema | Horas | Justificación |\n"
-            "  |---------|-------|---------------|\n"
-            "  | {subtema} | {horas} | {una frase corta} |"
+            "  | Subtema | Horas | Evidencia |\n"
+            "  |---------|-------|----------|\n"
+            "  | {subtema} | {horas} | {referencia estructural o 'Sin señal verificable'} |"
         )
         instruccion_columna_subtemas = (
-            "- La columna \"Justificación\" debe ser siempre una frase corta descriptiva "
-            "del contenido del subtema, nunca un párrafo.\n"
-            "- La \"Justificación\" nunca puede ser un conteo de páginas/slides ni una "
-            "referencia al material fuente (por ejemplo: \"2 páginas en teoría\", \"3 slides\", "
-            "\"según el PDF\").\n"
-            "- Estas reglas de formato, incluida la regla de \"Justificación\", aplican igual "
-            "en la primera generación y en todas las regeneraciones con feedback del profesor."
+            "- La columna \"Evidencia\" debe ser la referencia estructural verificable que "
+            "justifica el subtema: número de sección (e.g. 'Sección 3.2'), título de "
+            "diapositiva (e.g. 'Slide 5'), o 'Sin señal verificable' si no hay señal clara.\n"
+            "- NUNCA uses como evidencia conteos de páginas/slides ni inferencias temáticas "
+            "propias (p. ej. 'este subtema cubre los fundamentos').\n"
+            "- Estas reglas aplican igual en la primera generación y en todos los refinamientos."
         )
 
     prompt = f"""
@@ -316,12 +325,13 @@ El profesor solicita el siguiente ajuste adicional:
 "{ultimo_feedback}"
 
 INSTRUCCIONES — APLICA ÚNICAMENTE EL CAMBIO SOLICITADO:
-1. No modifiques ningún bloque, subtema, nombre ni justificación que el profesor
+1. No modifiques ningún bloque, subtema, nombre ni valor de columna que el profesor
    no haya mencionado explícitamente en el ajuste.{restriccion_horas}
-2. Devuelve el documento completo con el mismo formato Markdown.
+2. Devuelve el documento completo conservando el formato Markdown exacto del original
+   (mismas columnas, mismos encabezados, mismo orden de bloques).
 3. No añadas texto adicional fuera de la plantilla existente.
 4. Todos los valores numéricos de horas usan punto decimal (.) nunca coma (,).
-5. La columna "Justificación" sigue siendo siempre una frase corta descriptiva,
-   nunca un conteo de páginas ni una referencia al material fuente.""".strip()
+5. Preserva los valores de las columnas Evidencia y Origen tal como están.
+   No inventes ni cambies referencias estructurales.""".strip()
 
     return prompt
