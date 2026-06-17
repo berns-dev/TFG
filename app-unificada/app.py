@@ -1817,25 +1817,25 @@ def _vista_presentacion() -> None:
             del st.session_state[k]
         st.session_state["prs_asignatura"] = asignatura
 
-    # CSS para chips (radio horizontal con estilo pill)
-    st.markdown("""
+    # CSS para chips (radio horizontal con estilo pill), acotado al área principal
+    st.markdown(f"""
     <style>
-    div[data-testid="stRadio"] > div[role="radiogroup"] {
+    section[data-testid="stAppViewContainer"] div[data-testid="stRadio"] > div[role="radiogroup"] {{
         flex-wrap: wrap; gap: 6px;
-    }
-    div[data-testid="stRadio"] label {
+    }}
+    section[data-testid="stAppViewContainer"] div[data-testid="stRadio"] label {{
         background: var(--secondary-background-color);
         border: 1px solid rgba(128,128,128,0.25);
         border-radius: 20px !important;
         padding: 4px 14px !important;
         font-size: 13px !important;
         cursor: pointer;
-    }
-    div[data-testid="stRadio"] label:has(input:checked) {
-        background: #185FA5 !important;
+    }}
+    section[data-testid="stAppViewContainer"] div[data-testid="stRadio"] label:has(input:checked) {{
+        background: {ACENTO} !important;
         color: #ffffff !important;
-        border-color: #185FA5 !important;
-    }
+        border-color: {ACENTO} !important;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -1911,9 +1911,9 @@ def _vista_presentacion() -> None:
         # Badge de estado junto al título
         if elegido:
             badge = (
-                '<span style="font-size:11px;background:#E6F1FB;color:#185FA5;'
-                'border-radius:20px;padding:2px 10px;font-weight:500;margin-left:8px;">'
-                'elegido por el profesor</span>'
+                f'<span style="font-size:11px;background:#E6F1FB;color:{ACENTO};'
+                f'border-radius:20px;padding:2px 10px;font-weight:500;margin-left:8px;">'
+                f'elegido por el profesor</span>'
             )
         else:
             badge = (
