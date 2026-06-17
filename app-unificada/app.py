@@ -488,6 +488,7 @@ _CABECERAS_TABLA = {
     "subtema", "topic", "horas", "hours",
     "justificación", "justificacion", "justification",
     "origen", "origin",
+    "evidencia", "evidence",
 }
 
 # Contrato de formato del Agente Organizador (ver CLAUDE.md del monorepo):
@@ -496,15 +497,27 @@ _HDR_BLOQUE_RE = re.compile(
     r"^##\s+Bloque\s+(\d+)\s+[—\-]+\s+(.+?)\s*[·•]\s*([\d.,]+)h",
     re.MULTILINE,
 )
-_FILA_TABLA_RE = re.compile(r"^\|\s*(.+?)\s*\|\s*([\d.,]+)h?\s*\|", re.MULTILINE)
+# Captura todas las celdas de una fila de tabla Markdown (separadas por '|').
+_FILA_TABLA_COMPLETA_RE = re.compile(r"^\|(.+)\|$", re.MULTILINE)
+
+
+def _parsear_celdas(linea: str) -> list[str]:
+    """Extrae celdas de una línea de tabla Markdown como lista de strings limpios."""
+    partes = linea.strip().strip("|").split("|")
+    return [p.strip() for p in partes]
 
 
 def parsear_bloques_organizador(markdown: str) -> list[dict]:
     """Extrae la lista de bloques y subtemas del output del Agente Organizador.
 
+    Compatible con los formatos de tabla del Organizador:
+      - 3 columnas: | Subtema | Horas | Origen |
+      - 4 columnas: | Subtema | Horas | Evidencia | Origen |
+      - antiguo 3 cols: | Subtema | Horas | Justificación |
+
     Returns:
         list[dict] con claves: numero (int), nombre (str), horas (float),
-        subtemas (list[dict{nombre, orden}])
+        subtemas (list[dict{nombre, horas, orden, evidencia, origen, es_fallback}])
     """
     bloques: list[dict] = []
     matches = list(_HDR_BLOQUE_RE.finditer(markdown))
@@ -512,23 +525,68 @@ def parsear_bloques_organizador(markdown: str) -> list[dict]:
     for i, m in enumerate(matches):
         numero = int(m.group(1))
         nombre = m.group(2).strip()
-        horas = float(m.group(3).replace(",", "."))
+        horas_bloque = float(m.group(3).replace(",", "."))
 
         inicio = m.end()
         fin = matches[i + 1].start() if i + 1 < len(matches) else len(markdown)
         seccion = markdown[inicio:fin]
 
         subtemas: list[dict] = []
-        for fm in _FILA_TABLA_RE.finditer(seccion):
-            col1 = fm.group(1).strip()
-            col2 = fm.group(2).strip()
+        for fm in _FILA_TABLA_COMPLETA_RE.finditer(seccion):
+            celdas = _parsear_celdas(fm.group(0))
+            if len(celdas) < 2:
+                continue
+            col1 = celdas[0]
+            col2 = celdas[1] if len(celdas) > 1 else ""
+            # Saltar cabeceras, separadores y filas vacías.
             if col1.lower() in _CABECERAS_TABLA:
                 continue
             if re.match(r"^-+$", col1) or re.match(r"^-+$", col2):
                 continue
-            subtemas.append({"nombre": col1, "orden": len(subtemas) + 1})
+            if not col1:
+                continue
 
-        bloques.append({"numero": numero, "nombre": nombre, "horas": horas, "subtemas": subtemas})
+            # Extraer horas del subtema (col2 puede tener "h" al final).
+            horas_sub_raw = re.sub(r"[^\d.,]", "", col2)
+            try:
+                horas_sub = float(horas_sub_raw.replace(",", ".")) if horas_sub_raw else 0.0
+            except ValueError:
+                horas_sub = 0.0
+
+            # Columnas opcionales: Evidencia (col3) y Origen (col4 ó col3).
+            if len(celdas) >= 4:
+                evidencia = celdas[2]
+                origen = celdas[3]
+            elif len(celdas) == 3:
+                # Formato antiguo o 3-cols: tercera columna es Origen/Justificación.
+                evidencia = ""
+                origen = celdas[2]
+            else:
+                evidencia = ""
+                origen = "Detectado"
+
+            # Fallback: evidencia vacía o marcador explícito.
+            _ev_norm = evidencia.strip().lower()
+            es_fallback = int(
+                _ev_norm in {"sin señal verificable", "sin senal verificable", "fallback", ""}
+                and origen.strip().lower() in {"fallback", "sin señal", "sin senal", ""}
+            )
+
+            subtemas.append({
+                "nombre": col1,
+                "horas": horas_sub,
+                "orden": len(subtemas) + 1,
+                "evidencia": evidencia,
+                "origen": origen,
+                "es_fallback": es_fallback,
+            })
+
+        bloques.append({
+            "numero": numero,
+            "nombre": nombre,
+            "horas": horas_bloque,
+            "subtemas": subtemas,
+        })
 
     return bloques
 
@@ -657,7 +715,11 @@ def _db_guardar_organizador_output(
 
 
 def _db_confirmar_organizacion(asignatura_id: int, output_id: int, bloques: list[dict]) -> None:
-    """Borra temas/subbloques anteriores e inserta los de la versión confirmada."""
+    """Borra temas/subbloques anteriores e inserta los de la versión confirmada.
+
+    Cada subtema puede incluir horas, evidencia, origen y es_fallback cuando
+    procede del nuevo formato del Agente Organizador (v2+).
+    """
     conn = db.get_connection(RUTA_DB)
     try:
         temas_existentes = conn.execute(
@@ -681,8 +743,18 @@ def _db_confirmar_organizacion(asignatura_id: int, output_id: int, bloques: list
             tema_id = cur.lastrowid
             for subtema in bloque["subtemas"]:
                 conn.execute(
-                    "INSERT INTO subbloques (tema_id, nombre, orden) VALUES (?, ?, ?)",
-                    (tema_id, subtema["nombre"], subtema["orden"]),
+                    """INSERT INTO subbloques
+                       (tema_id, nombre, orden, horas, evidencia, origen, es_fallback)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        tema_id,
+                        subtema["nombre"],
+                        subtema.get("orden", 0),
+                        subtema.get("horas", 0.0),
+                        subtema.get("evidencia", ""),
+                        subtema.get("origen", "Detectado"),
+                        subtema.get("es_fallback", 0),
+                    ),
                 )
 
         conn.commit()
