@@ -1,15 +1,15 @@
 # Agente Organizador — Estado del proyecto
 
 **Monorepo:** `berns-dev/TFG`
-**Última actualización:** 2026-06-07
+**Última actualización:** 2026-06-17
 
 ---
 
 ## Propósito
 
-Extrae temas, subtemas y distribución horaria de una asignatura a partir de la guía docente y los materiales de teoría. Produce un Markdown con la distribución temática y las horas asignadas por subtema.
+Extrae temas, subbloques y distribución horaria de una asignatura a partir de la guía docente y los materiales de teoría. Produce un Markdown con la distribución temática y las horas asignadas por subbloque.
 
-**Principio rector:** Extrae y estructura. No inventa. Si algo no está en el material del profesor, no aparece en el output.
+**Principio rector:** Extrae y estructura. No inventa. Si algo no está en el material del profesor, no aparece en el output. Cada subbloque propuesto debe poder justificarse señalando una referencia concreta del documento fuente.
 
 ---
 
@@ -19,8 +19,6 @@ Extrae temas, subtemas y distribución horaria de una asignatura a partir de la 
 - Oleohidráulica y Neumática
 - Elementos de Máquinas
 - Tecnología de Materiales
-
-**Limitación documentada:** Los PDFs exportados desde PowerPoint contienen texto extraíble, pero sin orden de lectura coherente. PowerPoint deposita los cuadros de texto de cada diapositiva en el orden en que se crearon durante la edición, no en el orden visual. pdfplumber los extrae en ese orden interno y devuelve un flujo mezclado donde el agente no puede distinguir título de cuerpo. La guía docente no tiene este problema porque es un documento de flujo lineal. No hay aviso implementado para este caso en el Agente Organizador.
 
 ---
 
@@ -36,9 +34,9 @@ Extrae temas, subtemas y distribución horaria de una asignatura a partir de la 
 ## Arquitectura de archivos
 
 ```
-app.py        — UI Streamlit + lógica de sesión + validación de cardinalidad
+app.py        — UI Streamlit + lógica de sesión + validación + edición manual
 agente.py     — cliente Anthropic, ejecutar_agente()
-parser.py     — extraer_texto(), clasificar_archivo()
+parser.py     — extraer_texto(), clasificar_archivo(), señales estructurales
 prompts.py    — construir_prompt(), construir_prompt_refinamiento()
 ```
 
@@ -48,10 +46,77 @@ prompts.py    — construir_prompt(), construir_prompt_refinamiento()
 
 1. **Extracción** — `extraer_texto()` sobre guía docente y materiales de teoría
 2. **Clasificación** — `clasificar_archivo()` separa "teoría" de "contexto/outline"
-3. **Detección de horas** — `extraer_horas_docencia()` en `app.py`: extrae TE/PA/PL de la guía docente usando heurísticas deterministas (tablas MODALIDADES primero, texto libre como fallback)
-4. **Generación** — `construir_prompt()` → `ejecutar_agente()` → Sonnet
-5. **Validación de cardinalidad** — `contar_bloques_output()` compara `## Bloque N` en el output con `len(textos_teoria)`; si no coinciden, `st.warning` visible
-6. **Refinamiento** — loop hasta 5 iteraciones; usa `construir_prompt_refinamiento()` (camino rápido, sin re-extraer documentos)
+3. **Detección de señales estructurales** — `extraer_candidatos_con_evidencia()` en `parser.py`:
+   - Prioridad 1: secciones numeradas en el texto (`3.2. Título`) → evidencia = "Sección 3.2"
+   - Prioridad 2 (solo PPTX): títulos de diapositiva → evidencia = "Slide N"
+   - Fallback: si ninguna fuente ofrece señal verificable, retorna `[]`; el bloque se trata como un único subbloque
+4. **Editor de subbloques** — interfaz de revisión (fase `"editar"`): el profesor ve las señales detectadas con su evidencia, edita la lista en un textarea, y confirma
+5. **Detección de horas** — `extraer_horas_docencia()` en `app.py`
+6. **Generación** — `construir_prompt()` → `ejecutar_agente()` → Sonnet
+7. **Validación de cardinalidad** — `contar_bloques_output()` compara `## Bloque N` con `len(textos_teoria)`
+8. **Refinamiento** — loop hasta 5 iteraciones; `construir_prompt_refinamiento()` (camino rápido)
+
+---
+
+## Subbloques con evidencia estructural (Objetivo 1)
+
+### Prioridad de fuentes (estricta, no negociable)
+
+1. **Guía docente** — si ya enumera subtemas/conceptos dentro de un bloque, se usa esa enumeración literal.
+2. **Materiales de teoría — secciones numeradas** — encabezados con patrón `\d+(\.\d+)*\. Título` en el texto extraído. Evidencia: `"Sección X.X"`.
+3. **Materiales de teoría — títulos de diapositiva PPTX** — placeholder `idx=0` o primera shape corta (<100 chars, sin saltos). Evidencia: `"Slide N"`. Solo se usa si no hay secciones numeradas.
+4. **Fallback obligatorio** — si ninguna fuente ofrece señal suficientemente verificable, el bloque no se subdivide. Se crea un único subbloque igual al bloque completo y se marca `Evidencia = "Sin señal verificable"`. La interfaz muestra un aviso visible al profesor.
+
+### Restricción de generación automática
+
+El modelo nunca debe agrupar contenido por similitud temática libre. Cada subbloque propuesto debe justificarse señalando una evidencia concreta. Esto se aplica tanto en la generación inicial (vía `instruccion_subtemas` en `prompts.py`) como en los refinamientos.
+
+### Flujo de evidencia
+
+```
+extraer_candidatos_con_evidencia()
+  → [{nombre, evidencia, fuente}]  ← parser.py
+  → editor_data[i]["candidatos_con_evidencia"]  ← app.py
+  → mostrado en interfaz como referencia (read-only)
+  → al confirmar: subtemas_confirmados[i] = [{nombre, origen, evidencia}]
+  → construir_prompt(): "SUBTEMAS CONFIRMADOS: - nombre [Evidencia: X] [origen]"
+  → LLM: columna Evidencia en la tabla de subbloques
+  → output Markdown: | Subtema | Horas | Evidencia | Origen |
+```
+
+---
+
+## Edición manual de la organización (Objetivo 2)
+
+### Controles disponibles (solo en fase `"resultado"`)
+
+- **Añadir subbloque** — texto + horas, dentro de un bloque existente. Origen = "Manual".
+- **Eliminar subbloque** — botón 🗑 por subbloque.
+- **Añadir bloque** — nombre; se añade con horas=0 y subbloques vacíos. Se numera como max+1.
+- **Eliminar bloque** — botón 🗑 elimina bloque + todos sus subbloques.
+
+La edición manual NO requiere verificación de señal estructural — refleja el criterio pedagógico del profesor. No aplica el principio de anclaje a evidencia del Objetivo 1.
+
+### Coexistencia con refinamiento por prompt
+
+Ambos mecanismos operan sobre el mismo estado:
+- Edición manual → actualiza `organizacion_bloques` → regenera `ultimo_output` con `regenerar_markdown_desde_bloques()`
+- Refinamiento por IA → recibe `ultimo_output` (post-edición si la hubo) → LLM genera nueva versión → `_validar_y_persistir()` → re-parsea a `organizacion_bloques`
+
+Los dos mecanismos coexisten sin pisarse. El estado es siempre consistente.
+
+---
+
+## Fases de la aplicación
+
+| Fase | Valor | Descripción |
+|------|-------|-------------|
+| Inicial | `None` | Sin archivos procesados |
+| Edición de subbloques | `"editar"` | Después de `extraer_y_detectar()`. Muestra editor de subbloques con señales detectadas. No hay output aún. |
+| Resultado | `"resultado"` | Después de `_validar_y_persistir()`. Muestra output + editor manual + refinamiento por IA + botón "Cerrar". |
+| Cerrado | `"cerrado"` | Después de "Dar organización por cerrada". Output congelado. Sin edición. Solo descarga. |
+
+**Restricción temporal de edición:** la edición (manual y por prompt) solo está disponible en fase `"resultado"`. En fase `"cerrado"` se muestran aviso informativo, output y descarga; los controles de edición no se renderizan.
 
 ---
 
@@ -65,6 +130,14 @@ Sonnet para toda la generación y refinamiento. El razonamiento curricular requi
 1. **Estrategia 1 (preferente):** detecta tabla(s) MODALIDADES por cabecera y lee la columna Horas. Elige la ventana con mayor completitud y mayor confianza en la fila PA.
 2. **Estrategia 2 (fallback):** búsqueda en texto libre, exige señales horarias explícitas para evitar confundir "sesiones" con horas.
 
+### Código determinista para señales estructurales
+`extraer_candidatos_con_evidencia()` en `parser.py`. Prioridad estricta de fuentes (no negociable). No llama al LLM. Si retorna `[]`, el bloque es un único subbloque — el modelo nunca infiere subbloques libres para bloques sin señal.
+
+### Parseo/serialización para edición manual
+- `parsear_bloques_desde_markdown(markdown)` → `[{numero, nombre, horas, subtemas}]`
+- `regenerar_markdown_desde_bloques(bloques, markdown_original)` → Markdown preservando cabecera y pie del original
+- Formato serializado: `| Subtema | Horas | Origen |` (3 columnas, Origen = "Manual"/"Detectado")
+
 ### Restricción de cardinalidad en el prompt (`prompts.py`)
 `instruccion_cardinalidad` tiene tres refuerzos desde la corrección del bug (28/05/2026):
 1. **Autoridad estructural:** la guía docente define la estructura (qué es un bloque, cuántos existen); los materiales de teoría son fuente de contenido, no de estructura.
@@ -77,53 +150,15 @@ Sonnet para toda la generación y refinamiento. El razonamiento curricular requi
 - Solo aplica el último ajuste de feedback
 - No re-extrae documentos ni re-detecta horas
 - Mantiene la restricción de suma de horas totales si `horas_totales` está disponible
-
-`generar_organizacion()` bifurca entre **camino completo** (primera generación: extrae, clasifica, construye prompt completo) y **camino rápido** (refinamiento: solo `construir_prompt_refinamiento()` + `ejecutar_agente()`).
-
-### Validación de cardinalidad post-generación (`app.py`)
-`contar_bloques_output()` cuenta `^## ` con regex. `_validar_y_persistir()` la llama siempre tras generar o refinar:
-- Si `n_generados != n_esperados` → `st.session_state["warning_cardinalidad"]` con recuento
-- El warning se muestra en el área principal antes del output, describiendo la causa probable y qué acción tomar (usar campo de feedback para indicar qué bloque debe reintegrarse)
-
----
-
-## Interfaz (estado actual)
-
-### Identidad visual compartida con Agente Contenido
-- **Tipografía:** Playfair Display (títulos, vía Google Fonts) + DM Sans (cuerpo)
-- **Acento:** `#185FA5` (fijo, identidad de marca)
-- **Fondos/textos:** variables CSS de Streamlit (`var(--background-color)`, `var(--secondary-background-color)`, `var(--text-color)`)
-- **Bordes:** `rgba(128,128,128,0.2)` (adaptativos)
-
-### Layout `layout="wide"`
-- **Sidebar:** branding (Suite de Agentes / Agente Organizador) + steps 1-2-3 + file uploaders + botón "Generar organización"
-- **Área principal:** hero `st.components.v1.html()` + expanders de validación + output + feedback loop
-
-### Hero
-`render_hero()` desde `shared/ui_hero.py`. Parámetros:
-- `agent_number="01"`, `title_before="Organización "`, `title_keyword="curricular"`
-- `steps=["Guía docente", "Materiales", "Propuesta"]`, `button_full_width=True`
-- **Compatibilidad dark/light:** JS `sync()` en el iframe lee la luminancia del fondo del padre cada 800ms; aplica `.dark`/`.light` en `:root`; `@media(prefers-color-scheme:dark)` como fallback.
-
-### Dark/light mode
-- Iframes: detección JS de luminancia del padre + CSS custom properties (`:root` / `:root.dark`)
-- `st.markdown` CSS: `var(--background-color)`, `var(--secondary-background-color)`, `rgba()` para bordes
-- Colores fijos preservados: `#185FA5` (acento), `#E6F1FB`/`#185FA5` (badges numerados)
+- Instruye al modelo a preservar las columnas Evidencia y Origen tal como están
 
 ---
 
 ## Bug documentado y corregido: cardinalidad de bloques
 
-**Bug (detectado 26/05/2026):** el agente generaba N+1 bloques cuando la guía docente listaba una subsección con horas propias (ej. "Fractura asistida por el medio ambiente" dentro del Tema 6 — Fatiga).
+**Bug (detectado 26/05/2026):** el agente generaba N+1 bloques cuando la guía docente listaba una subsección con horas propias.
 
-**Causa raíz:** el prompt no tenía restricción de cardinalidad explícita ni instrucción sobre qué constituye un bloque vs. un subtema.
-
-**Fix (28/05/2026):**
-- `instruccion_cardinalidad` reescrita con los tres refuerzos descritos arriba
-- `contar_bloques_output()` + `_validar_y_persistir()` añadidos en `app.py`
-- `st.warning` visible con recuento esperado/generado y guía de corrección
-
-**Lección para la memoria:** las restricciones de conteo no pueden inferirse del contexto — deben ser explícitas. La autoverificación en el prompt ("cuenta tus propios encabezados antes de responder") es más efectiva que solo enunciar la restricción.
+**Fix (28/05/2026):** `instruccion_cardinalidad` reescrita con tres refuerzos; `contar_bloques_output()` + `_validar_y_persistir()` añadidos; `st.warning` visible.
 
 ---
 
@@ -131,29 +166,44 @@ Sonnet para toda la generación y refinamiento. El razonamiento curricular requi
 
 Fuente de verdad: plantilla en `prompts.py` → `construir_prompt()`.
 
+**Con subbloques confirmados (flujo normal):**
 ```markdown
-# DISTRIBUCIÓN TEMÁTICA — {{NOMBRE_ASIGNATURA}}
+# DISTRIBUCIÓN TEMÁTICA — {NOMBRE_ASIGNATURA}
 
-**Horas lectivas disponibles:** {{TOTAL}}h ({{TE}}h TE + {{PA}}h PA) | **Prácticas de laboratorio:** {{PL}}h *(informativo)*
+**Horas lectivas disponibles:** {TOTAL}h ({TE}h TE + {PA}h PA) | **Prácticas de laboratorio:** {PL}h *(informativo)*
 
 ---
 
-## Bloque {{N}} — {{NOMBRE_BLOQUE}} · {{HORAS_BLOQUE}}h
+## Bloque {N} — {NOMBRE_BLOQUE} · {HORAS_BLOQUE}h
 
-| Subtema | Horas | Justificación |
-|---------|-------|---------------|
-| {{subtema}} | {{horas}} | {{una frase corta}} |
+| Subtema | Horas | Evidencia | Origen |
+|---------|-------|----------|--------|
+| {subtema} | {horas} | {Sección X.X / Slide N / Sin señal verificable} | {Detectado / Manual / Fallback} |
 
 *(repetir por bloque)*
 
 ---
 
-> 🔬 Prácticas de laboratorio: {{PL}}h (sesiones prácticas, no incluidas en la distribución temática)
+> 🔬 Prácticas de laboratorio: {PL}h (sesiones prácticas, no incluidas en la distribución temática)
 ```
 
-El Agente Contenido parsea bloques con `## Bloque N — … · Xh` (`parse_organization_md()` en `agente-contenido/app.py`).
+**Sin subbloques confirmados (libre):**
+La columna "Evidencia" contiene la referencia estructural detectada por el LLM (más susceptible a imprecisión; el flujo normal con confirmación es preferible).
 
-El nombre del archivo de descarga se extrae de la guía docente con regex (`NOMBRE ... CÓDIGO`) → `Propuesta_[AsignaturaNombre].md`.
+**Contrato con el Agente Contenido:** El Agente Contenido parsea bloques con `## Bloque N — … · Xh` (`parse_organization_md()` en `agente-contenido/app.py`). El cambio de columnas en la tabla de subbloques NO rompe este contrato (el Agente Contenido no parsea las filas de la tabla).
+
+---
+
+## Interfaz (estado actual)
+
+### Layout `layout="wide"`
+- **Sidebar:** branding + steps 1-2-3 + file uploaders + botón "Generar organización"
+- **Área principal:** hero + expanders de validación + editor de subbloques (fase "editar") + resultado con editor manual (fase "resultado") o vista congelada (fase "cerrado")
+
+### Identidad visual compartida
+- **Tipografía:** Playfair Display + DM Sans
+- **Acento:** `#185FA5`
+- **Fondos/textos:** variables CSS de Streamlit
 
 ---
 
@@ -164,5 +214,3 @@ MODEL: claude-sonnet-4-5
 # Haiku descartado para generación: el razonamiento de cardinalidad y la
 # distribución horaria requieren consistencia semántica. Sonnet es obligatorio.
 ```
-
-Ver `.cursorrules` para restricciones adicionales de desarrollo.

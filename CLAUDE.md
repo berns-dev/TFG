@@ -55,6 +55,10 @@ Este es el contrato que el Agente Contenido lee con `parse_organization_md()` (p
 `^##\s+Bloque\s+\d+\s+—\s+(.+?)\s*·\s*([\d,.]+)h`). Un archivo que no siga este
 formato exacto no será parseado correctamente por el Agente Contenido.
 
+**Nota:** la tabla de subbloques dentro de cada bloque usa columnas `| Subtema | Horas | Evidencia | Origen |`
+(o `| Subtema | Horas | Origen |` tras edición manual). El Agente Contenido NO parsea
+estas filas, por lo que el cambio de columnas no rompe el contrato.
+
 ---
 
 ## Workflow entre agentes
@@ -160,10 +164,10 @@ TFG/
 
 ---
 
-## Estado del proyecto (2026-06-09)
+## Estado del proyecto (2026-06-17)
 
 | Agente | Estado | Validado con |
 |--------|--------|-------------|
-| Organizador | Funcional | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
+| Organizador | Funcional — subbloques anclados a evidencia estructural; edición manual bloques/subbloques; fase cerrado | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
 | Contenido | Funcional — validado con PDF y PPTX | Temas 1 y 2 de Tecnología de Materiales (PDF) |
 | Presentación | Funcional — 3 outputs (PDF institucional UO, HTML interactivo, HTML presentación completa); LaTeX con matplotlib mathtext | Tema 1 (Tec. Materiales), TEMA7 (Elementos de Máquinas) |
