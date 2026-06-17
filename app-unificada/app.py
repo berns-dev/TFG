@@ -2560,11 +2560,12 @@ def _vista_organizador() -> None:
 def _db_resumen_metricas(asignatura_id: int) -> dict:
     """Consulta las métricas agregadas de la asignatura para la vista Resumen.
 
+    - progreso: {total, aprobados, porcentaje} — calculado en tiempo real.
     - fidelidad_media: AVG de los scores de fidelidad guardados (validaciones
       tipo 'fidelidad_baja'); son los únicos scores que se persisten.
     - n_outputs: organizador_outputs + presentacion_outputs.
     - n_avisos: todas las validaciones ligadas a ejecuciones de la asignatura.
-    - ultima_ejecucion: fecha de inicio de la ejecución más reciente (cualquier agente).
+    - ultima_ejecucion: fecha de inicio de la ejecución más reciente.
     """
     conn = db.get_connection(RUTA_DB)
     try:
@@ -2660,6 +2661,22 @@ def _vista_resumen() -> None:
         ultima_txt = "—"
         _relativo = None
 
+    # ── Progreso global de la asignatura ──────────────────────────────────────
+    prog = db.get_progreso_asignatura(asignatura_id, RUTA_DB)
+    _pct = prog["porcentaje"]
+    if prog["total"] > 0:
+        st.progress(
+            _pct / 100,
+            text=(
+                f"Progreso de contenido: **{prog['aprobados']}/{prog['total']}** "
+                f"sub-bloques aprobados ({_pct}%)"
+            ),
+        )
+    else:
+        st.info("Confirma la organización en el Agente Organizador para ver el progreso.")
+
+    st.divider()
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
         "Fidelidad media",
@@ -2683,6 +2700,19 @@ def _vista_resumen() -> None:
     c4.metric("Última ejecución", ultima_txt)
     if _relativo:
         c4.caption(_relativo)
+
+    # ── Progreso desglosado por bloque ────────────────────────────────────────
+    desglose = db.get_desglose_progreso_asignatura(asignatura_id, RUTA_DB)
+    if desglose:
+        st.divider()
+        st.markdown("**Progreso por bloque temático**")
+        for bloque in desglose:
+            _bp = bloque["porcentaje"]
+            _label = (
+                f"{bloque['nombre']} — {bloque['aprobados']}/{bloque['total_sub']} "
+                f"sub-bloques ({_bp}%)"
+            )
+            st.progress(_bp / 100, text=_label)
 
     st.divider()
 
