@@ -177,418 +177,15 @@ except Exception as _pe:
 
 
 # =============================================================================
-# Funciones puras copiadas de agente-organizador/app.py
+# Lógica pura del Organizador — importada desde agente-organizador/parser.py
 #
-# No se importa app.py del Organizador directamente porque ejecutaría
-# st.set_page_config() al nivel de módulo, lo que rompería la app unificada.
-# Estas cuatro funciones son puras (solo re + unicodedata) y no cambian.
+# Estas funciones (extraer_horas_docencia, normalizar_horas_output,
+# contar_bloques_output, construir_nombre_descarga y parsear_bloques_organizador)
+# vivían aquí como copias literales de agente-organizador/app.py. Ahora son la
+# fuente de verdad única en el módulo `parser` del Organizador, ya importable
+# porque no arrastra Streamlit. Se acceden vía `_org_parser.<funcion>` en la
+# lógica de generación y al confirmar la organización; ya no se duplican.
 # =============================================================================
-
-def _extraer_horas_docencia(texto_guia: str) -> dict[str, int]:
-    """Extraído literalmente de agente-organizador/app.py (líneas 26-249)."""
-
-    def norm(texto: str) -> str:
-        base = unicodedata.normalize("NFKD", texto or "")
-        base = base.encode("ascii", "ignore").decode("ascii").lower()
-        return re.sub(r"\s+", " ", base).strip()
-
-    def parsear_numero(token: str) -> int | None:
-        try:
-            valor = float(token.replace(",", "."))
-            if valor < 0:
-                return None
-            return int(round(valor))
-        except ValueError:
-            return None
-
-    def categoria_fila_modalidad(linea_norm: str) -> str | None:
-        tiene_practica = ("practic" in linea_norm) or bool(re.search(r"\bpract\b", linea_norm))
-        tiene_aula = "aula" in linea_norm
-        tiene_seminario = "seminar" in linea_norm
-        tiene_taller = "taller" in linea_norm
-        tiene_laboratorio = "laborator" in linea_norm or re.search(r"\blab\b", linea_norm) is not None
-        tiene_campo = "campo" in linea_norm
-        tiene_informatica = "informatica" in linea_norm
-        tiene_idiomas = "idioma" in linea_norm
-        tiene_teoria = ("expositiv" in linea_norm) or ("teoric" in linea_norm) or ("magistral" in linea_norm)
-        if tiene_laboratorio or (tiene_practica and (tiene_campo or tiene_informatica or tiene_idiomas)):
-            return "laboratorio"
-        if tiene_practica and (tiene_aula or tiene_seminario or tiene_taller):
-            return "aula"
-        if tiene_teoria and not tiene_practica:
-            return "teoria"
-        return None
-
-    def fuerza_fila_pa(linea_norm: str) -> int:
-        if linea_norm is None:
-            return 0
-        tiene_practica = ("practic" in linea_norm) or bool(re.search(r"\bpract\b", linea_norm))
-        if not tiene_practica:
-            return 0
-        if "laborator" in linea_norm or re.search(r"\blab\b", linea_norm) is not None:
-            return 0
-        tiene_aula = "aula" in linea_norm
-        tiene_seminario = "seminar" in linea_norm
-        tiene_taller = "taller" in linea_norm
-        tiene_informatica = "informatica" in linea_norm
-        tiene_idiomas = "idioma" in linea_norm
-        tiene_campo = "campo" in linea_norm
-        tiene_laboratorio = "laborator" in linea_norm or re.search(r"\blab\b", linea_norm) is not None
-        if tiene_laboratorio or (tiene_practica and (tiene_campo or tiene_informatica or tiene_idiomas)):
-            return 0
-        if tiene_aula and not (tiene_informatica or tiene_idiomas):
-            return 3
-        if tiene_seminario or tiene_taller:
-            return 2
-        return 0
-
-    def es_fila_desglose_temas(linea_norm: str) -> bool:
-        if re.match(r"^\d+\s*[\.\)]\s", linea_norm):
-            return True
-        if re.match(r"^tema\s*\d", linea_norm):
-            return True
-        if re.match(r"^unidad\s*\d", linea_norm):
-            return True
-        if re.match(r"^bloque\s*\d", linea_norm):
-            return True
-        return False
-
-    def es_contexto_horario(linea_norm: str) -> bool:
-        return any(
-            patron in linea_norm
-            for patron in ("hora", "horas", "h ", " h", "lectiv", "dedicacion", "carga docente", "credit")
-        )
-
-    def linea_parece_header_tabla(linea_norm: str) -> bool:
-        return (
-            ("modalidad" in linea_norm or "modalidades" in linea_norm)
-            and ("hora" in linea_norm or "horas" in linea_norm)
-        )
-
-    def extraer_hora_fila(linea_original: str) -> int | None:
-        nums = [parsear_numero(m.group(0)) for m in re.finditer(r"\d+(?:[.,]\d+)?", linea_original)]
-        nums = [n for n in nums if n is not None and 0 <= n <= 500]
-        if not nums:
-            return None
-        candidatos = [n for n in nums if 0 <= n <= 120]
-        return candidatos[0] if candidatos else nums[0]
-
-    def es_linea_numerica_de_tabla(linea_original: str, linea_norm: str) -> bool:
-        if "sesion" in linea_norm or "sesiones" in linea_norm:
-            return False
-        numeros = re.findall(r"\d+(?:[.,]\d+)?", linea_original)
-        if not numeros:
-            return False
-        letras = re.findall(r"[A-Za-zÁÉÍÓÚáéíóúÑñ]", linea_original)
-        return len(letras) <= 3
-
-    def extraer_primera_hora_fila_tabla(linea_original: str) -> int | None:
-        coincidencias = list(re.finditer(r"\d+(?:[.,]\d+)?", linea_original))
-        for m in coincidencias:
-            v = parsear_numero(m.group(0))
-            if v is None:
-                continue
-            if 1900 <= v <= 2100:
-                continue
-            if 0 <= v <= 120:
-                return v
-        return None
-
-    lineas_originales = [l.strip() for l in (texto_guia or "").splitlines() if l.strip()]
-    lineas_norm = [norm(l) for l in lineas_originales]
-
-    horas: dict[str, int] = {"teoria": 0, "aula": 0, "laboratorio": 0}
-
-    indices_headers = [i for i, ln in enumerate(lineas_norm) if linea_parece_header_tabla(ln)]
-    mejor_ventana = None
-
-    for idx_header in indices_headers:
-        local: dict[str, int] = {"teoria": 0, "aula": 0, "laboratorio": 0}
-        fuerza_pa_mejor = -1
-        ventana_fin = min(len(lineas_originales), idx_header + 45)
-
-        for i in range(idx_header + 1, ventana_fin):
-            ln = lineas_norm[i]
-            if es_fila_desglose_temas(ln):
-                continue
-            if "total" in ln and "modalidad" not in ln:
-                continue
-            categoria = categoria_fila_modalidad(ln)
-            if categoria is None:
-                continue
-            if categoria == "aula":
-                fuerza = fuerza_fila_pa(ln)
-                if fuerza < fuerza_pa_mejor:
-                    continue
-            if categoria != "aula" and local[categoria] != 0:
-                continue
-            valor = extraer_primera_hora_fila_tabla(lineas_originales[i])
-            if valor is None:
-                for salto in (1, 2):
-                    if i + salto >= ventana_fin:
-                        break
-                    ln_sig = lineas_norm[i + salto]
-                    if es_fila_desglose_temas(ln_sig):
-                        continue
-                    if categoria_fila_modalidad(ln_sig) is not None or linea_parece_header_tabla(ln_sig):
-                        break
-                    if not es_linea_numerica_de_tabla(lineas_originales[i + salto], ln_sig):
-                        continue
-                    valor = extraer_primera_hora_fila_tabla(lineas_originales[i + salto])
-                    if valor is not None:
-                        break
-            if valor is None:
-                continue
-            if categoria == "aula":
-                fuerza = fuerza_fila_pa(ln)
-                if fuerza < fuerza_pa_mejor:
-                    continue
-                local["aula"] = int(valor)
-                fuerza_pa_mejor = fuerza
-            else:
-                local[categoria] = int(valor)
-
-        completitud = sum(1 for v in local.values() if v > 0)
-        puntuacion = completitud * 100 + fuerza_pa_mejor
-        if mejor_ventana is None:
-            mejor_ventana = (puntuacion, idx_header, local)
-        elif puntuacion > mejor_ventana[0] or (
-            puntuacion == mejor_ventana[0] and idx_header > mejor_ventana[1]
-        ):
-            mejor_ventana = (puntuacion, idx_header, local)
-
-    if mejor_ventana is not None:
-        horas = mejor_ventana[2]
-
-    if 0 in horas.values():
-        for linea_original, linea_norm_item in zip(lineas_originales, lineas_norm):
-            categoria = categoria_fila_modalidad(linea_norm_item)
-            if categoria is None or horas[categoria] != 0:
-                continue
-            if not es_contexto_horario(linea_norm_item):
-                continue
-            valor = extraer_hora_fila(linea_original)
-            if valor is not None:
-                horas[categoria] = int(valor)
-
-    return {
-        "horas_teoria": horas["teoria"],
-        "horas_aula": horas["aula"],
-        "horas_laboratorio": horas["laboratorio"],
-    }
-
-
-def _normalizar_horas_output(markdown: str, total_horas: float) -> tuple[str, dict | None]:
-    """Extraído literalmente de agente-organizador/app.py (líneas 252-354)."""
-    if not total_horas or total_horas <= 0:
-        return markdown, None
-
-    FILA_RE = re.compile(r"^\| (.+?) \| ([\d]+(?:[.,]\d+)?)h? \| (.+?) \|\s*$")
-    HDR_RE = re.compile(r"^(## Bloque \d+ — .+? · )([\d.]+)(h.*)$")
-    _CABECERAS = {
-        "subtema", "topic", "horas", "hours",
-        "justificación", "justificacion", "justification",
-        "origen", "origin",
-    }
-
-    lineas = markdown.splitlines(keepends=True)
-    indices_filas: list[tuple[int, float]] = []
-    for i, linea in enumerate(lineas):
-        m = FILA_RE.match(linea.rstrip("\r\n"))
-        if not m:
-            continue
-        col1 = m.group(1).strip().lower()
-        col2_val = m.group(2).strip()
-        if col1 in _CABECERAS or re.match(r"^-+$", col1) or re.match(r"^-+$", col2_val):
-            continue
-        try:
-            indices_filas.append((i, float(col2_val.replace(",", "."))))
-        except ValueError:
-            pass
-
-    if not indices_filas:
-        return markdown, None
-
-    horas_originales = [h for _, h in indices_filas]
-    suma_actual = sum(horas_originales)
-
-    if abs(suma_actual - total_horas) < 0.01:
-        return markdown, None
-
-    diferencia = suma_actual - total_horas
-    factor = total_horas / suma_actual
-    horas_nuevas = [round(h * factor * 2) / 2 for h in horas_originales]
-    residuo = total_horas - sum(horas_nuevas)
-    if abs(residuo) >= 0.01:
-        idx_max = horas_nuevas.index(max(horas_nuevas))
-        horas_nuevas[idx_max] = round((horas_nuevas[idx_max] + residuo) * 2) / 2
-
-    def fmt(v: float) -> str:
-        return str(int(v)) if v == int(v) else f"{v:.1f}"
-
-    ajustes: dict[str, dict] = {}
-    nuevas_lineas = list(lineas)
-
-    for (idx_linea, h_antes), h_nueva in zip(indices_filas, horas_nuevas):
-        linea_orig = lineas[idx_linea]
-        m = FILA_RE.match(linea_orig.rstrip("\r\n"))
-        if not m:
-            continue
-        if abs(h_antes - h_nueva) >= 0.05:
-            nombre_sub = m.group(1).strip()
-            ajustes[nombre_sub] = {"antes": h_antes, "despues": h_nueva}
-        ending = linea_orig[len(linea_orig.rstrip("\r\n")):]
-        nuevas_lineas[idx_linea] = f"| {m.group(1)} | {fmt(h_nueva)}h | {m.group(3)} |{ending}"
-
-    indices_hdrs = [i for i, l in enumerate(nuevas_lineas) if HDR_RE.match(l.rstrip("\r\n"))]
-    indices_hdrs.append(len(nuevas_lineas))
-
-    for k in range(len(indices_hdrs) - 1):
-        inicio_bloque = indices_hdrs[k]
-        fin_bloque = indices_hdrs[k + 1]
-        horas_bloque = [
-            horas_nuevas[sub_idx]
-            for sub_idx, (idx_linea, _) in enumerate(indices_filas)
-            if inicio_bloque < idx_linea < fin_bloque
-        ]
-        if not horas_bloque:
-            continue
-        linea_hdr = nuevas_lineas[inicio_bloque]
-        m = HDR_RE.match(linea_hdr.rstrip("\r\n"))
-        if m:
-            ending = linea_hdr[len(linea_hdr.rstrip("\r\n")):]
-            nuevas_lineas[inicio_bloque] = m.group(1) + fmt(sum(horas_bloque)) + m.group(3) + ending
-
-    return "".join(nuevas_lineas), {
-        "diferencia": diferencia,
-        "suma_antes": suma_actual,
-        "ajustes": ajustes,
-    }
-
-
-def _contar_bloques_output(markdown_text: str) -> int:
-    return len(re.findall(r"^## Bloque\s+\d+", markdown_text, re.MULTILINE))
-
-
-def _construir_nombre_descarga(texto_guia: str) -> str:
-    m = re.search(r"NOMBRE\s+(.+?)\s+C[ÓO]DIGO", texto_guia or "", flags=re.IGNORECASE | re.DOTALL)
-    if not m:
-        return "Propuesta_asignatura.md"
-    nombre_limpio = re.sub(r'[\\/:\*\?"<>\|]', "", m.group(1).strip())
-    nombre_limpio = re.sub(r"\s+", "_", nombre_limpio).strip("_")
-    return f"Propuesta_{nombre_limpio}.md" if nombre_limpio else "Propuesta_asignatura.md"
-
-
-# =============================================================================
-# parsear_bloques_organizador — parsing puro, sin LLM
-# =============================================================================
-
-# Cabeceras de tabla que no son filas de datos
-_CABECERAS_TABLA = {
-    "subtema", "topic", "horas", "hours",
-    "justificación", "justificacion", "justification",
-    "origen", "origin",
-    "evidencia", "evidence",
-}
-
-# Contrato de formato del Agente Organizador (ver CLAUDE.md del monorepo):
-#   ## Bloque N — NOMBRE · Xh
-_HDR_BLOQUE_RE = re.compile(
-    r"^##\s+Bloque\s+(\d+)\s+[—\-]+\s+(.+?)\s*[·•]\s*([\d.,]+)h",
-    re.MULTILINE,
-)
-# Captura todas las celdas de una fila de tabla Markdown (separadas por '|').
-_FILA_TABLA_COMPLETA_RE = re.compile(r"^\|(.+)\|$", re.MULTILINE)
-
-
-def _parsear_celdas(linea: str) -> list[str]:
-    """Extrae celdas de una línea de tabla Markdown como lista de strings limpios."""
-    partes = linea.strip().strip("|").split("|")
-    return [p.strip() for p in partes]
-
-
-def parsear_bloques_organizador(markdown: str) -> list[dict]:
-    """Extrae la lista de bloques y subtemas del output del Agente Organizador.
-
-    Compatible con los formatos de tabla del Organizador:
-      - 3 columnas: | Subtema | Horas | Origen |
-      - 4 columnas: | Subtema | Horas | Evidencia | Origen |
-      - antiguo 3 cols: | Subtema | Horas | Justificación |
-
-    Returns:
-        list[dict] con claves: numero (int), nombre (str), horas (float),
-        subtemas (list[dict{nombre, horas, orden, evidencia, origen, es_fallback}])
-    """
-    bloques: list[dict] = []
-    matches = list(_HDR_BLOQUE_RE.finditer(markdown))
-
-    for i, m in enumerate(matches):
-        numero = int(m.group(1))
-        nombre = m.group(2).strip()
-        horas_bloque = float(m.group(3).replace(",", "."))
-
-        inicio = m.end()
-        fin = matches[i + 1].start() if i + 1 < len(matches) else len(markdown)
-        seccion = markdown[inicio:fin]
-
-        subtemas: list[dict] = []
-        for fm in _FILA_TABLA_COMPLETA_RE.finditer(seccion):
-            celdas = _parsear_celdas(fm.group(0))
-            if len(celdas) < 2:
-                continue
-            col1 = celdas[0]
-            col2 = celdas[1] if len(celdas) > 1 else ""
-            # Saltar cabeceras, separadores y filas vacías.
-            if col1.lower() in _CABECERAS_TABLA:
-                continue
-            if re.match(r"^-+$", col1) or re.match(r"^-+$", col2):
-                continue
-            if not col1:
-                continue
-
-            # Extraer horas del subtema (col2 puede tener "h" al final).
-            horas_sub_raw = re.sub(r"[^\d.,]", "", col2)
-            try:
-                horas_sub = float(horas_sub_raw.replace(",", ".")) if horas_sub_raw else 0.0
-            except ValueError:
-                horas_sub = 0.0
-
-            # Columnas opcionales: Evidencia (col3) y Origen (col4 ó col3).
-            if len(celdas) >= 4:
-                evidencia = celdas[2]
-                origen = celdas[3]
-            elif len(celdas) == 3:
-                # Formato antiguo o 3-cols: tercera columna es Origen/Justificación.
-                evidencia = ""
-                origen = celdas[2]
-            else:
-                evidencia = ""
-                origen = "Detectado"
-
-            # Fallback: evidencia vacía o marcador explícito.
-            _ev_norm = evidencia.strip().lower()
-            es_fallback = int(
-                _ev_norm in {"sin señal verificable", "sin senal verificable", "fallback", ""}
-                and origen.strip().lower() in {"fallback", "sin señal", "sin senal", ""}
-            )
-
-            subtemas.append({
-                "nombre": col1,
-                "horas": horas_sub,
-                "orden": len(subtemas) + 1,
-                "evidencia": evidencia,
-                "origen": origen,
-                "es_fallback": es_fallback,
-            })
-
-        bloques.append({
-            "numero": numero,
-            "nombre": nombre,
-            "horas": horas_bloque,
-            "subtemas": subtemas,
-        })
-
-    return bloques
 
 
 # =============================================================================
@@ -882,7 +479,7 @@ def _org_validar_y_persistir(
     feedback_texto: str | None = None,
     nombre_descarga: str | None = None,
 ) -> None:
-    n_generados = _contar_bloques_output(resultado)
+    n_generados = _org_parser.contar_bloques_output(resultado)
     st.session_state["org_warning_cardinalidad"] = (
         {"esperados": n_esperados, "generados": n_generados}
         if n_generados != n_esperados
@@ -985,7 +582,7 @@ def _org_extraer_y_detectar(guia_docente, materiales_teoria) -> bool:
                     "discrepancia": discrepancia,
                 })
 
-            horas_docencia = _extraer_horas_docencia(texto_guia)
+            horas_docencia = _org_parser.extraer_horas_docencia(texto_guia)
             st.session_state["org_ultimas_horas_teoria"] = horas_docencia
             st.session_state["org_ultimos_archivos_teoria"] = archivos_teoria
             st.session_state["org_ultimos_archivos_contexto"] = archivos_contexto
@@ -1026,7 +623,7 @@ def _org_generar_organizacion(
                 )
                 st.write("🤖 Aplicando ajuste sobre la organización actual...")
                 resultado = _org_agente.ejecutar_agente(prompt)
-                resultado, info_norm = _normalizar_horas_output(resultado, horas_totales or 0)
+                resultado, info_norm = _org_parser.normalizar_horas_output(resultado, horas_totales or 0)
                 st.session_state["org_warning_normalizacion"] = info_norm
 
                 version = st.session_state.get("org_version_actual", 1) + 1
@@ -1097,7 +694,7 @@ def _org_generar_organizacion(
             st.session_state["org_ultimos_archivos_contexto"] = archivos_contexto
 
             st.write("🕐 Detectando horas lectivas (TE + PA) y laboratorio...")
-            horas_docencia = _extraer_horas_docencia(texto_guia)
+            horas_docencia = _org_parser.extraer_horas_docencia(texto_guia)
             horas_teoria = horas_docencia["horas_teoria"]
             horas_aula = horas_docencia["horas_aula"]
             horas_laboratorio = horas_docencia["horas_laboratorio"]
@@ -1121,7 +718,7 @@ def _org_generar_organizacion(
             st.write("🤖 Consultando al agente (esto puede tardar ~15s)...")
             resultado = _org_agente.ejecutar_agente(prompt)
 
-            resultado, info_norm = _normalizar_horas_output(resultado, horas_totales if horas_totales else 0)
+            resultado, info_norm = _org_parser.normalizar_horas_output(resultado, horas_totales if horas_totales else 0)
             st.session_state["org_warning_normalizacion"] = info_norm
 
             _org_validar_y_persistir(
@@ -1132,7 +729,7 @@ def _org_generar_organizacion(
                 version=1,
                 ejecucion_id=ejecucion_id,
                 feedback_texto=None,
-                nombre_descarga=_construir_nombre_descarga(texto_guia),
+                nombre_descarga=_org_parser.construir_nombre_descarga(texto_guia),
             )
             _db_actualizar_ejecucion(ejecucion_id, "completado")
             status.update(label="✅ Organización generada", state="complete")
@@ -2492,7 +2089,7 @@ def _vista_organizador() -> None:
                     st.error("No hay output registrado en la base de datos — genera la organización primero.")
                 else:
                     try:
-                        bloques = parsear_bloques_organizador(st.session_state["org_ultimo_output"])
+                        bloques = _org_parser.parsear_bloques_organizador(st.session_state["org_ultimo_output"])
                         if not bloques:
                             st.warning(
                                 "No se pudieron extraer bloques del output. "
