@@ -1093,6 +1093,44 @@ def _cnt_curar_subbloque(
     return markdown, fidelidad
 
 
+def _cnt_init_edicion_state() -> None:
+    if "cnt_en_edicion" not in st.session_state:
+        st.session_state["cnt_en_edicion"] = set()
+
+
+def _cnt_subbloque_en_edicion(subbloque_id: int, estado: str) -> bool:
+    """True si el sub-bloque debe mostrarse en textarea editable."""
+    _cnt_init_edicion_state()
+    if estado == "editado":
+        return True
+    return subbloque_id in st.session_state["cnt_en_edicion"]
+
+
+def _cnt_persistir_y_aprobar(subbloque_id: int, texto: str, borrador: str) -> None:
+    """Guarda el Markdown visible y marca el sub-bloque como aprobado."""
+    texto_limpio = texto.strip()
+    if not texto_limpio:
+        return
+    ratio = difflib.SequenceMatcher(None, borrador, texto_limpio).ratio()
+    pct = round((1 - ratio) * 100, 1)
+    _db_cnt_guardar_final(subbloque_id, texto_limpio, pct)
+    _db_cnt_aprobar_subbloque(subbloque_id)
+    _cnt_init_edicion_state()
+    st.session_state["cnt_en_edicion"].discard(subbloque_id)
+
+
+def _cnt_persistir_edicion(subbloque_id: int, texto: str, borrador: str) -> None:
+    """Guarda una edición manual sin aprobar todavía."""
+    texto_limpio = texto.strip()
+    if not texto_limpio:
+        return
+    ratio = difflib.SequenceMatcher(None, borrador, texto_limpio).ratio()
+    pct = round((1 - ratio) * 100, 1)
+    _db_cnt_guardar_final(subbloque_id, texto_limpio, pct)
+    _cnt_init_edicion_state()
+    st.session_state["cnt_en_edicion"].discard(subbloque_id)
+
+
 # =============================================================================
 # Vista Contenido
 # =============================================================================
@@ -1118,6 +1156,8 @@ def _vista_contenido() -> None:
         for k in [k for k in list(st.session_state.keys()) if k.startswith("cnt_")]:
             del st.session_state[k]
         st.session_state["cnt_asignatura"] = asignatura
+
+    _cnt_init_edicion_state()
 
     # ── Selector de tema ──────────────────────────────────────────────────────
     temas = _db_cnt_get_temas(asignatura_id)
@@ -1276,49 +1316,106 @@ def _vista_contenido() -> None:
             f"**{sub['nombre']}** — {etiqueta}",
             expanded=bool(cs is not None and cs.get("markdown_borrador")),
         ):
-            ta_key = f"contenido_{sub['id']}"
-            if ta_key not in st.session_state:
-                st.session_state[ta_key] = texto_inicial
+            en_edicion = _cnt_subbloque_en_edicion(sub["id"], estado_actual)
+            tiene_contenido = bool(texto_inicial.strip())
 
-            st.text_area(
-                "Contenido Markdown:",
-                key=ta_key,
-                height=350,
-                label_visibility="collapsed",
-            )
+            if tiene_contenido and not en_edicion:
+                st.text_area(
+                    "Contenido Markdown (solo lectura):",
+                    value=texto_inicial,
+                    height=350,
+                    disabled=True,
+                    key=f"cnt_view_{sub['id']}",
+                    label_visibility="collapsed",
+                )
+            elif en_edicion:
+                ta_key = f"contenido_{sub['id']}"
+                if ta_key not in st.session_state:
+                    st.session_state[ta_key] = texto_inicial
+                st.text_area(
+                    "Contenido Markdown:",
+                    key=ta_key,
+                    height=350,
+                    label_visibility="collapsed",
+                )
+            elif not tiene_contenido:
+                st.caption("Sin contenido todavía — genera el borrador o edítalo manualmente.")
 
             if estado_actual in ("generado", "editado") and cs is not None:
-                if st.button(
-                    "✅ Aprobar este sub-bloque",
-                    key=f"cnt_btn_aprobar_{sub['id']}",
-                    type="secondary",
-                ):
-                    _db_cnt_aprobar_subbloque(sub["id"])
-                    st.rerun()
+                borrador = cs.get("markdown_borrador") or ""
+                col_rechazar, col_guardar, col_aprobar = st.columns(3)
 
-    # ── Botón de guardado ─────────────────────────────────────────────────────
+                if not en_edicion:
+                    with col_rechazar:
+                        if st.button(
+                            "✏️ Rechazar y editar",
+                            key=f"cnt_btn_rechazar_{sub['id']}",
+                            type="secondary",
+                            use_container_width=True,
+                        ):
+                            st.session_state["cnt_en_edicion"].add(sub["id"])
+                            st.session_state[f"contenido_{sub['id']}"] = texto_inicial
+                            st.rerun()
+                    with col_aprobar:
+                        if st.button(
+                            "✅ Aprobar este sub-bloque",
+                            key=f"cnt_btn_aprobar_{sub['id']}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            _cnt_persistir_y_aprobar(sub["id"], texto_inicial, borrador)
+                            st.rerun()
+                else:
+                    texto_actual = st.session_state.get(
+                        f"contenido_{sub['id']}", texto_inicial
+                    )
+                    with col_guardar:
+                        if st.button(
+                            "💾 Guardar edición",
+                            key=f"cnt_btn_guardar_sub_{sub['id']}",
+                            type="secondary",
+                            use_container_width=True,
+                        ):
+                            _cnt_persistir_edicion(sub["id"], texto_actual, borrador)
+                            st.rerun()
+                    with col_aprobar:
+                        if st.button(
+                            "✅ Aprobar este sub-bloque",
+                            key=f"cnt_btn_aprobar_{sub['id']}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            _cnt_persistir_y_aprobar(sub["id"], texto_actual, borrador)
+                            st.rerun()
+
+    # ── Botón de guardado global (lote) ─────────────────────────────────────
     st.divider()
     if st.button(
         "Guardar contenido del bloque",
-        type="primary",
+        type="secondary",
         use_container_width=True,
         key="cnt_btn_guardar",
     ):
         guardados = 0
         for sub in subbloques:
+            cs = _db_cnt_get_contenido_subbloque(sub["id"])
+            if cs is None:
+                continue
+            estado_sub = cs.get("estado") or "pendiente"
+            if estado_sub not in ("generado", "editado"):
+                continue
+            if not _cnt_subbloque_en_edicion(sub["id"], estado_sub):
+                continue
             texto_final = st.session_state.get(f"contenido_{sub['id']}", "").strip()
             if not texto_final:
                 continue
-            cs = _db_cnt_get_contenido_subbloque(sub["id"])
-            borrador = (cs["markdown_borrador"] or "") if cs else ""
-            ratio = difflib.SequenceMatcher(None, borrador, texto_final).ratio()
-            pct = round((1 - ratio) * 100, 1)
-            _db_cnt_guardar_final(sub["id"], texto_final, pct)
+            borrador = cs.get("markdown_borrador") or ""
+            _cnt_persistir_edicion(sub["id"], texto_final, borrador)
             guardados += 1
         if guardados:
             st.success(f"✅ {guardados} sub-bloque(s) guardados.")
         else:
-            st.info("No había contenido en los text-areas para guardar.")
+            st.info("No había sub-bloques en edición con contenido para guardar.")
         st.rerun()
 
 
