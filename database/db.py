@@ -3,8 +3,9 @@
 Almacén compartido de inputs, outputs, estados y progreso de los tres agentes
 (Organizador, Contenido, Presentación) cuando se unifican en una sola app Streamlit.
 
-Esquema actual: versión 2 (user_version = 2).
+Esquema actual: versión 3 (user_version = 3).
 Migración automática desde v1: añade columnas para evidencia/estado/interactivo.
+Migración v3: tabla valoraciones_profesor (puntuación 1-10 por asignatura y agente).
 
 Uso directo:
     python database/db.py
@@ -15,7 +16,7 @@ import sqlite3
 
 RUTA_DB_POR_DEFECTO = "data/tfg.db"
 
-VERSION_SCHEMA = 2
+VERSION_SCHEMA = 3
 
 # Asignaturas con las que se ha validado la suite (ver CLAUDE.md).
 ASIGNATURAS_CONOCIDAS = [
@@ -153,6 +154,16 @@ ESQUEMA = [
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS valoraciones_profesor (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asignatura_id INTEGER NOT NULL REFERENCES asignaturas(id),
+        agente TEXT NOT NULL CHECK(agente IN ('organizador','contenido','presentacion')),
+        puntuacion INTEGER NOT NULL CHECK(puntuacion BETWEEN 1 AND 10),
+        fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(asignatura_id, agente)
+    )
+    """,
 ]
 
 # ---------------------------------------------------------------------------
@@ -170,10 +181,25 @@ MIGRACIONES: dict[int, list[str]] = {
         "ALTER TABLE contenido_subbloque ADD COLUMN estado TEXT NOT NULL DEFAULT 'pendiente'",
         "ALTER TABLE presentacion_subbloque ADD COLUMN tiene_interactivo INTEGER DEFAULT 0",
     ],
+    3: [
+        """
+        CREATE TABLE IF NOT EXISTS valoraciones_profesor (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asignatura_id INTEGER NOT NULL REFERENCES asignaturas(id),
+            agente TEXT NOT NULL CHECK(agente IN ('organizador','contenido','presentacion')),
+            puntuacion INTEGER NOT NULL CHECK(puntuacion BETWEEN 1 AND 10),
+            fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(asignatura_id, agente)
+        )
+        """,
+    ],
 }
 
 # Estados válidos para el ciclo de vida de un subbloque de contenido.
 ESTADOS_SUBBLOQUE = frozenset({"pendiente", "generado", "editado", "aprobado"})
+
+# Agentes que admiten valoración global del profesor (1-10).
+AGENTES_VALORACION = frozenset({"organizador", "contenido", "presentacion"})
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +514,63 @@ def get_desglose_progreso_asignatura(
                 "porcentaje": round(aprobados / max(total_sub, 1) * 100, 1),
             })
         return resultado
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Valoración global del profesor (1-10) por asignatura y agente
+# ---------------------------------------------------------------------------
+
+
+def upsert_valoracion_profesor(
+    asignatura_id: int,
+    agente: str,
+    puntuacion: int,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> None:
+    """Guarda o actualiza la puntuación 1-10 del profesor para un agente y asignatura."""
+    if agente not in AGENTES_VALORACION:
+        raise ValueError(
+            f"Agente inválido: {agente!r}. Válidos: {sorted(AGENTES_VALORACION)}"
+        )
+    if not 1 <= puntuacion <= 10:
+        raise ValueError(f"Puntuación fuera de rango: {puntuacion}. Debe estar entre 1 y 10.")
+    conn = get_connection(ruta)
+    try:
+        conn.execute(
+            """
+            INSERT INTO valoraciones_profesor (asignatura_id, agente, puntuacion)
+            VALUES (?, ?, ?)
+            ON CONFLICT(asignatura_id, agente) DO UPDATE SET
+                puntuacion = excluded.puntuacion,
+                fecha_actualizacion = CURRENT_TIMESTAMP
+            """,
+            (asignatura_id, agente, puntuacion),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_valoracion_profesor(
+    asignatura_id: int,
+    agente: str,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> int | None:
+    """Devuelve la puntuación guardada o None si el profesor aún no ha valorado."""
+    if agente not in AGENTES_VALORACION:
+        raise ValueError(
+            f"Agente inválido: {agente!r}. Válidos: {sorted(AGENTES_VALORACION)}"
+        )
+    conn = get_connection(ruta)
+    try:
+        row = conn.execute(
+            "SELECT puntuacion FROM valoraciones_profesor "
+            "WHERE asignatura_id = ? AND agente = ?",
+            (asignatura_id, agente),
+        ).fetchone()
+        return int(row["puntuacion"]) if row else None
     finally:
         conn.close()
 
