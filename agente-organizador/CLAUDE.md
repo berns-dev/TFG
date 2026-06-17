@@ -89,7 +89,7 @@ hacerlas importables).
 
 ### Prioridad de fuentes (estricta, no negociable)
 
-1. **Guía docente** — si ya enumera subtemas/conceptos dentro de un bloque, se usa esa enumeración literal.
+1. **Guía docente** — `extraer_subtemas_guia()` toma los subtemas de la sección `Contenidos` de la guía, excluyendo el boilerplate administrativo (ver filtro de calidad). Si el material no aporta señal propia, se usa esta enumeración.
 2. **Materiales de teoría — secciones numeradas** — encabezados con patrón `\d+(\.\d+)*\. Título` en el texto extraído. Evidencia: `"Sección X.X"`.
 3. **Materiales de teoría — títulos de diapositiva PPTX** — placeholder `idx=0` o primera shape corta (<100 chars, sin saltos). Evidencia: `"Slide N"`. Solo se usa si no hay secciones numeradas.
 4. **Fallback obligatorio** — si ninguna fuente ofrece señal suficientemente verificable, el bloque no se subdivide. Se crea un único subbloque igual al bloque completo y se marca `Evidencia = "Sin señal verificable"`. La interfaz muestra un aviso visible al profesor.
@@ -190,6 +190,9 @@ Sonnet para toda la generación y refinamiento. El razonamiento curricular requi
 ### Código determinista para señales estructurales
 `extraer_candidatos_con_evidencia()` en `parser.py`. Prioridad estricta de fuentes (no negociable). No llama al LLM. Si retorna `[]`, el bloque es un único subbloque — el modelo nunca infiere subbloques libres para bloques sin señal.
 
+### Filtro de calidad de subtemas (anti-boilerplate / anti-prosa)
+`es_subtema_valido()` en `parser.py` es el guardián común aplicado en todos los caminos de detección de subtemas: descarta secciones administrativas estándar de las guías UniOvi, fragmentos de prosa (conector discursivo inicial), filas de datos numéricos y fragmentos truncados. Para la **guía docente** se usa `extraer_subtemas_guia()`, que además acota la extracción a la sección `Contenidos`. Regla de diseño: un subtema candidato debe ser un encabezado real anclado a señal estructural — nunca boilerplate ni texto corrido. Ver "Bug documentado y corregido: calidad de subtemas".
+
 ### Parseo/serialización para edición manual
 - `parsear_bloques_desde_markdown(markdown)` → `[{numero, nombre, horas, subtemas}]` (forma simple para la edición manual; `manual=False` al parsear)
 - `parsear_bloques_organizador(markdown)` → forma enriquecida con `orden/evidencia/origen/es_fallback`; la usa `app-unificada` al confirmar para persistir en BD
@@ -221,6 +224,63 @@ distintas; la lógica de detección de cabeceras/filas es compartida en el módu
 **Bug (detectado 26/05/2026):** el agente generaba N+1 bloques cuando la guía docente listaba una subsección con horas propias.
 
 **Fix (28/05/2026):** `instruccion_cardinalidad` reescrita con tres refuerzos; `contar_bloques_output()` + `_validar_y_persistir()` añadidos; `st.warning` visible.
+
+---
+
+## Bug documentado y corregido: calidad de subtemas (boilerplate y fragmentos)
+
+**Bug (detectado 17/06/2026, probando Elementos de Máquinas en `app-unificada`):** la
+propuesta de subtemas incluía dos clases de basura.
+
+1. **Boilerplate administrativo de la guía como subtema.** Bloques sin numeración en su
+   material caían al fallback de la guía, y la guía aportaba sus secciones administrativas
+   ("Identificación de la asignatura", "Contextualización", "Requisitos", "Competencias…",
+   "Metodología…", "Evaluación…", "Recursos, bibliografía…").
+2. **Fragmento de prosa del material como subtema.** Una línea de un ejemplo resuelto
+   (`5.6. Además, de acuerdo a la tabla, la relación d/R es de 111. Con ello…`) matcheaba el
+   regex de numeración y se aceptaba como subtema.
+
+**Causa raíz (confirmada con los PDF reales, no la hipótesis inicial):** vivía en la capa
+compartida `parser.py`, no en `app-unificada`. Las guías UniOvi **numeran sus 8 secciones de
+primer nivel** y solo `5. Contenidos` contiene temario real; `extraer_subtemas_candidatos()`
+cogía toda línea numerada sin distinguir cabecera administrativa, fila de tabla de horas o
+prosa. No existía ningún filtro de boilerplate. El problema **no era específico de Elementos
+de Máquinas**: la guía de Oleohidráulica producía 7/12 candidatos boilerplate y la de
+Tecnología de Materiales 10/46 — contaminación latente en asignaturas ya "validadas" que no se
+había notado porque sus materiales tenían numeración limpia o se editó el textarea a mano.
+
+**Fix (17/06/2026), todo en `parser.py` (fuente de verdad de ambas interfaces):**
+
+- **`es_subtema_valido(nombre)`** — filtro de calidad común aplicado en
+  `extraer_subtemas_candidatos()` y en `extraer_candidatos_con_evidencia()` (numeración y
+  títulos de slide). Reglas de exclusión:
+  1. **Boilerplate administrativo UniOvi** — patrones estables (`_GUIA_SECCIONES_ADMIN_*`):
+     identificación, contextualización, requisitos, competencias, metodología, evaluación,
+     recursos/bibliografía y las filas de metodología (presenciales, clases expositivas,
+     prácticas, tutorías…). **Nunca son subtema candidato, en ninguna asignatura.**
+  2. **Fragmento de prosa** — empieza por conector discursivo (`_CONECTORES_PROSA`: además,
+     asimismo, por tanto, es decir, con ello, por último…).
+  3. **Ruido numérico** — 3+ tokens con dígitos (filas de tablas de horas / fragmentos de
+     cálculo).
+  4. **Fragmento truncado** — línea corta que acaba en palabra-función (`de`, `la`, `y`…),
+     típica de columnas de tabla partidas.
+- **`extraer_subtemas_guia(texto)`** — acota la extracción a la sección `Contenidos` de la
+  guía: localiza la cabecera `N. Contenidos` y recoge subtemas numerados hasta la siguiente
+  cabecera administrativa. Elimina de raíz boilerplate, tablas de horas y prosa de
+  metodología/evaluación. Si no hay sección `Contenidos` (guía con otro formato), degrada a
+  `extraer_subtemas_candidatos()` ya filtrada. **Ambas apps** (standalone y `app-unificada`)
+  usan esta función para los candidatos de guía.
+
+**Comportamiento ante material sin señal fiable:** los fragmentos arbitrarios se descartan, así
+que el material queda sin candidatos y se aplica el fallback existente (candidatos de la guía;
+si tampoco hay, bloque sin subdivisión marcado). Nunca se aceptan fragmentos de texto corrido.
+
+**Verificación (PDF reales):** Elementos/Tec. Materiales → 12 temas limpios; Oleohidráulica →
+4 temas limpios (antes 7/12 eran boilerplate); Tornillos → el fragmento `d/R` se descarta.
+
+**Nota de datos (no es bug):** el fichero `data/elementos-de-maquinas/inputs/Guia docente.pdf`
+contiene en realidad el temario de Tecnología de Materiales (mecánica de fractura, fatiga,
+corrosión). Es un error en los datos de prueba, no del agente.
 
 ---
 
