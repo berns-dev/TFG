@@ -12,7 +12,7 @@ Pipeline:
      donde aparece su primera expresion (insercion inmediatamente despues
      del bloque Markdown que la presenta).
   4. Generacion de los bloques interactivos reutilizando
-     generador_html._generar_bloque() — mismo razonador, mismos 6 patrones,
+     generador_html._generar_bloque() — mismo razonador, mismos 7 patrones,
      misma tabla de variables, mismos reintentos y validacion. El listener
      DOMContentLoaded propio de cada bloque se elimina al embeber: en la
      presentacion la inicializacion es lazy por viewport
@@ -38,8 +38,10 @@ Restricciones (no negociables):
 
 from __future__ import annotations
 
+import base64
 import html as html_lib
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -68,6 +70,7 @@ _MAX_TOKENS_SVG = 2048
 # ---------------------------------------------------------------------------
 
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n.*?\n---\s*\n", re.DOTALL)
+_TEMA_DETECTADO_RE = re.compile(r"^tema_detectado:\s*(.+)$", re.MULTILINE)
 _H1_RE = re.compile(r"^#\s+(?!#)(.+)$", re.MULTILINE)
 _H2_RE = re.compile(r"^##\s+(?!#)(.+)$", re.MULTILINE)
 _BLOCK_LATEX_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
@@ -108,6 +111,38 @@ def _extraer_titulo(markdown_text: str, fallback: str) -> str:
     """Devuelve el texto del primer H1, o el fallback si no hay H1."""
     m = _H1_RE.search(markdown_text)
     return m.group(1).strip() if m else fallback
+
+
+def _extraer_asignatura(markdown_text: str, fallback: str) -> str:
+    """Nombre de la asignatura: tema_detectado del frontmatter, o el H1."""
+    m_fm = _FRONTMATTER_RE.match(markdown_text)
+    if m_fm:
+        m = _TEMA_DETECTADO_RE.search(m_fm.group(0))
+        if m:
+            return m.group(1).strip()
+    m = _H1_RE.search(markdown_text)
+    return m.group(1).strip() if m else fallback
+
+
+# ---------------------------------------------------------------------------
+# Logo de la Universidad de Oviedo (assets/logo_uniovi.png)
+# ---------------------------------------------------------------------------
+
+_LOGO_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "assets", "logo_uniovi.png"
+)
+
+
+def _cargar_logo_base64() -> str | None:
+    """Logo UO en base64, o None si el archivo no existe o no es legible.
+
+    Nunca lanza: si el logo falta, la cabecera degrada a solo texto.
+    """
+    try:
+        with open(_LOGO_PATH, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except OSError:
+        return None
 
 
 def _dividir_secciones(markdown_text: str) -> list[dict]:
@@ -537,12 +572,27 @@ _PAGE_TEMPLATE = """\
     }
 
     .page-header {
-      background: #185FA5;
+      background: #003366;
       color: #FFFFFF;
-      padding: 1.5rem 2rem;
+      padding: 1.25rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      border-bottom: 3px solid #C8A951;
     }
     .page-header h1 { font-size: 22px; font-weight: 500; margin-bottom: 0.25rem; }
     .page-header .subtitle { font-size: 14px; opacity: 0.75; }
+    /* Chip blanco para que el logo (oscuro, fondo transparente) sea legible
+       sobre la cabecera azul #003366. */
+    .page-header-logo {
+      background: #FFFFFF;
+      border-radius: 8px;
+      padding: 8px 14px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+    }
+    .page-header-logo img { height: 64px; width: auto; display: block; }
 
     .layout {
       display: flex;
@@ -773,8 +823,11 @@ _PAGE_TEMPLATE = """\
 <body id="top">
 
 <header class="page-header">
-  <h1><!--TITULO--></h1>
-  <div class="subtitle">Presentaci&oacute;n completa del tema &mdash; Agente Presentaci&oacute;n</div>
+<!--LOGO-->
+  <div>
+    <h1><!--TITULO--></h1>
+    <div class="subtitle"><!--ASIGNATURA--> &mdash; Universidad de Oviedo</div>
+  </div>
 </header>
 
 <div class="layout">
@@ -942,6 +995,7 @@ def generar_presentacion(
 
     texto = _strip_frontmatter(markdown_completo)
     titulo = _extraer_titulo(texto, tema_nombre)
+    asignatura = _extraer_asignatura(markdown_completo, titulo)
     secciones = _dividir_secciones(texto)
     if not secciones:
         raise ValueError("No se encontraron secciones en el Markdown.")
@@ -987,8 +1041,20 @@ def generar_presentacion(
             f"    </section>"
         )
 
+    logo_b64 = _cargar_logo_base64()
+    if logo_b64:
+        logo_html = (
+            '  <div class="page-header-logo">'
+            '<img src="data:image/png;base64,' + logo_b64 + '" '
+            'alt="Universidad de Oviedo"></div>'
+        )
+    else:
+        logo_html = ""
+
     html_out = _PAGE_TEMPLATE
     html_out = html_out.replace("<!--TITULO-->", titulo_esc)
+    html_out = html_out.replace("<!--ASIGNATURA-->", html_lib.escape(asignatura))
+    html_out = html_out.replace("<!--LOGO-->", logo_html)
     html_out = html_out.replace("<!--INDICE-->", "\n".join(indice_parts))
     html_out = html_out.replace("<!--SECCIONES-->", "\n".join(secciones_parts))
     return html_out

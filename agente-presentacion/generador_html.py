@@ -28,8 +28,10 @@ Restricciones de diseno (no negociables):
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import os
 import re
 import time
 import unicodedata
@@ -65,7 +67,32 @@ _PATRONES_VALIDOS = frozenset({
     "MAPA_2D",
     "TRAYECTORIA",
     "RESPUESTA_FRECUENCIAL",
+    "ANIMACION_MECANISMO",
 })
+
+
+# ---------------------------------------------------------------------------
+# Logo de la Universidad de Oviedo (assets/logo_uniovi.png)
+# Helper replicado de generador_presentacion.py: ambos módulos son
+# autocontenidos para evitar un import circular (generador_presentacion
+# importa de generador_html).
+# ---------------------------------------------------------------------------
+
+_LOGO_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "assets", "logo_uniovi.png"
+)
+
+
+def _cargar_logo_base64() -> str | None:
+    """Logo UO en base64, o None si el archivo no existe o no es legible.
+
+    Nunca lanza: si el logo falta, la cabecera degrada a solo texto.
+    """
+    try:
+        with open(_LOGO_PATH, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except OSError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -127,11 +154,15 @@ _HTML_TEMPLATE = """\
       line-height: 1.6;
     }
 
-    /* ---- Page header ---- */
+    /* ---- Page header (identidad institucional, igual que la presentación) ---- */
     .page-header {
-      background: #185FA5;
+      background: #003366;
       color: #FFFFFF;
-      padding: 1.5rem 2rem;
+      padding: 1.25rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      border-bottom: 3px solid #C8A951;
       font-family: 'DM Sans', sans-serif;
     }
     .page-header h1 {
@@ -143,6 +174,17 @@ _HTML_TEMPLATE = """\
       font-size: 14px;
       opacity: 0.75;
     }
+    /* Chip blanco para que el logo (oscuro, fondo transparente) sea legible
+       sobre la cabecera azul #003366. */
+    .page-header-logo {
+      background: #FFFFFF;
+      border-radius: 8px;
+      padding: 8px 14px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+    }
+    .page-header-logo img { height: 64px; width: auto; display: block; }
 
     /* ---- CSS-only tab system (pill bar) ---- */
     .tab-inputs { display: none; }
@@ -203,8 +245,11 @@ _HTML_TEMPLATE = """\
 <!--TAB_INPUTS-->
 
 <header class="page-header">
-  <h1><!--TITULO--></h1>
-  <div class="subtitle">Material interactivo &mdash; Agente Presentaci&oacute;n</div>
+<!--LOGO-->
+  <div>
+    <h1><!--TITULO--></h1>
+    <div class="subtitle">Material interactivo &mdash; Agente Presentaci&oacute;n</div>
+  </div>
 </header>
 
 <div class="tabs-wrapper">
@@ -327,6 +372,8 @@ def _fallback_visualizacion(
         "EJE_X": eje_x,
         "EJE_Y": variable_salida.get("nombre", "Y"),
         "PARAMETROS_SLIDER": params,
+        "PARAMETRO_FAMILIA": "",
+        "SLIDERS_DESCARTADOS": "",
         "ESCALA_LOG_X": "NO",
         "ESCALA_LOG_Y": "NO",
         "JUSTIFICACION": justificacion,
@@ -354,6 +401,8 @@ def _parse_visualizacion(raw: str, elemento: dict) -> dict:
         "EJE_X": _extract_xml_tag(raw, "EJE_X") or "",
         "EJE_Y": _extract_xml_tag(raw, "EJE_Y") or "",
         "PARAMETROS_SLIDER": _extract_xml_tag(raw, "PARAMETROS_SLIDER") or "",
+        "PARAMETRO_FAMILIA": _extract_xml_tag(raw, "PARAMETRO_FAMILIA") or "",
+        "SLIDERS_DESCARTADOS": _extract_xml_tag(raw, "SLIDERS_DESCARTADOS") or "",
         "ESCALA_LOG_X": _extract_xml_tag(raw, "ESCALA_LOG_X") or "NO",
         "ESCALA_LOG_Y": _extract_xml_tag(raw, "ESCALA_LOG_Y") or "NO",
         "JUSTIFICACION": _extract_xml_tag(raw, "JUSTIFICACION") or "",
@@ -1251,8 +1300,19 @@ def _construir_pagina(bloques: list[tuple[str, str]], titulo: str) -> str:
             f" {{ display: block; }}"
         )
 
+    logo_b64 = _cargar_logo_base64()
+    if logo_b64:
+        logo_html = (
+            '  <div class="page-header-logo">'
+            '<img src="data:image/png;base64,' + logo_b64 + '" '
+            'alt="Universidad de Oviedo"></div>'
+        )
+    else:
+        logo_html = ""
+
     html = _HTML_TEMPLATE
     html = html.replace("<!--TITULO-->", titulo_esc)
+    html = html.replace("<!--LOGO-->", logo_html)
     html = html.replace("<!--TAB_INPUTS-->", "\n".join(inputs_parts))
     html = html.replace("<!--TAB_LABELS-->", "\n".join(labels_parts))
     html = html.replace("<!--TAB_PANELS-->", "\n".join(panels_parts))
