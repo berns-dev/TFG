@@ -83,7 +83,7 @@ def _is_mirrored_text(line: str) -> bool:
 _PAGE_MARK_RE = re.compile(r"^\[PAGINA\s+(\d+)\]", re.MULTILINE | re.IGNORECASE)
 
 
-def _clean_page_blocks(raw_document: str, filename: str) -> str:
+def _clean_page_blocks(raw_document: str, filename: str, *, light: bool = False) -> str:
     """Aplica filtro de espejo y cleaner por bloque [PAGINA N]."""
     doc = (raw_document or "").strip()
     if not doc:
@@ -92,7 +92,7 @@ def _clean_page_blocks(raw_document: str, filename: str) -> str:
     matches = list(_PAGE_MARK_RE.finditer(doc))
     if not matches:
         filtered = [ln for ln in doc.split("\n") if not _is_mirrored_text(ln)]
-        return clean_extracted_text("\n".join(filtered), filename).strip()
+        return clean_extracted_text("\n".join(filtered), filename, light=light).strip()
 
     parts: list[str] = []
     for i, m in enumerate(matches):
@@ -104,7 +104,7 @@ def _clean_page_blocks(raw_document: str, filename: str) -> str:
             parts.append(f"{label}\n[TEXTO_ILEGIBLE]")
             continue
         filtered_lines = [ln for ln in body.split("\n") if not _is_mirrored_text(ln)]
-        text = clean_extracted_text("\n".join(filtered_lines), filename).strip()
+        text = clean_extracted_text("\n".join(filtered_lines), filename, light=light).strip()
         if text:
             parts.append(f"{label}\n{text}")
         else:
@@ -113,14 +113,28 @@ def _clean_page_blocks(raw_document: str, filename: str) -> str:
 
 
 def _extract_pdf_enriched(path: Path) -> str | None:
-    """Extracción con jerarquía visual (#/##/###). None → usar plana."""
+    """Extracción con jerarquía visual (#/##/###). Intenta pymupdf primero, luego pdfplumber."""
+    # Intentar pymupdf: mejor decodificación de fuentes math y orden de lectura
+    try:
+        from shared.pdf_enriched import build_pdf_markdown_pymupdf
+
+        raw = build_pdf_markdown_pymupdf(path)
+        if raw:
+            cleaned = _clean_page_blocks(raw, path.name, light=True)
+            if cleaned.strip():
+                _LOGGER.info("PDF pymupdf %s: %s chars", path.name, len(cleaned))
+                return cleaned
+    except Exception as exc:
+        _LOGGER.warning("Extracción pymupdf falló, usando pdfplumber: %s", exc)
+
+    # Fallback: pdfplumber enriquecido
     try:
         from shared.pdf_enriched import build_pdf_markdown
 
         raw = build_pdf_markdown(path)
         if not raw:
             return None
-        cleaned = _clean_page_blocks(raw, path.name)
+        cleaned = _clean_page_blocks(raw, path.name, light=True)
         return cleaned if cleaned.strip() else None
     except Exception as exc:
         _LOGGER.warning("Extracción PDF enriquecida no disponible: %s", exc)
