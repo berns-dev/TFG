@@ -880,13 +880,24 @@ def _db_cnt_get_temas(asignatura_id: int) -> list[dict]:
         return [
             dict(r)
             for r in conn.execute(
-                "SELECT id, nombre, horas, bloque, orden FROM temas "
+                "SELECT id, nombre, horas, bloque, orden, input_id FROM temas "
                 "WHERE asignatura_id = ? ORDER BY orden",
                 (asignatura_id,),
             ).fetchall()
         ]
     finally:
         conn.close()
+
+
+def _db_cnt_get_materiales_teoria(asignatura_id: int) -> list[dict]:
+    """PDFs/PPTX de teoría registrados para la asignatura (orden alfabético)."""
+    return sorted(
+        (
+            i for i in db.listar_inputs_asignatura(asignatura_id, RUTA_DB)
+            if i["tipo"] == "material_teoria"
+        ),
+        key=lambda i: (i.get("nombre_fichero") or "").lower(),
+    )
 
 
 def _db_cnt_get_subbloques(tema_id: int) -> list[dict]:
@@ -942,20 +953,58 @@ def _cnt_extraer_texto_bloque(rutas_material: list[str]) -> str:
     return "\n\n".join(partes)
 
 
+def _cnt_numero_bloque(bloque_label: str) -> int | None:
+    """Extrae el número de «Bloque N» del etiquetado del Organizador."""
+    m = re.search(r"bloque\s*(\d+)", (bloque_label or ""), re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+def _cnt_sugerir_material_id(tema: dict, materiales: list[dict]) -> int | None:
+    """Preselección del material: convención Bloque N → Tema N, luego vínculo guardado."""
+    if not materiales:
+        return None
+    ids = {m["id"] for m in materiales}
+    n = _cnt_numero_bloque(tema.get("bloque", ""))
+    if n is not None:
+        for mat in materiales:
+            stem = Path(mat["nombre_fichero"]).stem
+            if re.search(rf"(?:tema|bloque|unidad)\s*[_-]?\s*{n}$", stem, re.IGNORECASE):
+                return mat["id"]
+            if stem.strip() == str(n):
+                return mat["id"]
+    guardado = tema.get("input_id")
+    if guardado in ids:
+        return guardado
+    return materiales[0]["id"]
+
+
+def _cnt_etiqueta_material(mat: dict) -> str:
+    nombre = mat.get("nombre_fichero") or "?"
+    if fichero_existe(mat.get("ruta_disco") or ""):
+        return nombre
+    return f"{nombre} (no encontrado en disco)"
+
+
 def _cnt_curar_bloque(
     tema_nombre: str,
     rutas_material: list[str],
+    nombre_archivo: str = "",
 ) -> tuple[str, float | None, list[dict]]:
     """Genera el markdown curado del bloque completo (extracción fiel, sin densidad horaria)."""
     texto = _cnt_extraer_texto_bloque(rutas_material)
     if not texto.strip():
         return "", None, []
 
+    if not nombre_archivo and rutas_material:
+        nombre_archivo = Path(rutas_material[0]).name
+    if not nombre_archivo:
+        nombre_archivo = f"{tema_nombre}.md"
+
     max_w = getattr(_cnt_config, "MAX_WORKERS", 5)
     _items, markdown, reporte = _cnt_pipeline.procesar_bloque(
         texto=texto,
         nombre_bloque=tema_nombre,
-        nombre_archivo=f"{tema_nombre}.md",
+        nombre_archivo=nombre_archivo,
         horas=None,
         max_workers=max_w,
     )
@@ -969,6 +1018,64 @@ def _cnt_curar_bloque(
     ]
     fidelidad: float | None = round(sum(scores) / len(scores), 3) if scores else None
     return markdown, fidelidad, reporte.get("fidelity") or []
+
+
+def _cnt_generar_bloque_desde_material(
+    asignatura_id: int,
+    tema_id: int,
+    tema_nombre: str,
+    material_sel: dict,
+    *,
+    regenerar: bool = False,
+) -> None:
+    """Curación del bloque a partir del material elegido y persistencia en BD."""
+    ruta_material = material_sel.get("ruta_disco") or ""
+    nombre_archivo = material_sel.get("nombre_fichero") or ""
+    if not fichero_existe(ruta_material):
+        st.error(
+            f"El archivo **{nombre_archivo}** no está en disco. "
+            "Vuelve a subirlo en el **Agente Organizador**."
+        )
+        return
+
+    umbral = float(getattr(_cnt_config, "FIDELITY_THRESHOLD", 0.85))
+    ejecucion_id = _db_crear_ejecucion_contenido(asignatura_id)
+    accion = "Regenerando" if regenerar else "Curando"
+    with st.status(f"{accion} bloque: {tema_nombre}…", expanded=True) as status:
+        try:
+            md_bloque, fidelidad, _ = _cnt_curar_bloque(
+                tema_nombre=tema_nombre,
+                rutas_material=[ruta_material],
+                nombre_archivo=nombre_archivo,
+            )
+            if not md_bloque.strip():
+                raise ValueError("No se pudo extraer ni curar contenido del material.")
+            db.actualizar_tema_input_id(tema_id, material_sel["id"], RUTA_DB)
+            if regenerar:
+                db.regenerar_contenido_tema_borrador(tema_id, md_bloque, RUTA_DB)
+            else:
+                db.upsert_contenido_tema_borrador(tema_id, md_bloque, RUTA_DB)
+            if fidelidad is not None and fidelidad < umbral:
+                _db_registrar_validacion(
+                    ejecucion_id=ejecucion_id,
+                    tipo="fidelidad_baja",
+                    descripcion=f"bloque '{tema_nombre}' con fidelidad media {fidelidad}",
+                    valor_afectado=fidelidad,
+                    bloqueante=0,
+                )
+            label = f"✅ Borrador listo: {tema_nombre}"
+            if fidelidad is not None and fidelidad < umbral:
+                label += f" (fidelidad {fidelidad} < {umbral})"
+            status.update(label=label, state="complete")
+            _db_actualizar_ejecucion(ejecucion_id, "completado")
+        except Exception as err:
+            _db_actualizar_ejecucion(ejecucion_id, "error")
+            status.update(label="❌ Error", state="error")
+            st.error(f"Error al generar el bloque: {err}")
+            return
+
+    st.session_state.pop(f"cnt_md_{tema_id}", None)
+    st.rerun()
 
 
 def _cnt_etiqueta_modificacion(ct: dict | None) -> str:
@@ -1025,8 +1132,31 @@ def _vista_contenido() -> None:
     tema_id: int = tema["id"]
     tema_nombre: str = tema["nombre"]
 
+    materiales_teoria = _db_cnt_get_materiales_teoria(asignatura_id)
+    material_sel: dict | None = None
+    if materiales_teoria:
+        sugerido_id = _cnt_sugerir_material_id(tema, materiales_teoria)
+        ids = [m["id"] for m in materiales_teoria]
+        default_idx = ids.index(sugerido_id) if sugerido_id in ids else 0
+        mat_idx = st.selectbox(
+            "Material de teoría para este bloque:",
+            options=range(len(materiales_teoria)),
+            format_func=lambda i: _cnt_etiqueta_material(materiales_teoria[i]),
+            index=default_idx,
+            key=f"cnt_material_{tema_id}",
+            help=(
+                "Confirma qué PDF o PPTX corresponde a este bloque antes de generar. "
+                "La selección se guarda al generar el borrador."
+            ),
+        )
+        material_sel = materiales_teoria[mat_idx]
+    else:
+        st.warning(
+            "No hay materiales de teoría registrados. "
+            "Sube los archivos en el **Agente Organizador** primero."
+        )
+
     subbloques = _db_cnt_get_subbloques(tema_id)
-    rutas_material = _db_cnt_get_rutas_material(tema_id)
     ct = _db_cnt_get_contenido_tema(tema_id)
     estado = ct["estado"] if ct else "pendiente"
     texto_md = _cnt_markdown_visible(ct)
@@ -1069,15 +1199,18 @@ def _vista_contenido() -> None:
 
     # ── Generación del borrador ─────────────────────────────────────────────
     if ct is None:
-        if not rutas_material:
-            st.warning(
-                "No hay materiales de teoría en disco. "
-                "Sube los archivos en el **Agente Organizador** primero."
+        if not material_sel:
+            pass
+        elif not fichero_existe(material_sel.get("ruta_disco") or ""):
+            st.error(
+                f"El archivo **{material_sel['nombre_fichero']}** no está en disco. "
+                "Vuelve a subirlo en el **Agente Organizador**."
             )
         else:
             st.markdown("**Generar markdown del bloque**")
             st.caption(
-                "Extrae y estructura todo el material del bloque en un único documento Markdown."
+                f"Se procesará **{material_sel['nombre_fichero']}** para el bloque "
+                f"«{tema_nombre}». Comprueba que la selección es correcta."
             )
             if st.button(
                 "Generar borrador del bloque",
@@ -1085,35 +1218,13 @@ def _vista_contenido() -> None:
                 use_container_width=True,
                 key="cnt_btn_generar_bloque",
             ):
-                umbral = float(getattr(_cnt_config, "FIDELITY_THRESHOLD", 0.85))
-                ejecucion_id = _db_crear_ejecucion_contenido(asignatura_id)
-                with st.status(f"Curando bloque: {tema_nombre}…", expanded=True) as status:
-                    try:
-                        md_bloque, fidelidad, _ = _cnt_curar_bloque(
-                            tema_nombre=tema_nombre,
-                            rutas_material=rutas_material,
-                        )
-                        if not md_bloque.strip():
-                            raise ValueError("No se pudo extraer ni curar contenido del material.")
-                        db.upsert_contenido_tema_borrador(tema_id, md_bloque, RUTA_DB)
-                        if fidelidad is not None and fidelidad < umbral:
-                            _db_registrar_validacion(
-                                ejecucion_id=ejecucion_id,
-                                tipo="fidelidad_baja",
-                                descripcion=f"bloque '{tema_nombre}' con fidelidad media {fidelidad}",
-                                valor_afectado=fidelidad,
-                                bloqueante=0,
-                            )
-                        label = f"✅ Borrador listo: {tema_nombre}"
-                        if fidelidad is not None and fidelidad < umbral:
-                            label += f" (fidelidad {fidelidad} < {umbral})"
-                        status.update(label=label, state="complete")
-                        _db_actualizar_ejecucion(ejecucion_id, "completado")
-                    except Exception as err:
-                        _db_actualizar_ejecucion(ejecucion_id, "error")
-                        status.update(label="❌ Error", state="error")
-                        st.error(f"Error al generar el bloque: {err}")
-                st.rerun()
+                _cnt_generar_bloque_desde_material(
+                    asignatura_id,
+                    tema_id,
+                    tema_nombre,
+                    material_sel,
+                    regenerar=False,
+                )
 
     # ── Edición y aprobación del bloque ─────────────────────────────────────
     if ct is not None:
@@ -1130,6 +1241,35 @@ def _vista_contenido() -> None:
             etiqueta = f"✅ Aprobado — {nota}/10 — {mod}" if nota else f"✅ Aprobado — {mod}"
 
         st.markdown(f"**Contenido del bloque** — {etiqueta}")
+        if material_sel:
+            st.caption(f"Material de teoría: **{material_sel['nombre_fichero']}**")
+
+        if material_sel:
+            with st.expander("Regenerar contenido desde el material"):
+                st.caption(
+                    f"Vuelve a procesar **{material_sel['nombre_fichero']}** y sustituye "
+                    "el markdown actual por un borrador nuevo."
+                )
+                if estado == "aprobado":
+                    st.warning(
+                        "Este bloque está aprobado. La regeneración anula la aprobación "
+                        "y las ediciones guardadas."
+                    )
+                elif estado == "editado":
+                    st.info("Se perderán las ediciones manuales no aprobadas.")
+                if st.button(
+                    "🔄 Regenerar borrador",
+                    key=f"cnt_btn_regenerar_{tema_id}",
+                    type="secondary",
+                    use_container_width=True,
+                ):
+                    _cnt_generar_bloque_desde_material(
+                        asignatura_id,
+                        tema_id,
+                        tema_nombre,
+                        material_sel,
+                        regenerar=True,
+                    )
 
         ta_key = f"cnt_md_{tema_id}"
         if ta_key not in st.session_state:
@@ -1442,10 +1582,7 @@ def _vista_presentacion() -> None:
     html_preview = taller.get("html") or ""
     if html_preview:
         st.markdown("**Vista previa**")
-        preview_page = _prs_generador_html._construir_pagina(
-            [(taller.get("titulo") or "Preview", html_preview)],
-            titulo_tema=f"{tema_nombre} — preview",
-        )
+        preview_page = _prs_generador_html._envolver_preview_taller(html_preview)
         st.components.v1.html(preview_page, height=480, scrolling=True)
 
         sugerida = _prs_workshop.sugerir_seccion_ancla(

@@ -1277,6 +1277,32 @@ def generar_bloque_con_visualizacion(
 # Assembly: wrap blocks in the HTML page container
 # ---------------------------------------------------------------------------
 
+_PREVIEW_TALLER_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Preview</title>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; padding: 1rem; background: #ffffff; color: #1a1a1a; }
+  </style>
+</head>
+<body>
+<!--FRAGMENT-->
+</body>
+</html>
+"""
+
+
+def _envolver_preview_taller(html_fragment: str) -> str:
+    """Envoltorio mínimo para la vista previa del taller (sin formato institucional)."""
+    return _PREVIEW_TALLER_TEMPLATE.replace("<!--FRAGMENT-->", html_fragment)
+
+
 def _construir_pagina(bloques: list[tuple[str, str]], titulo: str) -> str:
     """Wrap generated HTML blocks in the full page container.
 

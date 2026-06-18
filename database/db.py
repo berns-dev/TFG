@@ -490,6 +490,28 @@ def seed_asignaturas(ruta=RUTA_DB_POR_DEFECTO) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Vínculo bloque temático → material de teoría
+# ---------------------------------------------------------------------------
+
+
+def actualizar_tema_input_id(
+    tema_id: int,
+    input_id: int | None,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> None:
+    """Actualiza el PDF/PPTX de teoría asociado a un bloque temático."""
+    conn = get_connection(ruta)
+    try:
+        conn.execute(
+            "UPDATE temas SET input_id = ? WHERE id = ?",
+            (input_id, tema_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # CRUD de contenido curado por bloque temático (v7)
 # ---------------------------------------------------------------------------
 
@@ -523,6 +545,35 @@ def upsert_contenido_tema_borrador(
         if existe:
             conn.execute(
                 "UPDATE contenido_tema SET markdown_borrador = ?, estado = 'generado', "
+                "fecha_actualizacion = CURRENT_TIMESTAMP WHERE tema_id = ?",
+                (markdown_borrador, tema_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO contenido_tema (tema_id, markdown_borrador, estado) "
+                "VALUES (?, ?, 'generado')",
+                (tema_id, markdown_borrador),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def regenerar_contenido_tema_borrador(
+    tema_id: int,
+    markdown_borrador: str,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> None:
+    """Sustituye el borrador y revierte ediciones/aprobación previas del bloque."""
+    conn = get_connection(ruta)
+    try:
+        existe = conn.execute(
+            "SELECT id FROM contenido_tema WHERE tema_id = ?", (tema_id,)
+        ).fetchone()
+        if existe:
+            conn.execute(
+                "UPDATE contenido_tema SET markdown_borrador = ?, markdown_final = NULL, "
+                "porcentaje_editado = NULL, puntuacion_profesor = NULL, estado = 'generado', "
                 "fecha_actualizacion = CURRENT_TIMESTAMP WHERE tema_id = ?",
                 (markdown_borrador, tema_id),
             )
