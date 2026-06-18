@@ -273,6 +273,87 @@ def init_db(ruta=RUTA_DB_POR_DEFECTO) -> int:
         conn.close()
 
 
+def crear_asignatura(nombre: str, ruta=RUTA_DB_POR_DEFECTO) -> int:
+    """Inserta una asignatura nueva y devuelve su id.
+
+    Raises:
+        ValueError: si el nombre está vacío o ya existe en la BD.
+    """
+    nombre_limpio = nombre.strip()
+    if not nombre_limpio:
+        raise ValueError("El nombre de la asignatura no puede estar vacío.")
+    conn = get_connection(ruta)
+    try:
+        cur = conn.execute(
+            "INSERT INTO asignaturas (nombre) VALUES (?)",
+            (nombre_limpio,),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    except sqlite3.IntegrityError:
+        raise ValueError(f"Ya existe una asignatura con el nombre «{nombre_limpio}».")
+    finally:
+        conn.close()
+
+
+def listar_asignaturas_portfolio(ruta=RUTA_DB_POR_DEFECTO) -> list[dict]:
+    """Datos agregados de cada asignatura para la vista portfolio."""
+    conn = get_connection(ruta)
+    try:
+        filas = conn.execute(
+            "SELECT id, nombre FROM asignaturas ORDER BY id"
+        ).fetchall()
+        resultado: list[dict] = []
+        for fila in filas:
+            aid = fila["id"]
+            n_guia = conn.execute(
+                "SELECT COUNT(*) FROM inputs "
+                "WHERE asignatura_id = ? AND tipo = 'guia_docente'",
+                (aid,),
+            ).fetchone()[0]
+            n_materiales = conn.execute(
+                "SELECT COUNT(*) FROM inputs "
+                "WHERE asignatura_id = ? AND tipo = 'material_teoria'",
+                (aid,),
+            ).fetchone()[0]
+            ultima = conn.execute(
+                "SELECT MAX(fecha_inicio) FROM ejecuciones WHERE asignatura_id = ?",
+                (aid,),
+            ).fetchone()[0]
+            resultado.append({
+                "id": aid,
+                "nombre": fila["nombre"],
+                "n_guia": n_guia,
+                "n_materiales": n_materiales,
+                "n_inputs": n_guia + n_materiales,
+                "ultima_ejecucion": ultima,
+                "progreso": get_progreso_asignatura(aid, ruta),
+            })
+        return resultado
+    finally:
+        conn.close()
+
+
+def listar_inputs_asignatura(
+    asignatura_id: int,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> list[dict]:
+    """Devuelve los inputs registrados de una asignatura, más recientes primero."""
+    conn = get_connection(ruta)
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id, tipo, nombre_fichero, ruta_disco, fecha_subida "
+                "FROM inputs WHERE asignatura_id = ? "
+                "ORDER BY fecha_subida DESC, id DESC",
+                (asignatura_id,),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
 def seed_asignaturas(ruta=RUTA_DB_POR_DEFECTO) -> int:
     """Inserta las tres asignaturas conocidas sin duplicar las ya existentes.
 

@@ -24,12 +24,23 @@ import streamlit as st
 # =============================================================================
 
 RAIZ_MONOREPO = str(Path(__file__).resolve().parent.parent)
+RAIZ_APP = str(Path(__file__).resolve().parent)
 RAIZ_ORGANIZADOR = os.path.join(RAIZ_MONOREPO, "agente-organizador")
 
 if RAIZ_MONOREPO not in sys.path:
     sys.path.insert(0, RAIZ_MONOREPO)
+if RAIZ_APP not in sys.path:
+    sys.path.insert(0, RAIZ_APP)
 
 from database import db  # noqa: E402
+from ui.portfolio import render_portfolio  # noqa: E402
+from ui.sidebar import (  # noqa: E402
+    render_marca,
+    render_sidebar_portfolio,
+    render_sidebar_workspace,
+)
+from ui.theme import inject_theme  # noqa: E402
+from utils import fichero_existe  # noqa: E402
 
 RUTA_DB = os.path.join(RAIZ_MONOREPO, "data", "tfg.db")
 
@@ -1262,7 +1273,7 @@ def _vista_contenido() -> None:
 
     asignatura = st.session_state.get("asignatura_actual")
     if not asignatura:
-        st.warning("Selecciona una asignatura en la barra lateral para comenzar.")
+        st.warning("Selecciona una asignatura en el portfolio para comenzar.")
         return
 
     asignatura_id = _get_asignatura_id(asignatura)
@@ -1828,7 +1839,7 @@ def _vista_presentacion() -> None:
 
     asignatura = st.session_state.get("asignatura_actual")
     if not asignatura:
-        st.warning("Selecciona una asignatura en la barra lateral para comenzar.")
+        st.warning("Selecciona una asignatura en el portfolio para comenzar.")
         return
 
     asignatura_id = _get_asignatura_id(asignatura)
@@ -2512,24 +2523,6 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
             st.rerun()
 
 
-def _render_asignatura_activa_banner(asignatura: str) -> None:
-    """Muestra de forma destacada la asignatura a la que se asociarán los archivos subidos."""
-    nombre = html.escape(asignatura)
-    st.markdown(
-        f"""
-        <div class="asignatura-activa-banner">
-            <div class="barra"></div>
-            <div class="cuerpo">
-                <div class="etiqueta">Los archivos se asociarán a</div>
-                <div class="nombre">{nombre}</div>
-                <div class="aviso">Comprueba que es la asignatura correcta antes de subir archivos.</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def _render_valoracion_profesor(
     asignatura_id: int,
     agente: str,
@@ -2568,7 +2561,7 @@ def _vista_organizador() -> None:
 
     asignatura = st.session_state.get("asignatura_actual")
     if not asignatura:
-        st.warning("Selecciona una asignatura en la barra lateral para comenzar.")
+        st.warning("Selecciona una asignatura en el portfolio para comenzar.")
         return
 
     asignatura_id = _get_asignatura_id(asignatura)
@@ -2592,7 +2585,6 @@ def _vista_organizador() -> None:
     _render_stepper(["Guía docente", "Organización"], _paso_org)
 
     # ── Uploaders ──────────────────────────────────────────────────────────────
-    _render_asignatura_activa_banner(asignatura)
     st.markdown(
         "<div style='font-family:\"DM Sans\",sans-serif; font-size:11px; font-weight:500; "
         "color:var(--text-color); opacity:0.55; letter-spacing:0.1em; text-transform:uppercase; "
@@ -2888,7 +2880,7 @@ def _db_resumen_avisos(asignatura_id: int) -> list[dict]:
 def _vista_resumen() -> None:
     asignatura = st.session_state.get("asignatura_actual")
     if not asignatura:
-        st.warning("Selecciona una asignatura en la barra lateral para comenzar.")
+        st.warning("Selecciona una asignatura en el portfolio para comenzar.")
         return
 
     asignatura_id = _get_asignatura_id(asignatura)
@@ -2998,6 +2990,53 @@ def _vista_resumen() -> None:
 
 
 # =============================================================================
+# Vista Inputs — archivos registrados de la asignatura activa
+# =============================================================================
+
+def _render_tabla_inputs(filas: list[dict], vacio: str) -> None:
+    if not filas:
+        st.caption(vacio)
+        return
+    h1, h2, h3 = st.columns([2.2, 1.2, 1])
+    h1.markdown('<div class="inputs-tabla-header">Archivo</div>', unsafe_allow_html=True)
+    h2.markdown('<div class="inputs-tabla-header">Subido</div>', unsafe_allow_html=True)
+    h3.markdown('<div class="inputs-tabla-header">En disco</div>', unsafe_allow_html=True)
+    for fila in filas:
+        c1, c2, c3 = st.columns([2.2, 1.2, 1])
+        c1.markdown(f'<span class="file-chip">{html.escape(fila["nombre_fichero"])}</span>', unsafe_allow_html=True)
+        c2.caption(fila.get("fecha_subida") or "—")
+        if fichero_existe(fila.get("ruta_disco") or ""):
+            c3.caption("✅ Disponible")
+        else:
+            c3.caption("⚠️ No encontrado")
+
+
+def _vista_inputs() -> None:
+    asignatura = st.session_state.get("asignatura_actual")
+    if not asignatura:
+        st.warning("Selecciona una asignatura en el portfolio para comenzar.")
+        return
+
+    asignatura_id = _get_asignatura_id(asignatura)
+    if asignatura_id is None:
+        st.error("Asignatura no encontrada en la base de datos.")
+        return
+
+    inputs = db.listar_inputs_asignatura(asignatura_id, RUTA_DB)
+    guias = [i for i in inputs if i["tipo"] == "guia_docente"]
+    materiales = [i for i in inputs if i["tipo"] == "material_teoria"]
+
+    st.markdown('<div class="inputs-seccion-titulo">Guía docente</div>', unsafe_allow_html=True)
+    _render_tabla_inputs(guias, "No hay guía docente registrada todavía.")
+
+    st.markdown('<div class="inputs-seccion-titulo">Materiales de teoría</div>', unsafe_allow_html=True)
+    _render_tabla_inputs(materiales, "No hay materiales de teoría registrados todavía.")
+
+    st.divider()
+    st.caption("Para subir o actualizar archivos, ve al **Agente Organizador**.")
+
+
+# =============================================================================
 # Vista Base de datos — navegador de solo lectura del esquema SQLite
 # =============================================================================
 
@@ -3097,161 +3136,48 @@ _preparar_bd()
 # CSS — identidad visual compartida
 # =============================================================================
 
-st.markdown(
-    f"""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500&family=DM+Sans:wght@400;500&display=swap');
-
-    .marca {{
-        display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
-    }}
-    .marca .icono {{
-        width: 34px; height: 34px; border-radius: 8px; background: {ACENTO}; flex-shrink: 0;
-    }}
-    .marca .nombre {{
-        font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 500;
-        color: var(--text-color); line-height: 1.1;
-    }}
-    .marca .sub {{
-        font-family: 'DM Sans', sans-serif; font-size: 10px;
-        color: var(--text-color); opacity: 0.5;
-        letter-spacing: 0.12em; text-transform: uppercase;
-    }}
-    section[data-testid="stSidebar"] div[data-testid="stRadio"] > div[role="radiogroup"] {{
-        display: flex !important; flex-direction: column !important; gap: 2px !important;
-    }}
-    section[data-testid="stSidebar"] div[data-testid="stRadio"] input[type="radio"] {{
-        display: none !important;
-    }}
-    section[data-testid="stSidebar"] div[data-testid="stRadio"] label {{
-        display: flex !important; align-items: center !important;
-        padding: 9px 12px !important; border-radius: 8px !important;
-        background: transparent !important; border: none !important;
-        width: 100% !important; cursor: pointer !important;
-        font-family: 'DM Sans', sans-serif !important; font-size: 13px !important;
-        color: var(--text-color) !important; opacity: 0.65;
-        font-weight: 400 !important; margin: 0 !important;
-    }}
-    section[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {{
-        background: rgba(24, 95, 165, 0.06) !important; opacity: 1 !important;
-    }}
-    section[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) {{
-        background: rgba(24, 95, 165, 0.10) !important; color: {ACENTO} !important;
-        opacity: 1 !important; font-weight: 500 !important;
-    }}
-    section[data-testid="stSidebar"] div[data-testid="stRadio"] label p {{
-        margin: 0 !important; line-height: 1.4 !important;
-    }}
-    .file-chip {{
-        display: inline-block; padding: 3px 10px; margin: 2px 4px 2px 0;
-        border-radius: 12px; background: rgba(24, 95, 165, 0.08);
-        color: {ACENTO_OSCURO}; font-family: 'DM Sans', sans-serif; font-size: 12px;
-    }}
-    .seccion {{
-        display: flex; align-items: center; gap: 12px; margin: 4px 0 18px 0;
-    }}
-    .seccion .barra {{
-        width: 3px; height: 30px; background: {ACENTO}; border-radius: 2px; flex-shrink: 0;
-    }}
-    .seccion .titulo {{
-        font-family: 'Playfair Display', serif; font-size: 26px; font-weight: 500;
-        color: var(--text-color); line-height: 1.1;
-    }}
-    .asignatura-activa-banner {{
-        display: flex; align-items: stretch; gap: 14px;
-        margin: 0 0 16px 0; padding: 14px 18px;
-        border-radius: 10px;
-        background: rgba(24, 95, 165, 0.10);
-        border: 1px solid rgba(24, 95, 165, 0.22);
-    }}
-    .asignatura-activa-banner .barra {{
-        width: 4px; border-radius: 2px; background: {ACENTO}; flex-shrink: 0;
-    }}
-    .asignatura-activa-banner .etiqueta {{
-        font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 500;
-        letter-spacing: 0.1em; text-transform: uppercase;
-        color: {ACENTO_OSCURO}; opacity: 0.85; margin-bottom: 4px;
-    }}
-    .asignatura-activa-banner .nombre {{
-        font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 500;
-        color: {ACENTO_OSCURO}; line-height: 1.2; margin-bottom: 6px;
-    }}
-    .asignatura-activa-banner .aviso {{
-        font-family: 'DM Sans', sans-serif; font-size: 13px;
-        color: var(--text-color); opacity: 0.65;
-    }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+inject_theme(ACENTO, ACENTO_OSCURO)
 
 
 # =============================================================================
-# Barra lateral
+# Barra lateral + área principal
 # =============================================================================
 
-def _cargar_asignaturas() -> list[str]:
-    conn = db.get_connection(RUTA_DB)
-    try:
-        filas = conn.execute("SELECT nombre FROM asignaturas ORDER BY id").fetchall()
-    finally:
-        conn.close()
-    return [f["nombre"] for f in filas]
-
+_asignatura_activa = st.session_state.get("asignatura_actual")
 
 with st.sidebar:
+    render_marca()
+    st.divider()
+    if _asignatura_activa:
+        if st.session_state.get("vista_actual") == VISTA_BASE_DATOS:
+            st.session_state["vista_actual"] = VISTAS_NAV[0]
+        render_sidebar_workspace(VISTAS_NAV, ICONOS_VISTA, _asignatura_activa)
+    else:
+        render_sidebar_portfolio(RUTA_DB, RAIZ_MONOREPO)
+
+if not _asignatura_activa:
     st.markdown(
-        """
-        <div class="marca">
-            <div class="icono"></div>
-            <div><div class="nombre">Pipeline</div><div class="sub">TFG</div></div>
-        </div>
-        """,
+        '<div class="seccion"><div class="barra"></div>'
+        '<div class="titulo">Asignaturas</div></div>',
         unsafe_allow_html=True,
     )
-    st.divider()
-
-    asignaturas = _cargar_asignaturas()
-    if asignaturas:
-        st.selectbox("Asignatura", asignaturas, key="asignatura_actual")
-    else:
-        st.caption("No hay asignaturas en la base de datos.")
-
-    st.divider()
-
-    if "vista_actual" not in st.session_state:
-        st.session_state["vista_actual"] = VISTAS_NAV[0]
-    elif st.session_state["vista_actual"] == VISTA_BASE_DATOS:
-        st.session_state["vista_actual"] = VISTAS_NAV[0]
-
-    vista = st.radio(
-        "Navegación",
-        VISTAS_NAV,
-        key="vista_actual",
-        label_visibility="collapsed",
-        format_func=lambda v: f"{ICONOS_VISTA.get(v, '·')} {v}",
-    )
-
-
-# =============================================================================
-# Área principal — despacho de vistas
-# =============================================================================
-
-vista = st.session_state["vista_actual"]
-
-st.markdown(
-    f'<div class="seccion"><div class="barra"></div>'
-    f'<div class="titulo">{TITULOS_SECCION[vista]}</div></div>',
-    unsafe_allow_html=True,
-)
-
-if vista == "Resumen":
-    _vista_resumen()
-elif vista == "Organizador":
-    _vista_organizador()
-elif vista == "Contenido":
-    _vista_contenido()
-elif vista == "Presentación":
-    _vista_presentacion()
+    render_portfolio(RUTA_DB)
 else:
-    st.info("Vista en construcción — se integra en el siguiente paso.")
+    vista = st.session_state["vista_actual"]
+    st.markdown(
+        f'<div class="seccion"><div class="barra"></div>'
+        f'<div class="titulo">{TITULOS_SECCION[vista]}</div></div>',
+        unsafe_allow_html=True,
+    )
+    if vista == "Resumen":
+        _vista_resumen()
+    elif vista == "Inputs":
+        _vista_inputs()
+    elif vista == "Organizador":
+        _vista_organizador()
+    elif vista == "Contenido":
+        _vista_contenido()
+    elif vista == "Presentación":
+        _vista_presentacion()
+    else:
+        st.info("Vista en construcción — se integra en el siguiente paso.")
