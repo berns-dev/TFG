@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Validación — Tecnología de Materiales · Desarrollo de un sistema multiagente con IA para la automatización de la planificación y estandarización del material docente</title>
+<style>
+  :root {
+    --azul: #003366;
+    --azul-medio: #1e4d8c;
+    --azul-claro: #e8eef5;
+    --azul-borde: #c2d0e0;
+    --texto: #1a1a2e;
+    --texto-secundario: #4a5568;
+    --texto-terciario: #8a95a3;
+    --fondo: #f7f9fc;
+    --blanco: #ffffff;
+    --borde: #dde3ec;
+    --verde-output: #0f4d3a;
+    --verde-claro: #e6f2ee;
+    --radio: 8px;
+    --radio-lg: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    background: var(--fondo);
+    color: var(--texto);
+    font-size: 15px;
+    line-height: 1.7;
+  }
+  .site-header {
+    background: var(--azul);
+    padding: 0 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .site-header .logo {
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.9);
+    letter-spacing: 0.02em;
+  }
+  .site-header .logo span {
+    color: rgba(255,255,255,0.5);
+    font-weight: 400;
+    margin-left: 6px;
+  }
+  .header-badge {
+    font-size: 11px;
+    background: rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.8);
+    padding: 3px 10px;
+    border-radius: 20px;
+  }
+  .container {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  .hero {
+    margin-bottom: 3rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--borde);
+  }
+  .asignatura-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--azul-claro);
+    color: var(--azul-medio);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 20px;
+    margin-bottom: 1rem;
+    letter-spacing: 0.03em;
+  }
+  .hero h1 {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--azul);
+    line-height: 1.3;
+    margin-bottom: 0.75rem;
+  }
+  .hero p {
+    font-size: 15px;
+    color: var(--texto-secundario);
+    max-width: 620px;
+  }
+  .section { margin-bottom: 3rem; }
+  .section-eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--azul-medio);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-eyebrow::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--borde);
+  }
+  .context-text {
+    font-size: 15px;
+    color: var(--texto-secundario);
+    line-height: 1.8;
+    margin-bottom: 1.5rem;
+    max-width: 680px;
+  }
+  .pipeline-wrap {
+    background: var(--blanco);
+    border: 1px solid var(--borde);
+    border-radius: var(--radio-lg);
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    overflow-x: auto;
+  }
+  .pipeline-wrap svg { display: block; width: 100%; max-width: 680px; margin: 0 auto; }
+  .agents-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .agent-card {
+    background: var(--blanco);
+    border: 1px solid var(--borde);
+    border-radius: var(--radio-lg);
+    padding: 1.25rem;
+    border-top: 3px solid var(--azul);
+  }
+  .agent-num {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--azul-medio);
+    background: var(--azul-claro);
+    padding: 2px 8px;
+    border-radius: 20px;
+    display: inline-block;
+    margin-bottom: 0.6rem;
+    letter-spacing: 0.05em;
+  }
+  .agent-card h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--azul);
+    margin-bottom: 0.75rem;
+  }
+  .io-row {
+    font-size: 12px;
+    color: var(--texto-terciario);
+    margin-bottom: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .io-val {
+    font-size: 12px;
+    color: var(--texto-secundario);
+    margin-bottom: 0.6rem;
+    line-height: 1.5;
+  }
+  .loop-diagram {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+  }
+  .loop-step {
+    background: var(--azul-claro);
+    color: var(--azul-medio);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 7px;
+    border-radius: var(--radio);
+    white-space: nowrap;
+  }
+  .loop-arrow { color: var(--texto-terciario); font-size: 11px; }
+  .loop-limit {
+    font-size: 10px;
+    color: var(--texto-terciario);
+    margin-top: 4px;
+    display: block;
+  }
+  .video-placeholder {
+    background: var(--blanco);
+    border: 1px solid var(--borde);
+    border-radius: var(--radio-lg);
+    aspect-ratio: 16/9;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    color: var(--texto-terciario);
+    font-size: 14px;
+  }
+  .play-icon {
+    width: 56px;
+    height: 56px;
+    background: var(--azul-claro);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .play-icon svg { width: 22px; height: 22px; fill: var(--azul-medio); margin-left: 3px; }
+  .tema-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 1rem; }
+  .tema-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--verde-claro);
+    color: var(--verde-output);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 20px;
+  }
+  .outputs-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .output-card {
+    background: var(--blanco);
+    border: 1px solid var(--borde);
+    border-radius: var(--radio-lg);
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+  }
+  .output-type {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--texto-terciario);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 0.5rem;
+  }
+  .output-card h4 {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--texto);
+    margin-bottom: 0.35rem;
+  }
+  .output-card p {
+    font-size: 12px;
+    color: var(--texto-secundario);
+    line-height: 1.5;
+    flex: 1;
+    margin-bottom: 1rem;
+  }
+  .dl-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--azul-medio);
+    background: var(--azul-claro);
+    border: 1px solid var(--azul-borde);
+    border-radius: var(--radio);
+    padding: 6px 12px;
+    text-decoration: none;
+    align-self: flex-start;
+  }
+  .dl-btn svg { width: 13px; height: 13px; fill: var(--azul-medio); }
+  .form-card {
+    background: var(--blanco);
+    border: 1px solid var(--borde);
+    border-radius: var(--radio-lg);
+    padding: 2rem;
+  }
+  .form-intro {
+    font-size: 14px;
+    color: var(--texto-secundario);
+    line-height: 1.7;
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--borde);
+  }
+  .question { margin-bottom: 2rem; }
+  .q-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--texto);
+    display: block;
+    margin-bottom: 0.4rem;
+    line-height: 1.5;
+  }
+  .q-sub {
+    font-size: 11px;
+    color: var(--texto-terciario);
+    display: block;
+    margin-bottom: 0.75rem;
+  }
+  .likert { display: flex; gap: 8px; align-items: center; }
+  .likert input[type=radio] { display: none; }
+  .likert label {
+    width: 40px;
+    height: 40px;
+    border: 1.5px solid var(--borde);
+    border-radius: var(--radio);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--texto-secundario);
+    background: var(--fondo);
+  }
+  .likert input[type=radio]:checked + label {
+    background: var(--azul);
+    color: #fff;
+    border-color: var(--azul);
+  }
+  .q-divider { border: none; border-top: 1px solid var(--borde); margin: 1.75rem 0; }
+  .forms-link-block {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--borde);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .forms-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--azul);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 11px 24px;
+    border-radius: var(--radio);
+    text-decoration: none;
+    align-self: flex-start;
+  }
+  .forms-btn svg { width: 15px; height: 15px; fill: #fff; }
+  .forms-note { font-size: 11px; color: var(--texto-terciario); }
+  .site-footer {
+    border-top: 1px solid var(--borde);
+    padding: 1.5rem;
+    text-align: center;
+    font-size: 12px;
+    color: var(--texto-terciario);
+    line-height: 1.7;
+  }
+  .site-footer a { color: var(--azul-medio); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="logo">Universidad de Oviedo <span>· EPI Gijón</span></div>
+  <span class="header-badge">TFG — Sistema Multiagente con IA</span>
+</header>
+
+<div class="container">
+
+  <div class="hero">
+    <div class="asignatura-tag">Tecnología de Materiales</div>
+    <h1>Desarrollo de un sistema multiagente con IA para la automatización de la planificación y estandarización del material docente</h1>
+    <p>Esta página recoge los resultados generados automáticamente a partir del material de su asignatura. Le pedimos que revise los archivos y complete el formulario de valoración al final.</p>
+  </div>
+
+  <div class="section">
+    <div class="section-eyebrow">Sobre el proyecto</div>
+    <p class="context-text">El sistema nace de una pregunta concreta: ¿puede la inteligencia artificial encargarse de la parte mecánica de preparar material docente, de modo que el profesor no tenga que programar ni configurar nada para usarlo? El objetivo no es generar contenido nuevo. El sistema transforma lo que el profesor ya tiene: reorganiza, estructura y formatea sin añadir información que no esté en el material original.</p>
+    <div class="pipeline-wrap">
+      <svg viewBox="0 0 680 540" xmlns="http://www.w3.org/2000/svg" style="font-family:'Segoe UI',Arial,sans-serif;">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M2 1L8 5L2 9" fill="none" stroke="#555" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </marker>
+          <marker id="arrow-dash" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M2 1L8 5L2 9" fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </marker>
+        </defs>
+        <rect x="44" y="36" width="168" height="54" rx="6" fill="#1e3a5f"/>
+        <text font-size="12" font-weight="600" fill="white" x="128" y="58" text-anchor="middle" dominant-baseline="central">Guía docente</text>
+        <text font-size="10" fill="#b0c8e8" x="128" y="76" text-anchor="middle" dominant-baseline="central">PDF</text>
+        <rect x="256" y="36" width="168" height="54" rx="6" fill="#1e3a5f"/>
+        <text font-size="12" font-weight="600" fill="white" x="340" y="58" text-anchor="middle" dominant-baseline="central">Material de teoría</text>
+        <text font-size="10" fill="#b0c8e8" x="340" y="76" text-anchor="middle" dominant-baseline="central">PDF / PPTX</text>
+        <line x1="128" y1="90" x2="128" y2="210" stroke="#555" stroke-width="1" marker-end="url(#arrow)"/>
+        <line x1="280" y1="90" x2="178" y2="210" stroke="#555" stroke-width="1" marker-end="url(#arrow)"/>
+        <line x1="340" y1="90" x2="340" y2="210" stroke="#555" stroke-width="1" marker-end="url(#arrow)"/>
+        <line x1="400" y1="90" x2="530" y2="210" stroke="#555" stroke-width="1" marker-end="url(#arrow)"/>
+        <rect x="44" y="210" width="168" height="106" rx="8" fill="#f4f4f4" stroke="#999" stroke-width="1.2"/>
+        <text font-size="12" font-weight="600" fill="#222" x="128" y="246" text-anchor="middle" dominant-baseline="central">Agente Organizador</text>
+        <text font-size="10" fill="#555" x="128" y="268" text-anchor="middle" dominant-baseline="central">Extrae temas</text>
+        <text font-size="10" fill="#555" x="128" y="284" text-anchor="middle" dominant-baseline="central">y distribución horaria</text>
+        <rect x="256" y="210" width="168" height="106" rx="8" fill="#f4f4f4" stroke="#999" stroke-width="1.2"/>
+        <text font-size="12" font-weight="600" fill="#222" x="340" y="246" text-anchor="middle" dominant-baseline="central">Agente Contenido</text>
+        <text font-size="10" fill="#555" x="340" y="268" text-anchor="middle" dominant-baseline="central">Convierte PDF/PPTX</text>
+        <text font-size="10" fill="#555" x="340" y="284" text-anchor="middle" dominant-baseline="central">a Markdown estructurado</text>
+        <rect x="468" y="210" width="168" height="106" rx="8" fill="#f4f4f4" stroke="#999" stroke-width="1.2"/>
+        <text font-size="12" font-weight="600" fill="#222" x="552" y="246" text-anchor="middle" dominant-baseline="central">Agente Presentación</text>
+        <text font-size="10" fill="#555" x="552" y="268" text-anchor="middle" dominant-baseline="central">Genera PDF + HTML</text>
+        <text font-size="10" fill="#555" x="552" y="284" text-anchor="middle" dominant-baseline="central">interactivo con gráficas</text>
+        <line x1="128" y1="316" x2="128" y2="400" stroke="#555" stroke-width="1" marker-end="url(#arrow)"/>
+        <line x1="340" y1="316" x2="340" y2="400" stroke="#555" stroke-width="1" marker-end="url(#arrow)"/>
+        <line x1="552" y1="316" x2="552" y2="400" stroke="#555" stroke-width="1" marker-end="url(#arrow)"/>
+        <rect x="44" y="400" width="168" height="54" rx="6" fill="#1a5f4a"/>
+        <text font-size="12" font-weight="600" fill="white" x="128" y="421" text-anchor="middle" dominant-baseline="central">Estructura temática</text>
+        <text font-size="10" fill="#a8d8c8" x="128" y="439" text-anchor="middle" dominant-baseline="central">Markdown</text>
+        <rect x="256" y="400" width="168" height="54" rx="6" fill="#1a5f4a"/>
+        <text font-size="12" font-weight="600" fill="white" x="340" y="421" text-anchor="middle" dominant-baseline="central">Contenido curado</text>
+        <text font-size="10" fill="#a8d8c8" x="340" y="439" text-anchor="middle" dominant-baseline="central">Markdown estructurado</text>
+        <rect x="468" y="400" width="168" height="54" rx="6" fill="#1a5f4a"/>
+        <text font-size="12" font-weight="600" fill="white" x="552" y="421" text-anchor="middle" dominant-baseline="central">PDF + HTML interactivo</text>
+        <text font-size="10" fill="#a8d8c8" x="552" y="439" text-anchor="middle" dominant-baseline="central">Informe y visualización</text>
+        <path d="M 128 454 L 128 490 L 240 490 L 240 263 L 256 263" fill="none" stroke="#888" stroke-width="1" marker-end="url(#arrow-dash)" stroke-dasharray="5 3"/>
+        <text font-size="9" fill="#888" x="172" y="505" text-anchor="middle" dominant-baseline="central">estructura temática</text>
+        <path d="M 340 454 L 340 490 L 452 490 L 452 263 L 468 263" fill="none" stroke="#888" stroke-width="1" marker-end="url(#arrow-dash)" stroke-dasharray="5 3"/>
+        <text font-size="9" fill="#888" x="396" y="505" text-anchor="middle" dominant-baseline="central">contenido curado</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-eyebrow">Los tres agentes</div>
+    <div class="agents-grid">
+      <div class="agent-card">
+        <span class="agent-num">Agente 1</span>
+        <h3>Organizador</h3>
+        <div class="io-row">↓ Entrada</div>
+        <div class="io-val">Guía docente + materiales de teoría</div>
+        <div class="io-row">↓ Salida</div>
+        <div class="io-val">Distribución temática con horas por bloque</div>
+        <div class="loop-diagram">
+          <span class="loop-step">Genera</span>
+          <span class="loop-arrow">→</span>
+          <span class="loop-step">Revisa</span>
+          <span class="loop-arrow">→</span>
+          <span class="loop-step">Ajusta</span>
+          <span class="loop-arrow">↺</span>
+        </div>
+        <span class="loop-limit">El profesor refina en lenguaje natural · hasta 5 iteraciones</span>
+      </div>
+      <div class="agent-card">
+        <span class="agent-num">Agente 2</span>
+        <h3>Contenido</h3>
+        <div class="io-row">↓ Entrada</div>
+        <div class="io-val">PDF o PPTX del tema + output del Agente 1</div>
+        <div class="io-row">↓ Salida</div>
+        <div class="io-val">Markdown estructurado, calibrado por horas lectivas y validado por fidelidad</div>
+      </div>
+      <div class="agent-card">
+        <span class="agent-num">Agente 3</span>
+        <h3>Presentación</h3>
+        <div class="io-row">↓ Entrada</div>
+        <div class="io-val">Markdown del Agente 2</div>
+        <div class="io-row">↓ Salida</div>
+        <div class="io-val">PDF académico con formato institucional + HTML con visualizaciones interactivas</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-eyebrow">Demostración</div>
+    <div class="video-placeholder">
+      <div class="play-icon">
+        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      </div>
+      <span>Vídeo de demostración — disponible próximamente</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-eyebrow">Resultados generados a partir de su material</div>
+    <div class="tema-pills">
+      <!-- temas por determinar -->
+    </div>
+    <div class="outputs-grid">
+      <div class="output-card">
+  <div class="output-type">Agente Organizador</div>
+  <h4>Propuesta de distribución temática</h4>
+  <p>Bloques y horas lectivas extraídos de la guía docente.</p>
+  <a class="dl-btn" href="outputs/Propuesta_Tecnologia_de_Materiales.md" download>
+    <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    Descargar .md
+  </a>
+</div>
+<div class="output-card">
+  <div class="output-type">Agente Contenido</div>
+  <h4>Markdown estructurado</h4>
+  <p>Contenido del tema curado y calibrado según las horas lectivas.</p>
+  <a class="dl-btn" href="outputs/contenido-tema.md" download>
+    <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    Descargar .md
+  </a>
+</div>
+<div class="output-card">
+  <div class="output-type">Agente Presentación</div>
+  <h4>PDF académico</h4>
+  <p>Documento con formato institucional generado a partir del Markdown.</p>
+  <a class="dl-btn" href="outputs/presentacion-tema.pdf" download>
+    <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    Descargar .pdf
+  </a>
+</div>
+<div class="output-card">
+  <div class="output-type">Agente Presentación</div>
+  <h4>HTML interactivo</h4>
+  <p>Página con visualizaciones y controles para las relaciones matemáticas del tema.</p>
+  <a class="dl-btn" href="outputs/presentacion-tema.html" download>
+    <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    Descargar .html
+  </a>
+</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-eyebrow">Formulario de valoración</div>
+    <div class="form-card">
+      <p class="form-intro">Le recomendamos revisar primero el PDF y el HTML antes de responder. A continuación encontrará un breve formulario de valoración sobre el output generado a partir del material de su asignatura. No hay respuestas correctas o incorrectas.</p>
+      <div class="forms-link-block">
+        <a class="forms-btn" href="https://forms.gle/ajm2huzeHv5EDEHe8" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          Abrir formulario completo
+        </a>
+        <span class="forms-note">Se abre en una pestaña nueva · sus respuestas quedan registradas automáticamente</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<footer class="site-footer">
+  TFG — Desarrollo de un sistema multiagente con IA &nbsp;·&nbsp; Universidad de Oviedo · EPI Gijón<br>
+  <a href="https://github.com/berns-dev/TFG" target="_blank" rel="noopener">github.com/berns-dev/TFG</a>
+</footer>
+
+</body>
+</html>

@@ -80,17 +80,14 @@ directamente. Detalle en `agente-organizador/CLAUDE.md`.
 ### Contenido → `agente-contenido/pipeline.py`
 
 La orquestación del pipeline (chunk → classify en paralelo → assemble → validate)
-vive en `pipeline.py` como función importable `procesar_segmento()`. Tanto el
-standalone (`agente-contenido/app.py`) como `app-unificada` la usan:
+vive en `pipeline.py` como función importable `procesar_segmento()`. Solo
+`app-unificada` la usa (los standalone fueron eliminados en junio 2026):
 
-- Standalone: `_process_subbloque()` llama a `procesar_segmento()` y envuelve
-  el resultado en `SubbloqueResult` con avisos Streamlit.
 - App-unificada: `_cnt_curar_subbloque()` llama a `procesar_segmento()` y
   extrae la fidelidad media para guardar en BD.
 
 El markdown que produce `procesar_segmento()` usa `assemble_subbloque_body()` —
-cuerpo sin frontmatter YAML, con H1 del nombre del subbloque. Esto es igual en
-ambas interfaces y es lo que el profesor ve en el editor de texto de la app.
+cuerpo sin frontmatter YAML, con H1 del nombre del subbloque.
 
 ### Presentación → `agente-presentacion/generador_html.py`
 
@@ -102,13 +99,11 @@ razonador, porque el patrón ya lo eligió el profesor) y delega en `_generar_bl
 
 La distinción razonador vs. sin razonador se expresa como un parámetro opcional
 `visualizacion: dict | None = None` en `_generar_bloque`: si se pasa, se omite
-el paso del razonador; si no, el flujo normal del standalone lo computa.
+el paso del razonador; si no, el flujo normal lo computa.
 
 La edición de la organización en **app-unificada** es una vista única interactiva
-(tabla por bloque/subbloque); el standalone conserva el editor en expander. En ambas
-solo en fase de revisión; una vez cerrada/confirmada la organización
-(en la unificada, al confirmarla se persiste a BD para Contenido), la estructura
-queda congelada y se ocultan tanto la edición manual como el refinamiento por prompt.
+(tabla por bloque/subbloque). Una vez confirmada, la estructura queda congelada y
+se ocultan tanto la edición manual como el refinamiento por prompt.
 
 ---
 
@@ -181,11 +176,11 @@ TFG/
 ├── agente-organizador/
 │   ├── CLAUDE.md                 ← contexto específico del Agente Organizador
 │   ├── README.md
-│   ├── app.py                    ← UI standalone (solo interfaz; importa de parser.py)
-│   ├── agente.py
+│   ├── agente.py                 ← cliente Anthropic, ejecutar_agente()
 │   ├── parser.py                 ← FUENTE DE VERDAD importable: toda la lógica pura
-│   │                                (horas, normalización, conteo, parseo/serialización)
-│   ├── prompts.py
+│   │                                (horas, normalización, conteo, parseo/serialización,
+│   │                                 detección de señales estructurales PDF/PPTX)
+│   ├── org_prompts.py            ← construir_prompt(), construir_prompt_refinamiento()
 │   ├── requirements.txt
 │   ├── .env.example
 │   ├── .gitignore
@@ -193,7 +188,6 @@ TFG/
 ├── agente-contenido/
 │   ├── CLAUDE.md                 ← contexto específico del Agente Contenido
 │   ├── README.md
-│   ├── app.py
 │   ├── classifier.py
 │   ├── chunker.py
 │   ├── extractor.py
@@ -204,7 +198,7 @@ TFG/
 │   ├── subblock_state.py         ← SubbloqueResult, calcular_progreso_bloque/asignatura
 │   ├── pipeline.py               ← FUENTE DE VERDAD importable: procesar_segmento()
 │   │                                (chunk→classify en paralelo→assemble→validate)
-│   │                                Usada por app.py standalone y app-unificada
+│   │                                Usada por app-unificada
 │   ├── tools/
 │   │   ├── validate_pdf.py       ← debug CLI (extract → chunk, sin API)
 │   │   └── validate_subbloques.py ← validación pipeline de subbloques (sin API)
@@ -218,7 +212,6 @@ TFG/
 └── agente-presentacion/
     ├── CLAUDE.md                 ← contexto específico del Agente Presentación
     ├── README.md
-    ├── app.py
     ├── detector.py
     ├── generador_pdf.py
     ├── generador_html.py
@@ -263,7 +256,7 @@ Detalle del esquema y APIs: **`database/CLAUDE.md`**.
 
 | Agente/módulo | Estado | Validado con |
 |---------------|--------|-------------|
-| Organizador | Funcional — subbloques anclados a evidencia estructural; edición manual bloques/subbloques en **ambas interfaces** (standalone y app-unificada); fase cerrado/confirmado. Lógica pura centralizada en `parser.py` (fuente de verdad importable); `app-unificada` la consume sin duplicar | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales |
+| Organizador | Funcional — subbloques anclados a evidencia estructural; detección de página índice (Prioridad 3a) + scan visual relativo 20% (Prioridad 3b); Reglas A/B/C/D para eliminar FP en Strategy 1; prompt de horas consolidado; residuo normalización → bloque más grande. Lógica pura en `parser.py`; `app-unificada` la consume sin duplicar. Standalone eliminado. | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales, Frenos |
 | Contenido | Funcional — granularidad de subbloque: segmentación por evidencia, generación por selección (cada sub-bloque = llamada API independiente), valoración 1-10 por sub-bloque, estados pendiente/generado/editado/aprobado | Temas 1 y 2 de Tecnología de Materiales (PDF) |
 | Presentación | Funcional — 3 outputs (PDF institucional UO, HTML interactivo, HTML presentación completa); LaTeX con matplotlib mathtext | Tema 1 (Tec. Materiales), TEMA7 (Elementos de Máquinas) |
 | Base de datos | Esquema v4 — jerarquía asignatura→bloque→subbloque + estado del ciclo de vida + progreso en tiempo real + valoración por agente | Tecnología de Materiales (script `database/validar_esquema.py`) |

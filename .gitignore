@@ -18,3 +18,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime data (generado en ejecución, no versionado)
+data/
+database/tfg.db

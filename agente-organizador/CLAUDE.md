@@ -1,13 +1,13 @@
 # Agente Organizador — Estado del proyecto
 
 **Monorepo:** `berns-dev/TFG`
-**Última actualización:** 2026-06-17
+**Última actualización:** 2026-06-18
 
 ---
 
 ## Propósito
 
-Extrae temas, subbloques y distribución horaria de una asignatura a partir de la guía docente y los materiales de teoría. Produce un Markdown con la distribución temática y las horas asignadas por subbloque.
+Extrae temas, subbloques y distribución horaria de una asignatura a partir de la guía docente y los materiales de teoría. Produce un Markdown con la distribución temática y las horas asignadas por bloque (no por subbloque).
 
 **Principio rector:** Extrae y estructura. No inventa. Si algo no está en el material del profesor, no aparece en el output. Cada subbloque propuesto debe poder justificarse señalando una referencia concreta del documento fuente.
 
@@ -34,12 +34,15 @@ Extrae temas, subbloques y distribución horaria de una asignatura a partir de l
 ## Arquitectura de archivos
 
 ```
-app.py        — UI Streamlit + lógica de sesión + validación + edición manual
-agente.py     — cliente Anthropic, ejecutar_agente()
-parser.py     — TODA la lógica pura importable (ver abajo): extracción de texto,
-                señales estructurales, horas, normalización, parseo/serialización
-prompts.py    — construir_prompt(), construir_prompt_refinamiento()
+agente.py      — cliente Anthropic, ejecutar_agente()
+parser.py      — TODA la lógica pura importable (ver abajo): extracción de texto,
+                 señales estructurales, horas, normalización, parseo/serialización
+org_prompts.py — construir_prompt(), construir_prompt_refinamiento()
 ```
+
+**Nota:** `app.py` standalone fue eliminado (junio 2026). El único punto de entrada de UI
+es `app-unificada/app.py`. `parser.py` y `org_prompts.py` permanecen como módulos puros
+importables por la app unificada.
 
 ### Separación lógica pura ↔ interfaz (fuente de verdad importable)
 
@@ -76,7 +79,7 @@ hacerlas importables).
 3. **Detección de señales estructurales** — `extraer_candidatos_con_evidencia()` en `parser.py`:
    - Prioridad 1: secciones numeradas en el texto (`3.2. Título`) → evidencia = "Sección 3.2"
    - Prioridad 2 (solo PPTX): títulos de diapositiva → evidencia = "Slide N"
-   - Prioridad 3 (solo PDF): títulos visuales por tamaño/estilo de fuente → evidencia = "p. N"
+   - Prioridad 3 (solo PDF): dos fases — (a) detección de página índice → evidencia = "Índice (p. N)"; (b) scan visual por tamaño/estilo de fuente → evidencia = "p. N"
    - Fallback: si ninguna fuente ofrece señal verificable, retorna `[]`; el bloque se trata como un único subbloque
 4. **Detección de horas** — `extraer_horas_docencia()` en `parser.py`
 5. **Generación** — `construir_prompt()` → `ejecutar_agente()` → Sonnet
@@ -98,7 +101,14 @@ unificada. Los subtemas para el prompt se construyen con `_org_build_subtemas_co
 1. **Guía docente** — `extraer_subtemas_guia()` toma los subtemas de la sección `Contenidos` de la guía, excluyendo el boilerplate administrativo (ver filtro de calidad). Si el material no aporta señal propia, se usa esta enumeración.
 2. **Materiales de teoría — secciones numeradas** — encabezados con patrón `\d+(\.\d+)*\. Título` en el texto extraído. Evidencia: `"Sección X.X"`.
 3. **Materiales de teoría — títulos de diapositiva PPTX** — placeholder `idx=0` o primera shape corta (<100 chars, sin saltos). Evidencia: `"Slide N"`. Solo se usa si no hay secciones numeradas.
-4. **Materiales de teoría — títulos visuales PDF** — `extraer_titulos_visuales_pdf()` en `parser.py`. Heurística de frecuencia (SciPlore Xtract): la combinación (fontname, size) más frecuente es el cuerpo; líneas cortas y uniformes con tamaño mayor (+0.5 pt) o nombre de fuente con indicador de peso ("bold"/"bd"/"black"/"heavy") son candidatas a título. Solo se usa para PDF cuando no hay secciones numeradas. Evidencia: `"p. N"`. Este es el camino que resuelve asignaturas como Elementos de Máquinas, donde los títulos no van numerados pero sí en negrita o en tamaño mayor.
+4. **Materiales de teoría — títulos visuales PDF** — `extraer_titulos_visuales_pdf()` en `parser.py`. Solo se usa para PDF cuando no hay secciones numeradas. Implementa **dos fases** en cascada:
+
+   **Fase a — detección de página índice (prioritaria):** `_buscar_candidatos_indice()` recorre las páginas buscando la primera línea prominente de cada página; si coincide con `_INDICE_KEYWORDS_RE` (índice, contenidos, outline, sumario, contents, agenda…), la página es un índice. Las líneas siguientes se recogen como candidatos de alta confianza, filtrando encabezados de bloque-nivel (`_BLOQUE_NIVEL_RE`: tema/bloque/unidad/chapter…). Si se obtienen ≥ 2 candidatos válidos, se devuelven inmediatamente con evidencia `"Índice (p. N)"` sin necesidad de scan visual.
+
+   **Fase b — scan visual (fallback si no hay índice):** heurística SciPlore Xtract: el par (fontname, size) más frecuente en el documento es el cuerpo (excluyendo fuentes math/symbol/dingbat); una línea es título si su estilo dominante difiere del cuerpo — tamaño relativo `> cuerpo_sz × 1.2` (20%, no absoluto) o indicador de peso en fontname ("bold"/"bd"/"black"/"heavy") con tamaño ≥ 90 % del cuerpo. Evidencia: `"p. N"`.
+
+   Constantes de módulo involucradas: `_INDICE_KEYWORDS_RE`, `_BLOQUE_NIVEL_RE`, `_ETIQUETA_LABEL_RE`.
+   Helpers privados: `_es_linea_titulo(palabras_linea, cuerpo_fn, cuerpo_sz)`, `_buscar_candidatos_indice(lineas, alturas_pagina, cuerpo_fn, cuerpo_sz)`.
 5. **Fallback obligatorio** — si ninguna fuente ofrece señal suficientemente verificable, el bloque no se subdivide. Se crea un único subbloque igual al bloque completo y se marca `Evidencia = "Sin señal verificable"`. La interfaz muestra un aviso visible al profesor.
 
 ### Restricción de generación automática
@@ -207,7 +217,21 @@ Sonnet para toda la generación y refinamiento. El razonamiento curricular requi
 ### Código determinista para señales estructurales
 `extraer_candidatos_con_evidencia()` en `parser.py`. Tres estrategias en cascada, prioridad estricta (no negociable). No llama al LLM. Si retorna `[]`, el bloque es un único subbloque — el modelo nunca infiere subbloques libres para bloques sin señal.
 
-**Estrategia 3 — títulos visuales PDF (`extraer_titulos_visuales_pdf`):** cubre asignaturas sin numeración de secciones ni slides (caso real: Elementos de Máquinas). Usa `page.extract_words(extra_attrs=["fontname", "size"])` de pdfplumber para obtener metadatos de fuente por palabra; determina el estilo del cuerpo por frecuencia (par (fontname, size) más común en el documento); clasifica como título las líneas cortas (≤ 120 chars, ≤ 15 palabras) con estilo uniformemente diferente al cuerpo — por tamaño mayor (+0.5 pt) o indicador de peso en el nombre de fuente. El filtro `es_subtema_valido()` se aplica internamente antes de devolver. Sin llamada adicional a la API (el benchmark SciPlore Xtract justifica no añadir un modelo extra: la heurística simple supera al SVM entrenado, y el profesor revisa el resultado en la UI).
+**Estrategia 3 — títulos visuales PDF (`extraer_titulos_visuales_pdf`):** cubre asignaturas sin numeración de secciones ni slides (caso real: Elementos de Máquinas, Frenos). Usa `page.extract_words(extra_attrs=["fontname", "size"])` de pdfplumber para obtener metadatos de fuente por palabra. Sin llamada adicional a la API.
+
+Implementa dos fases en cascada (junio 2026):
+
+**Fase a — detección de página índice (`_buscar_candidatos_indice`):** recorre las páginas buscando la primera línea prominente de cada página y comprueba si es un keyword de índice (`_INDICE_KEYWORDS_RE`). Si lo es, recoge las líneas siguientes como candidatos de alta confianza (filtra encabezados de bloque-nivel con `_BLOQUE_NIVEL_RE`). Si ≥ 2 candidatos válidos, devuelve inmediatamente. Evidencia: `"Índice (p. N)"`. Funcionó correctamente con Frenos_2025.pdf, que tiene índice explícito.
+
+**Fase b — scan visual SciPlore Xtract (fallback):** determina el estilo del cuerpo por frecuencia (par (fontname, size) más común, excluyendo fuentes math/symbol/dingbat). Clasifica como título las líneas cortas (≤ 120 chars, ≤ 15 palabras) con estilo uniformemente diferente al cuerpo — por tamaño relativo `> cuerpo_sz × 1.2` (20%, no absoluto +pt) o indicador de peso en el nombre de fuente con tamaño ≥ 90 % del cuerpo. Helper `_es_linea_titulo()`. El filtro `es_subtema_valido()` se aplica antes de devolver. Evidencia: `"p. N"`. Funcionó con Elementos de Máquinas (negrita sin índice) y Tecnología de Materiales Tema 6 (numeración mixta).
+
+**Filtros en Estrategia 1 para eliminar falsos positivos (junio 2026):** el loop de secciones numeradas aplica cuatro reglas antes de aceptar un candidato:
+- **Regla A:** prefijo que empieza por `0` (e.g., `0.8 Q(θ) = Ω S sinθ`) → descartar.
+- **Regla B:** nombre que empieza en minúscula (e.g., `6.19 repetidamente, se produce…`) → descartar (prosa partida).
+- **Regla C:** prefijo sin punto (e.g., número suelto `1`, `180`, `3`) → descartar; exige al menos un nivel de jerarquía (`X.Y`).
+- **Regla D:** nombre que coincide con `_ETIQUETA_LABEL_RE` (figura, tabla, cuadro, nota, note…) → descartar.
+
+Estas reglas eliminaron los FP del PDF de Frenos (ecuaciones y etiquetas capturadas por el regex) y dejaron Strategy 1 con 0 candidatos para ese documento, permitiendo que Strategy 3 / detección de índice tomara el control.
 
 ### Filtro de calidad de subtemas (anti-boilerplate / anti-prosa)
 `es_subtema_valido()` en `parser.py` es el guardián común aplicado en todos los caminos de detección de subtemas: descarta secciones administrativas estándar de las guías UniOvi, fragmentos de prosa (conector discursivo inicial), filas de datos numéricos y fragmentos truncados. Para la **guía docente** se usa `extraer_subtemas_guia()`, que además acota la extracción a la sección `Contenidos`. Regla de diseño: un subtema candidato debe ser un encabezado real anclado a señal estructural — nunca boilerplate ni texto corrido. Ver "Bug documentado y corregido: calidad de subtemas".
@@ -228,7 +252,15 @@ distintas; la lógica de detección de cabeceras/filas es compartida en el módu
 2. **Regla anti-fragmentación:** un subtópico con horas propias en la guía docente sigue siendo subtema dentro de su bloque — nunca bloque independiente.
 3. **Autoverificación obligatoria:** el modelo debe contar sus propios encabezados `## Bloque N` antes de responder; si el recuento difiere de `n_bloques`, debe reorganizar.
 
-### Loop de refinamiento optimizado (`prompts.py`)
+### Prompt de horas simplificado (junio 2026)
+`construir_prompt()` en `org_prompts.py` consolidó tres bloques redundantes de instrucciones horarias en uno solo (`instruccion_horas`). Se eliminaron: `instruccion_restriccion_total` (repetía la suma exacta), `instruccion_bloques_sin_material` (contenía `[MATERIAL INSUFICIENTE]`, que no aplica al Organizador pues siempre hay materiales), el ítem 4 de la lista de instrucciones obligatorias (huérfano tras eliminar el bloque), y la línea duplicada de verificación de suma en la sección de formato.
+
+El bloque consolidado instruye al modelo a: (1) usar las horas TE+PA de la guía, (2) repartirlas proporcionalmente al volumen de material, (3) garantizar mínimo 0.5h por bloque, (4) verificar internamente que la suma cuadra antes de responder.
+
+### Fix `normalizar_horas_output()` — residuo al bloque más grande (junio 2026)
+Antes el residuo de redondeo se sumaba siempre al **último** bloque, lo que podía distorsionar asignaturas donde el último bloque es el más pequeño. Ahora va al **bloque con más horas** (`idx_mayor = horas_nuevas.index(max(horas_nuevas))`), donde el impacto relativo es menor.
+
+### Loop de refinamiento optimizado (`org_prompts.py`)
 `construir_prompt_refinamiento()` es un prompt ligero que:
 - Toma el output previo como base (ya tiene la estructura correcta)
 - Solo aplica el último ajuste de feedback
