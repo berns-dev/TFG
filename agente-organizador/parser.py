@@ -2,6 +2,7 @@ import difflib
 import io
 import re
 import unicodedata
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import pdfplumber
@@ -344,6 +345,131 @@ def extraer_titulos_slides_pptx(archivo_bytes: bytes) -> list[dict]:
     return resultados
 
 
+def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
+    """Detecta líneas candidatas a título en un PDF por tamaño/estilo de fuente.
+
+    Heurística de frecuencia (SciPlore Xtract): la combinación (fontname, size)
+    más frecuente en el documento es el cuerpo; las líneas cortas y uniformes
+    cuya combinación tiene mayor tamaño o nombre de fuente negrita son candidatas
+    a título. Esta heurística simple supera a un SVM entrenado para la misma
+    tarea en el benchmark de referencia (77,9 % frente a 69,4 %).
+
+    Notas sobre pdfplumber:
+    - Los tamaños son relativos al documento (pueden diferir de Adobe Acrobat por
+      un offset conocido, irrelevante para comparaciones internas).
+    - La negrita se infiere de substrings "bold"/"bd"/"black"/"heavy" en fontname;
+      pdfplumber no expone un booleano de negrita.
+
+    Retorna [{titulo: str, referencia: str}] con referencia = "p. N".
+    """
+    resultados: list[dict] = []
+    vistos_norm: set[str] = set()
+
+    try:
+        with pdfplumber.open(io.BytesIO(archivo_bytes)) as pdf:
+            # 1. Recoger todas las palabras con metadatos de fuente
+            todas_palabras: list[dict] = []
+            alturas_pagina: dict[int, float] = {}
+
+            for npag, pagina in enumerate(pdf.pages, start=1):
+                try:
+                    palabras = pagina.extract_words(extra_attrs=["fontname", "size"]) or []
+                except Exception:
+                    palabras = []
+                alturas_pagina[npag] = float(pagina.height or 800)
+                for p in palabras:
+                    p["_pagina"] = npag
+                    todas_palabras.append(p)
+
+            # PDF escaneado o vacío: no hay metadatos de fuente útiles
+            if len(todas_palabras) < 20:
+                return []
+
+            # 2. Determinar (fontname, size) del cuerpo por frecuencia
+            conteo: Counter = Counter()
+            for p in todas_palabras:
+                fn = (p.get("fontname") or "").strip()
+                sz = round(float(p.get("size") or 0) * 2) / 2  # resolución 0.5 pt
+                if fn and sz > 0:
+                    conteo[(fn, sz)] += 1
+
+            if not conteo:
+                return []
+
+            cuerpo_fn, cuerpo_sz = conteo.most_common(1)[0][0]
+
+            # 3. Agrupar palabras en líneas por (página, y redondeado)
+            lineas: dict[tuple, list[dict]] = defaultdict(list)
+            for p in todas_palabras:
+                y_bucket = int(round(float(p.get("top") or 0)))
+                lineas[(p["_pagina"], y_bucket)].append(p)
+
+            # 4. Evaluar cada línea como candidata a título
+            for (npag, y_bucket), palabras_linea in sorted(lineas.items()):
+                palabras_linea.sort(key=lambda w: float(w.get("x0") or 0))
+                texto = " ".join(
+                    w["text"] for w in palabras_linea if w.get("text")
+                ).strip()
+
+                # Descartar líneas demasiado largas para ser un título
+                if not texto or len(texto) > 120 or len(texto.split()) > 15:
+                    continue
+
+                # Excluir márgenes: cabeceras y pies de página (~6 % arriba/abajo)
+                altura_pag = alturas_pagina.get(npag, 800.0)
+                margen = altura_pag * 0.06
+                if y_bucket < margen or y_bucket > altura_pag - margen:
+                    continue
+
+                # Estilo dominante de la línea (fontname, size más frecuente)
+                estilos: Counter = Counter()
+                for w in palabras_linea:
+                    fn = (w.get("fontname") or "").strip()
+                    sz = round(float(w.get("size") or 0) * 2) / 2
+                    if fn and sz > 0:
+                        estilos[(fn, sz)] += 1
+
+                if not estilos:
+                    continue
+
+                (fn_dom, sz_dom), n_dom = estilos.most_common(1)[0]
+                n_total = sum(estilos.values())
+
+                # Línea con estilo mixto (≥ 30 % palabras fuera del estilo dominante) → prosa
+                if n_dom < n_total * 0.7:
+                    continue
+
+                # El estilo dominante es el cuerpo → no es título
+                if fn_dom == cuerpo_fn and sz_dom == cuerpo_sz:
+                    continue
+
+                # Criterio 1: tamaño mayor al cuerpo
+                es_mayor = sz_dom > cuerpo_sz + 0.5
+                # Criterio 2: nombre de fuente con indicador de peso (negrita/heavy)
+                fn_dom_lower = fn_dom.lower()
+                es_negrita = fn_dom != cuerpo_fn and any(
+                    sub in fn_dom_lower for sub in ("bold", "bd", "black", "heavy")
+                )
+
+                if not (es_mayor or es_negrita):
+                    continue
+
+                if not es_subtema_valido(texto):
+                    continue
+
+                clave = normalizar_subtema(texto)
+                if not clave or clave in vistos_norm:
+                    continue
+
+                vistos_norm.add(clave)
+                resultados.append({"titulo": texto, "referencia": f"p. {npag}"})
+
+    except Exception:
+        return []
+
+    return resultados
+
+
 def extraer_candidatos_con_evidencia(
     texto: str,
     nombre_archivo: str = "",
@@ -358,13 +484,15 @@ def extraer_candidatos_con_evidencia(
        Aplica a PDF y PPTX. Evidencia: 'Sección 3.2'.
     2. Títulos de diapositiva en PPTX (placeholder idx=0 o heurística).
        Solo si no se encontraron secciones numeradas. Evidencia: 'Slide N'.
+    3. Títulos visuales por tamaño/estilo de fuente en PDF (heurística de
+       frecuencia). Solo para PDF sin secciones numeradas. Evidencia: 'p. N'.
 
     Retorna [] si ninguna fuente ofrece señales verificables — el bloque debe
     tratarse como un único subbloque (fallback); el caller es responsable de
     marcarlo en la interfaz.
 
     Cada ítem: {nombre: str, evidencia: str, fuente: str}
-      - fuente: 'numeracion' | 'titulo_slide'
+      - fuente: 'numeracion' | 'titulo_slide' | 'titulo_visual'
     """
     candidatos: list[dict] = []
     vistos: set[str] = set()
@@ -391,8 +519,9 @@ def extraer_candidatos_con_evidencia(
     if candidatos:
         return candidatos
 
-    # Estrategia 2 — títulos de diapositiva PPTX
     ext = Path(nombre_archivo).suffix.lower() if nombre_archivo else ""
+
+    # Estrategia 2 — títulos de diapositiva PPTX
     if ext == ".pptx" and archivo_bytes is not None:
         for item in extraer_titulos_slides_pptx(archivo_bytes):
             if not es_subtema_valido(item["titulo"]):
@@ -404,6 +533,22 @@ def extraer_candidatos_con_evidencia(
                 "nombre": item["titulo"],
                 "evidencia": item["referencia"],
                 "fuente": "titulo_slide",
+            })
+            vistos.add(clave)
+
+    if candidatos:
+        return candidatos
+
+    # Estrategia 3 — títulos visuales por tamaño/estilo de fuente (PDF sin numeración)
+    if ext == ".pdf" and archivo_bytes is not None:
+        for item in extraer_titulos_visuales_pdf(archivo_bytes):
+            clave = normalizar_subtema(item["titulo"])
+            if not clave or clave in vistos:
+                continue
+            candidatos.append({
+                "nombre": item["titulo"],
+                "evidencia": item["referencia"],
+                "fuente": "titulo_visual",
             })
             vistos.add(clave)
 

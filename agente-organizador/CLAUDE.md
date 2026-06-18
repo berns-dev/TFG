@@ -76,6 +76,7 @@ hacerlas importables).
 3. **Detección de señales estructurales** — `extraer_candidatos_con_evidencia()` en `parser.py`:
    - Prioridad 1: secciones numeradas en el texto (`3.2. Título`) → evidencia = "Sección 3.2"
    - Prioridad 2 (solo PPTX): títulos de diapositiva → evidencia = "Slide N"
+   - Prioridad 3 (solo PDF): títulos visuales por tamaño/estilo de fuente → evidencia = "p. N"
    - Fallback: si ninguna fuente ofrece señal verificable, retorna `[]`; el bloque se trata como un único subbloque
 4. **Detección de horas** — `extraer_horas_docencia()` en `parser.py`
 5. **Generación** — `construir_prompt()` → `ejecutar_agente()` → Sonnet
@@ -97,7 +98,8 @@ unificada. Los subtemas para el prompt se construyen con `_org_build_subtemas_co
 1. **Guía docente** — `extraer_subtemas_guia()` toma los subtemas de la sección `Contenidos` de la guía, excluyendo el boilerplate administrativo (ver filtro de calidad). Si el material no aporta señal propia, se usa esta enumeración.
 2. **Materiales de teoría — secciones numeradas** — encabezados con patrón `\d+(\.\d+)*\. Título` en el texto extraído. Evidencia: `"Sección X.X"`.
 3. **Materiales de teoría — títulos de diapositiva PPTX** — placeholder `idx=0` o primera shape corta (<100 chars, sin saltos). Evidencia: `"Slide N"`. Solo se usa si no hay secciones numeradas.
-4. **Fallback obligatorio** — si ninguna fuente ofrece señal suficientemente verificable, el bloque no se subdivide. Se crea un único subbloque igual al bloque completo y se marca `Evidencia = "Sin señal verificable"`. La interfaz muestra un aviso visible al profesor.
+4. **Materiales de teoría — títulos visuales PDF** — `extraer_titulos_visuales_pdf()` en `parser.py`. Heurística de frecuencia (SciPlore Xtract): la combinación (fontname, size) más frecuente es el cuerpo; líneas cortas y uniformes con tamaño mayor (+0.5 pt) o nombre de fuente con indicador de peso ("bold"/"bd"/"black"/"heavy") son candidatas a título. Solo se usa para PDF cuando no hay secciones numeradas. Evidencia: `"p. N"`. Este es el camino que resuelve asignaturas como Elementos de Máquinas, donde los títulos no van numerados pero sí en negrita o en tamaño mayor.
+5. **Fallback obligatorio** — si ninguna fuente ofrece señal suficientemente verificable, el bloque no se subdivide. Se crea un único subbloque igual al bloque completo y se marca `Evidencia = "Sin señal verificable"`. La interfaz muestra un aviso visible al profesor.
 
 ### Restricción de generación automática
 
@@ -203,7 +205,9 @@ Sonnet para toda la generación y refinamiento. El razonamiento curricular requi
 2. **Estrategia 2 (fallback):** búsqueda en texto libre, exige señales horarias explícitas para evitar confundir "sesiones" con horas.
 
 ### Código determinista para señales estructurales
-`extraer_candidatos_con_evidencia()` en `parser.py`. Prioridad estricta de fuentes (no negociable). No llama al LLM. Si retorna `[]`, el bloque es un único subbloque — el modelo nunca infiere subbloques libres para bloques sin señal.
+`extraer_candidatos_con_evidencia()` en `parser.py`. Tres estrategias en cascada, prioridad estricta (no negociable). No llama al LLM. Si retorna `[]`, el bloque es un único subbloque — el modelo nunca infiere subbloques libres para bloques sin señal.
+
+**Estrategia 3 — títulos visuales PDF (`extraer_titulos_visuales_pdf`):** cubre asignaturas sin numeración de secciones ni slides (caso real: Elementos de Máquinas). Usa `page.extract_words(extra_attrs=["fontname", "size"])` de pdfplumber para obtener metadatos de fuente por palabra; determina el estilo del cuerpo por frecuencia (par (fontname, size) más común en el documento); clasifica como título las líneas cortas (≤ 120 chars, ≤ 15 palabras) con estilo uniformemente diferente al cuerpo — por tamaño mayor (+0.5 pt) o indicador de peso en el nombre de fuente. El filtro `es_subtema_valido()` se aplica internamente antes de devolver. Sin llamada adicional a la API (el benchmark SciPlore Xtract justifica no añadir un modelo extra: la heurística simple supera al SVM entrenado, y el profesor revisa el resultado en la UI).
 
 ### Filtro de calidad de subtemas (anti-boilerplate / anti-prosa)
 `es_subtema_valido()` en `parser.py` es el guardián común aplicado en todos los caminos de detección de subtemas: descarta secciones administrativas estándar de las guías UniOvi, fragmentos de prosa (conector discursivo inicial), filas de datos numéricos y fragmentos truncados. Para la **guía docente** se usa `extraer_subtemas_guia()`, que además acota la extracción a la sección `Contenidos`. Regla de diseño: un subtema candidato debe ser un encabezado real anclado a señal estructural — nunca boilerplate ni texto corrido. Ver "Bug documentado y corregido: calidad de subtemas".
