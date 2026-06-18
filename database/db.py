@@ -3,11 +3,12 @@
 Almacén compartido de inputs, outputs, estados y progreso de los tres agentes
 (Organizador, Contenido, Presentación) cuando se unifican en una sola app Streamlit.
 
-Esquema actual: versión 5 (user_version = 5).
+Esquema actual: versión 6 (user_version = 6).
 Migración automática desde v1: añade columnas para evidencia/estado/interactivo.
 Migración v3: tabla valoraciones_profesor (puntuación 1-10 por asignatura y agente).
 Migración v4: puntuacion_profesor por sub-bloque en contenido_subbloque.
 Migración v5: input_id en temas (vínculo bloque → PDF de teoría).
+Migración v6: índice UNIQUE en inputs (asignatura, tipo, nombre) y deduplicación.
 
 Uso directo:
     python database/db.py
@@ -18,7 +19,7 @@ import sqlite3
 
 RUTA_DB_POR_DEFECTO = "data/tfg.db"
 
-VERSION_SCHEMA = 5
+VERSION_SCHEMA = 6
 
 # Asignaturas con las que se ha validado la suite (ver CLAUDE.md).
 ASIGNATURAS_CONOCIDAS = [
@@ -204,6 +205,34 @@ MIGRACIONES: dict[int, list[str]] = {
     5: [
         "ALTER TABLE temas ADD COLUMN input_id INTEGER REFERENCES inputs(id)",
     ],
+    6: [
+        """
+        UPDATE temas
+        SET input_id = (
+            SELECT MAX(i.id)
+            FROM inputs i
+            INNER JOIN inputs i_orig ON i_orig.id = temas.input_id
+            WHERE i.asignatura_id = i_orig.asignatura_id
+              AND i.tipo = i_orig.tipo
+              AND i.nombre_fichero = i_orig.nombre_fichero
+        )
+        WHERE input_id IS NOT NULL
+        """,
+        """
+        DELETE FROM inputs
+        WHERE id IN (
+            SELECT id FROM inputs
+            WHERE id NOT IN (
+                SELECT MAX(id) FROM inputs
+                GROUP BY asignatura_id, tipo, nombre_fichero
+            )
+        )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_inputs_asignatura_tipo_nombre
+            ON inputs(asignatura_id, tipo, nombre_fichero)
+        """,
+    ],
 }
 
 # Estados válidos para el ciclo de vida de un subbloque de contenido.
@@ -350,6 +379,31 @@ def listar_inputs_asignatura(
                 (asignatura_id,),
             ).fetchall()
         ]
+    finally:
+        conn.close()
+
+
+def registrar_input(
+    asignatura_id: int,
+    tipo: str,
+    nombre_fichero: str,
+    ruta_disco: str,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> None:
+    """Registra un input o actualiza ruta y fecha si ya existe (misma asignatura, tipo y nombre)."""
+    conn = get_connection(ruta)
+    try:
+        conn.execute(
+            """
+            INSERT INTO inputs (asignatura_id, tipo, nombre_fichero, ruta_disco)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(asignatura_id, tipo, nombre_fichero) DO UPDATE SET
+                ruta_disco = excluded.ruta_disco,
+                fecha_subida = CURRENT_TIMESTAMP
+            """,
+            (asignatura_id, tipo, nombre_fichero, ruta_disco),
+        )
+        conn.commit()
     finally:
         conn.close()
 

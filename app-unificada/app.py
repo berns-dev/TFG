@@ -232,16 +232,7 @@ def _get_asignatura_id(nombre: str) -> int | None:
 
 
 def _db_registrar_input(asignatura_id: int, tipo: str, nombre_fichero: str, ruta_disco: str) -> None:
-    conn = db.get_connection(RUTA_DB)
-    try:
-        conn.execute(
-            """INSERT OR IGNORE INTO inputs (asignatura_id, tipo, nombre_fichero, ruta_disco)
-               VALUES (?, ?, ?, ?)""",
-            (asignatura_id, tipo, nombre_fichero, ruta_disco),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    db.registrar_input(asignatura_id, tipo, nombre_fichero, ruta_disco, RUTA_DB)
 
 
 def _db_crear_ejecucion(asignatura_id: int) -> int:

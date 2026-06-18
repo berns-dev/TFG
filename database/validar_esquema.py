@@ -217,6 +217,25 @@ def main() -> None:
             print(f"    {b['nombre']}: {b['aprobados']}/{b['total_sub']} ({b['porcentaje']}%)")
             assert b["porcentaje"] == 100.0
 
+        # 9. Inputs: upsert sin duplicar filas al re-subir el mismo fichero.
+        db.registrar_input(
+            asignatura_id, "material_teoria", "tema1.pdf", "/tmp/tema1.pdf", ruta=ruta_bd
+        )
+        db.registrar_input(
+            asignatura_id, "material_teoria", "tema1.pdf", "/tmp/tema1_v2.pdf", ruta=ruta_bd
+        )
+        n_inputs = conn.execute(
+            "SELECT COUNT(*) FROM inputs WHERE asignatura_id = ? AND nombre_fichero = ?",
+            (asignatura_id, "tema1.pdf"),
+        ).fetchone()[0]
+        ruta_guardada = conn.execute(
+            "SELECT ruta_disco FROM inputs WHERE asignatura_id = ? AND nombre_fichero = ?",
+            (asignatura_id, "tema1.pdf"),
+        ).fetchone()[0]
+        print(f"\n[9] Re-subida de input: {n_inputs} fila(s), ruta={ruta_guardada}")
+        assert n_inputs == 1
+        assert ruta_guardada == "/tmp/tema1_v2.pdf"
+
         conn.close()
         print("\nOK — Todas las validaciones pasaron correctamente.")
 
