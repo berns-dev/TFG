@@ -348,22 +348,166 @@ def extraer_titulos_slides_pptx(archivo_bytes: bytes) -> list[dict]:
     return resultados
 
 
+# ---------------------------------------------------------------------------
+# Detección de página de índice (helper privado)
+# ---------------------------------------------------------------------------
+
+# Palabras clave que identifican una diapositiva/página de índice/contenidos.
+# Se comparan contra la versión normalizada (sin tildes, minúsculas, solo
+# alfanumérico + espacio) de la primera línea prominente de la página.
+_INDICE_KEYWORDS_RE = re.compile(
+    r"^(indice|contenidos?|outline|sumario|contents?|agenda"
+    r"|tabla\s+de\s+contenidos?|table\s+of\s+contents?)$"
+)
+
+# Prefijos de bloque-nivel que indican un temario del curso completo, no
+# subtemas de un bloque concreto. Si la mayoría de ítems del índice tienen
+# este patrón, el documento es un programa de asignatura, no un bloque temático,
+# y no debemos usarlo como fuente de subtemas.
+_BLOQUE_NIVEL_RE = re.compile(
+    r"^(tema|bloque|unidad|chapter|topic|module)\s+\d+"
+)
+
+
+def _es_linea_titulo(
+    palabras_linea: list[dict],
+    cuerpo_fn: str,
+    cuerpo_sz: float,
+) -> bool:
+    """True si el estilo dominante de la línea es de título (≠ cuerpo).
+
+    Criterios (umbral relativo 20 %):
+    - tamaño > cuerpo * 1.2, O
+    - negrita (bold/bd/black/heavy en fontname) con tamaño ≥ cuerpo * 0.9
+    """
+    estilos: Counter = Counter()
+    for w in palabras_linea:
+        fn = (w.get("fontname") or "").strip()
+        sz = round(float(w.get("size") or 0) * 2) / 2
+        if fn and sz > 0:
+            estilos[(fn, sz)] += 1
+    if not estilos:
+        return False
+    (fn_dom, sz_dom), n_dom = estilos.most_common(1)[0]
+    n_total = sum(estilos.values())
+    if n_dom < n_total * 0.7 or (fn_dom == cuerpo_fn and sz_dom == cuerpo_sz):
+        return False
+    es_mayor = sz_dom > cuerpo_sz * 1.2
+    fn_lower = fn_dom.lower()
+    es_negrita = (
+        fn_dom != cuerpo_fn
+        and any(s in fn_lower for s in ("bold", "bd", "black", "heavy"))
+        and sz_dom >= cuerpo_sz * 0.9
+    )
+    return es_mayor or es_negrita
+
+
+def _buscar_candidatos_indice(
+    lineas: dict,
+    alturas_pagina: dict,
+    cuerpo_fn: str,
+    cuerpo_sz: float,
+) -> list[dict]:
+    """Detecta una página de índice/contenidos y devuelve sus ítems como candidatos.
+
+    Lógica:
+    1. Para cada página, identifica la primera línea con estilo de título.
+    2. Si esa línea es una palabra clave de índice (Índice, Contenidos, Outline…),
+       la página es un índice.
+    3. Recoge las líneas siguientes de esa página como candidatos, descartando
+       prefijos de bloque-nivel (Tema N:, Bloque N:…) que indicarían un temario
+       del curso completo en lugar de subtemas de un bloque concreto.
+    4. Si se encuentran ≥ 2 candidatos válidos, los devuelve con evidencia
+       "Índice (p. N)"; de lo contrario, devuelve [].
+
+    Al devolver candidatos del índice, el caller puede evitar el scan visual
+    del PDF completo, reduciendo drásticamente el ruido de falsos positivos.
+    """
+    # Agrupar líneas por página
+    paginas: dict[int, list] = defaultdict(list)
+    for (npag, y_bucket), pals in lineas.items():
+        paginas[npag].append((y_bucket, pals))
+
+    for npag in sorted(paginas):
+        altura_pag = alturas_pagina.get(npag, 800.0)
+        margen = altura_pag * 0.06
+
+        # Recoger líneas de texto de esta página, excluidas las zonas de margen
+        lineas_pag: list[tuple] = []
+        for y_bucket, pals in sorted(paginas[npag], key=lambda x: x[0]):
+            if y_bucket < margen or y_bucket > altura_pag - margen:
+                continue
+            pals_ord = sorted(pals, key=lambda w: float(w.get("x0") or 0))
+            texto = " ".join(w["text"] for w in pals_ord if w.get("text")).strip()
+            if texto:
+                lineas_pag.append((y_bucket, texto, pals_ord))
+
+        if not lineas_pag:
+            continue
+
+        # Buscar la primera línea con estilo de título en esta página
+        idx_primera: int | None = None
+        for i, (_, _, pals_ord) in enumerate(lineas_pag):
+            if _es_linea_titulo(pals_ord, cuerpo_fn, cuerpo_sz):
+                idx_primera = i
+                break
+
+        if idx_primera is None:
+            continue
+
+        # Comprobar si esa primera línea es un keyword de índice
+        texto_cab = lineas_pag[idx_primera][1]
+        norm_cab = normalizar_subtema(texto_cab).strip().rstrip(":")
+        if not _INDICE_KEYWORDS_RE.match(norm_cab):
+            continue
+
+        # Página de índice detectada — recoger ítems siguientes
+        candidatos: list[dict] = []
+        vistos: set[str] = set()
+        for _, texto, palabras_raw_ord in lineas_pag[idx_primera + 1:]:
+            palabras_raw = texto.split()
+            # Artefacto de carácter suelto (bullet/inicial fusionado por pdfplumber)
+            if palabras_raw and len(palabras_raw[0]) == 1 and palabras_raw[0].isalpha():
+                continue
+            if len(texto) > 120 or len(palabras_raw) > 15:
+                continue
+            norm = normalizar_subtema(texto)
+            # Prefijo de bloque → temario del curso completo, no subtema
+            if _BLOQUE_NIVEL_RE.match(norm):
+                continue
+            if not es_subtema_valido(texto):
+                continue
+            clave = norm
+            if not clave or clave in vistos:
+                continue
+            vistos.add(clave)
+            candidatos.append({"titulo": texto, "referencia": f"Índice (p. {npag})"})
+
+        if len(candidatos) >= 2:
+            return candidatos
+
+    return []
+
+
 def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
     """Detecta líneas candidatas a título en un PDF por tamaño/estilo de fuente.
 
-    Heurística de frecuencia (SciPlore Xtract): la combinación (fontname, size)
-    más frecuente en el documento es el cuerpo; las líneas cortas y uniformes
-    cuya combinación tiene mayor tamaño o nombre de fuente negrita son candidatas
-    a título. Esta heurística simple supera a un SVM entrenado para la misma
-    tarea en el benchmark de referencia (77,9 % frente a 69,4 %).
+    Estrategia (dos fases):
 
-    Notas sobre pdfplumber:
-    - Los tamaños son relativos al documento (pueden diferir de Adobe Acrobat por
-      un offset conocido, irrelevante para comparaciones internas).
-    - La negrita se infiere de substrings "bold"/"bd"/"black"/"heavy" en fontname;
-      pdfplumber no expone un booleano de negrita.
+    Fase 1 — Detección de página de índice (alta confianza):
+      Si el PDF contiene una página cuya primera línea prominente es una palabra
+      clave de índice (Índice, Contenidos, Outline, Sumario, Contents…), se
+      extraen sus ítems como candidatos con evidencia "Índice (p. N)". Al tener
+      contexto estructural explícito, esta fase evita el ruido del scan visual.
 
-    Retorna [{titulo: str, referencia: str}] con referencia = "p. N".
+    Fase 2 — Scan visual de todo el PDF (fallback):
+      Si no se detecta página de índice, se aplica la heurística de frecuencia
+      (SciPlore Xtract): la combinación (fontname, size) más frecuente = cuerpo;
+      líneas cortas y uniformes cuya fuente es > cuerpo * 1.2 o es negrita son
+      candidatas a título. Umbral relativo (20 %) para robustez entre documentos
+      con distintos cuerpos (slides 16 pt vs. papers 10 pt).
+
+    Retorna [{titulo: str, referencia: str}] con referencia "Índice (p. N)" o "p. N".
     """
     resultados: list[dict] = []
     vistos_norm: set[str] = set()
@@ -412,7 +556,16 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
                 y_bucket = int(round(float(p.get("top") or 0)))
                 lineas[(p["_pagina"], y_bucket)].append(p)
 
-            # 4. Evaluar cada línea como candidata a título
+            # 4. Intentar detección de página de índice/contenidos.
+            # Los ítems de una página de índice son candidatos de alta confianza
+            # y evitan el ruido del scan visual del PDF completo.
+            candidatos_indice = _buscar_candidatos_indice(
+                lineas, alturas_pagina, cuerpo_fn, cuerpo_sz
+            )
+            if candidatos_indice:
+                return candidatos_indice
+
+            # 5. Sin índice — scan visual de todas las páginas
             for (npag, y_bucket), palabras_linea in sorted(lineas.items()):
                 palabras_linea.sort(key=lambda w: float(w.get("x0") or 0))
                 texto = " ".join(
@@ -460,9 +613,10 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
                     continue
 
                 # Criterio 1: tamaño claramente mayor al cuerpo.
-                # Umbral +2.0 pt (no +0.5): descarta el "nivel slide" de 1 pt
-                # sobre el cuerpo que PowerPoint usa para bullets/labels.
-                es_mayor = sz_dom > cuerpo_sz + 2.0
+                # Umbral relativo 20 % (en lugar de absoluto +2.0 pt): robusto
+                # entre documentos con distintos cuerpos base (slides 16 pt vs
+                # papers 10 pt). Un bullet label 1 pt por encima no pasa.
+                es_mayor = sz_dom > cuerpo_sz * 1.2
                 # Criterio 2: nombre de fuente con indicador de peso, pero solo
                 # si el tamaño no es mucho menor al cuerpo (evita pies de página
                 # y subíndices en negrita que salen con sz < cuerpo).
