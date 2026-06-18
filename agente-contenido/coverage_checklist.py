@@ -23,6 +23,27 @@ def _tokens_significativos(nombre: str) -> list[str]:
     return [w for w in norm.split() if len(w) > 2 and w not in _STOPWORDS]
 
 
+def contar_marcadores(markdown: str) -> dict:
+    """Cuenta marcadores de extracción incompleta en el markdown curado.
+
+    Returns:
+        Dict con claves ecuacion, ecuacion_parcial, texto_ilegible, figura,
+        total_problemas (suma de los tres primeros).
+    """
+    texto = markdown or ""
+    ecuacion = len(re.findall(r"\[ECUACION\]", texto))
+    ecuacion_parcial = len(re.findall(r"\[ECUACION_PARCIAL:[^\]]+\]", texto))
+    texto_ilegible = len(re.findall(r"\[TEXTO_ILEGIBLE\]", texto))
+    figura = len(re.findall(r"\[FIGURA:[^\]]+\]", texto))
+    return {
+        "ecuacion": ecuacion,
+        "ecuacion_parcial": ecuacion_parcial,
+        "texto_ilegible": texto_ilegible,
+        "figura": figura,
+        "total_problemas": ecuacion + ecuacion_parcial + texto_ilegible,
+    }
+
+
 def verificar_cobertura(markdown: str, apartados: list[dict]) -> list[dict]:
     """Comprueba si cada apartado del Organizador aparece reflejado en el MD curado.
 

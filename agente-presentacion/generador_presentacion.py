@@ -77,6 +77,7 @@ _BLOCK_LATEX_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
 _INLINE_LATEX_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
 _FIGURA_RE = re.compile(r"\[FIGURA:\s*([^\]]+)\]")
 _TEXTO_ILEGIBLE_RE = re.compile(r"\[TEXTO_ILEGIBLE\]")
+_FIGURA_ANCLA_RE = re.compile(r"^\[FIGURA:\s*(.+)\]$", re.IGNORECASE)
 
 # Emojis de marcado interno del Agente Contenido (p. ej. "> 💡 *Resultado:*").
 # Se eliminan del output porque la presentacion es material academico; el
@@ -288,6 +289,8 @@ def _render_markdown(texto: str, figuras_html: dict[str, str]) -> str:
             para cada figura del documento (placeholder gris o SVG).
     """
     texto = _EMOJI_MARCADOR_RE.sub("", texto)
+    texto = re.sub(r"\[ECUACION_PARCIAL:[^\]]+\]", "", texto)
+    texto = re.sub(r"\[ECUACION\]", "", texto)
 
     tokens: dict[str, str] = {}
 
@@ -404,21 +407,25 @@ def _generar_svg(
 def _generar_figuras(
     secciones: list[dict],
     asignaciones: dict[int, list[tuple[int, dict]]],
+    figura_overrides: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Decide el render de cada [FIGURA: ...] del documento.
 
-    Solo intenta SVG en secciones SIN bloque interactivo (la figura de una
-    seccion con explorador ya tiene representacion grafica) y hasta un
-    maximo de _MAX_SVG_POR_DOCUMENTO intentos. El resto — y cualquier
-    intento fallido — se renderiza como placeholder gris.
+    Las figuras con override interactivo se insertan directamente. Las demás
+    intentan SVG si la sección no tiene bloque interactivo, hasta un máximo
+    de _MAX_SVG_POR_DOCUMENTO intentos; el resto queda como placeholder gris.
     """
     figuras_html: dict[str, str] = {}
+    figura_overrides = figura_overrides or {}
     candidatas: list[tuple[str, str]] = []  # (descripcion, contexto)
 
     for i, seccion in enumerate(secciones):
         for m in _FIGURA_RE.finditer(seccion["body"]):
             descripcion = m.group(1).strip()
             if descripcion in figuras_html:
+                continue
+            if descripcion in figura_overrides:
+                figuras_html[descripcion] = figura_overrides[descripcion]
                 continue
             figuras_html[descripcion] = _figura_placeholder(descripcion)
             if i not in asignaciones and len(candidatas) < _MAX_SVG_POR_DOCUMENTO:
@@ -1080,11 +1087,37 @@ def _localizar_offset_ancla(body: str, seccion_titulo: str, ancla: str) -> int:
     return len(body)
 
 
+def _figura_ancla_descripcion(ancla: str) -> str | None:
+    """Devuelve la descripción de figura si el ancla es un marcador [FIGURA: ...]."""
+    m = _FIGURA_ANCLA_RE.match((ancla or "").strip())
+    return m.group(1).strip() if m else None
+
+
+def _preparar_figura_overrides(fragmentos: list[dict]) -> dict[str, str]:
+    """Construye {descripcion_figura: html_preparado} para fragmentos anclados a figura."""
+    overrides: dict[str, str] = {}
+    for frag in sorted(fragmentos, key=lambda f: (f.get("orden", 0), f.get("id", 0))):
+        ancla = (frag.get("seccion_ancla") or "").strip()
+        desc = _figura_ancla_descripcion(ancla)
+        if desc is None:
+            continue
+        html_raw = frag.get("html_fragment") or ""
+        if not html_raw.strip():
+            continue
+        titulo = frag.get("titulo") or "Visualización"
+        overrides[desc] = _preparar_bloque(html_raw, _slug(titulo))
+    return overrides
+
+
 def _asignar_fragmentos_a_secciones(
     secciones: list[dict],
     fragmentos: list[dict],
 ) -> dict[int, list[tuple[int, str]]]:
-    """Asigna fragmentos HTML aprobados a secciones H2 del documento."""
+    """Asigna fragmentos HTML aprobados a secciones H2 del documento.
+
+    Los fragmentos anclados a [FIGURA: ...] se omiten aquí — se manejan
+    en _preparar_figura_overrides.
+    """
     asignaciones: dict[int, list[tuple[int, str]]] = {}
     ordenados = sorted(fragmentos, key=lambda f: (f.get("orden", 0), f.get("id", 0)))
 
@@ -1096,6 +1129,9 @@ def _asignar_fragmentos_a_secciones(
         slug = _slug(titulo)
         html_prep = _preparar_bloque(html_raw, slug)
         ancla = (frag.get("seccion_ancla") or "").strip()
+
+        if _figura_ancla_descripcion(ancla) is not None:
+            continue
 
         idx_destino: int | None = None
         offset = 0
@@ -1176,8 +1212,9 @@ def generar_presentacion_con_fragmentos(
     if not secciones:
         raise ValueError("No se encontraron secciones en el Markdown.")
 
+    figura_overrides = _preparar_figura_overrides(fragmentos_aprobados)
     asignaciones_html = _asignar_fragmentos_a_secciones(secciones, fragmentos_aprobados)
-    figuras_html = _generar_figuras(secciones, {})
+    figuras_html = _generar_figuras(secciones, asignaciones_html, figura_overrides)
 
     titulo_esc = html_lib.escape(titulo)
     veces_visto: dict[str, int] = {}

@@ -1051,6 +1051,8 @@ def _preprocess_md(
         return f"\n\n{key}\n\n"
 
     text = _FIGURA_RE.sub(repl_figura, text)
+    text = re.sub(r"\[ECUACION_PARCIAL:[^\]]+\]", "", text)
+    text = re.sub(r"\[ECUACION\]", "", text)
     # Replace [TEXTO_ILEGIBLE] with a visible italic blockquote so the professor
     # can see exactly where gaps exist in the original material.
     text = _TEXTO_ILEGIBLE_RE.sub(

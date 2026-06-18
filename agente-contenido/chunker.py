@@ -25,6 +25,7 @@ _ensure_chunker_audit_handler()
 
 _NUMBERED_HEADER_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
 _PAGE_SLIDE_HEADER_RE = re.compile(r"^\[(?:PAGINA|SLIDE)\s+\d+\]")
+_MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+")
 _SENTENCE_END_RE = re.compile(r'[.!?]["\'\)]*(?:\s|$)')
 _SECTION_KEYWORDS = (
     "Chapter",
@@ -212,12 +213,18 @@ def _is_section_header(line: str) -> bool:
         return False
     if _NUMBERED_HEADER_RE.match(stripped):
         return True
-    if _PAGE_SLIDE_HEADER_RE.match(stripped):
-        return True
+    if _MARKDOWN_HEADING_RE.match(stripped):
+        heading_text = _MARKDOWN_HEADING_RE.sub("", stripped).strip()
+        return bool(re.search(r"[a-zA-Z]{2,}", heading_text))
     lowered = stripped.lower()
     if any(lowered.startswith(keyword.lower()) for keyword in _SECTION_KEYWORDS):
         return True
-    if 4 < len(stripped) < 80 and stripped == stripped.upper() and "=" not in stripped:
+    if (
+        4 < len(stripped) < 80
+        and stripped == stripped.upper()
+        and "=" not in stripped
+        and not _PAGE_SLIDE_HEADER_RE.match(stripped)
+    ):
         return True
     return False
 

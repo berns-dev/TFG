@@ -927,6 +927,19 @@ def _cnt_extraer_headings(markdown: str) -> list[str]:
     ]
 
 
+def _cnt_extraer_figuras(markdown: str) -> list[str]:
+    """Extrae marcadores [FIGURA: ...] del markdown como opciones de ancla."""
+    vistos: set[str] = set()
+    result: list[str] = []
+    for m in re.finditer(r"\[FIGURA:\s*([^\]]+)\]", markdown or ""):
+        desc = m.group(1).strip()
+        key = desc.lower()
+        if key not in vistos:
+            vistos.add(key)
+            result.append(f"[FIGURA: {desc}]")
+    return result
+
+
 def _cnt_markdown_visible(ct: dict | None) -> str:
     if not ct:
         return ""
@@ -957,6 +970,32 @@ def _cnt_numero_bloque(bloque_label: str) -> int | None:
     """Extrae el número de «Bloque N» del etiquetado del Organizador."""
     m = re.search(r"bloque\s*(\d+)", (bloque_label or ""), re.IGNORECASE)
     return int(m.group(1)) if m else None
+
+
+def _cnt_ruta_markdown_disco(slug: str, bloque_label: str) -> str:
+    """Ruta de exportación: ``data/{slug}/outputs/contenido/bloque-N.md``."""
+    n = _cnt_numero_bloque(bloque_label)
+    if n is not None:
+        nombre = f"bloque-{n}.md"
+    else:
+        nombre = f"bloque-{_slugify(bloque_label or 'sin-numero')}.md"
+    dir_out = os.path.join(RAIZ_MONOREPO, "data", slug, "outputs", "contenido")
+    os.makedirs(dir_out, exist_ok=True)
+    return os.path.join(dir_out, nombre)
+
+
+def _cnt_exportar_markdown_disco(slug: str, bloque_label: str, markdown: str) -> str | None:
+    """Copia el markdown curado a disco (además de la BD)."""
+    texto = (markdown or "").strip()
+    if not texto:
+        return None
+    ruta = _cnt_ruta_markdown_disco(slug, bloque_label)
+    try:
+        with open(ruta, "w", encoding="utf-8") as fh:
+            fh.write(texto)
+        return ruta
+    except OSError:
+        return None
 
 
 def _cnt_sugerir_material_id(tema: dict, materiales: list[dict]) -> int | None:
@@ -1025,6 +1064,8 @@ def _cnt_generar_bloque_desde_material(
     tema_id: int,
     tema_nombre: str,
     material_sel: dict,
+    slug: str,
+    bloque_label: str,
     *,
     regenerar: bool = False,
 ) -> None:
@@ -1055,6 +1096,7 @@ def _cnt_generar_bloque_desde_material(
                 db.regenerar_contenido_tema_borrador(tema_id, md_bloque, RUTA_DB)
             else:
                 db.upsert_contenido_tema_borrador(tema_id, md_bloque, RUTA_DB)
+            _cnt_exportar_markdown_disco(slug, bloque_label, md_bloque)
             if fidelidad is not None and fidelidad < umbral:
                 _db_registrar_validacion(
                     ejecucion_id=ejecucion_id,
@@ -1106,6 +1148,8 @@ def _vista_contenido() -> None:
     if asignatura_id is None:
         st.error("Asignatura no encontrada en la base de datos.")
         return
+
+    slug = _slugify(asignatura)
 
     if st.session_state.get("cnt_asignatura") != asignatura:
         for k in [k for k in list(st.session_state.keys()) if k.startswith("cnt_")]:
@@ -1161,6 +1205,10 @@ def _vista_contenido() -> None:
     estado = ct["estado"] if ct else "pendiente"
     texto_md = _cnt_markdown_visible(ct)
     borrador_ia = (ct.get("markdown_borrador") or "") if ct else ""
+    if ct and texto_md:
+        ruta_export = _cnt_ruta_markdown_disco(slug, tema.get("bloque", ""))
+        if not fichero_existe(ruta_export):
+            _cnt_exportar_markdown_disco(slug, tema.get("bloque", ""), texto_md)
 
     prog = db.get_progreso_bloque(tema_id, RUTA_DB)
     st.progress(
@@ -1192,6 +1240,24 @@ def _vista_contenido() -> None:
             for item in cobertura:
                 icono = "✅" if item["cubierto"] else "⚠️"
                 st.caption(f"{icono} **{item['nombre']}** — {item['detalle']}")
+            marcadores = _cnt_coverage.contar_marcadores(texto_md)
+            if marcadores["total_problemas"] > 0:
+                st.caption("**Marcadores de extracción incompleta:**")
+                if marcadores["ecuacion"] > 0:
+                    st.caption(
+                        f"⚠️ `[ECUACION]`: {marcadores['ecuacion']} "
+                        "ocurrencia(s) — ecuaciones ilegibles en el original"
+                    )
+                if marcadores["ecuacion_parcial"] > 0:
+                    st.caption(
+                        f"⚠️ `[ECUACION_PARCIAL]`: {marcadores['ecuacion_parcial']} "
+                        "ocurrencia(s) — ecuaciones parcialmente legibles"
+                    )
+                if marcadores["texto_ilegible"] > 0:
+                    st.caption(
+                        f"⚠️ `[TEXTO_ILEGIBLE]`: {marcadores['texto_ilegible']} "
+                        "ocurrencia(s) — fragmentos no extraíbles"
+                    )
         else:
             for sub in subbloques:
                 st.caption(f"⚪ **{sub['nombre']}** — pendiente de generar contenido")
@@ -1223,6 +1289,8 @@ def _vista_contenido() -> None:
                     tema_id,
                     tema_nombre,
                     material_sel,
+                    slug,
+                    tema.get("bloque", ""),
                     regenerar=False,
                 )
 
@@ -1243,6 +1311,10 @@ def _vista_contenido() -> None:
         st.markdown(f"**Contenido del bloque** — {etiqueta}")
         if material_sel:
             st.caption(f"Material de teoría: **{material_sel['nombre_fichero']}**")
+        ruta_md = _cnt_ruta_markdown_disco(slug, tema.get("bloque", ""))
+        if fichero_existe(ruta_md):
+            rel = os.path.relpath(ruta_md, RAIZ_MONOREPO).replace("\\", "/")
+            st.caption(f"Copia en disco: `{rel}`")
 
         if material_sel:
             with st.expander("Regenerar contenido desde el material"):
@@ -1268,6 +1340,8 @@ def _vista_contenido() -> None:
                         tema_id,
                         tema_nombre,
                         material_sel,
+                        slug,
+                        tema.get("bloque", ""),
                         regenerar=True,
                     )
 
@@ -1312,6 +1386,9 @@ def _vista_contenido() -> None:
                     db.guardar_contenido_tema_edicion(
                         tema_id, texto_actual.strip(), pct_prev, RUTA_DB
                     )
+                    _cnt_exportar_markdown_disco(
+                        slug, tema.get("bloque", ""), texto_actual.strip()
+                    )
                     st.rerun()
             with col_confirmar:
                 puntuacion = st.select_slider(
@@ -1333,6 +1410,9 @@ def _vista_contenido() -> None:
                             pct_prev,
                             puntuacion,
                             RUTA_DB,
+                        )
+                        _cnt_exportar_markdown_disco(
+                            slug, tema.get("bloque", ""), texto_actual.strip()
                         )
                         st.rerun()
 
@@ -1455,6 +1535,7 @@ def _vista_presentacion() -> None:
     rutas = _db_cnt_get_rutas_material(tema_id)
     texto_original = _prs_extraer_texto_material(rutas) if rutas else None
     headings = _cnt_extraer_headings(md_bloque)
+    figuras_ancla = _cnt_extraer_figuras(md_bloque)
 
     aprobadas = db.listar_visualizaciones_aprobadas(tema_id, RUTA_DB)
     _paso = 2 if aprobadas else 1
@@ -1585,12 +1666,12 @@ def _vista_presentacion() -> None:
         preview_page = _prs_generador_html._envolver_preview_taller(html_preview)
         st.components.v1.html(preview_page, height=480, scrolling=True)
 
-        sugerida = _prs_workshop.sugerir_seccion_ancla(
-            taller.get("titulo") or instruccion, headings
-        )
-        opciones_ancla = headings if headings else ["(final del bloque)"]
+        opciones_ancla = headings + figuras_ancla if (headings or figuras_ancla) else []
         if "(final del bloque)" not in opciones_ancla:
             opciones_ancla = opciones_ancla + ["(final del bloque)"]
+        sugerida = _prs_workshop.sugerir_seccion_ancla(
+            taller.get("titulo") or instruccion, opciones_ancla
+        )
         idx_sug = opciones_ancla.index(sugerida) if sugerida in opciones_ancla else len(opciones_ancla) - 1
 
         ancla = st.selectbox(

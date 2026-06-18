@@ -104,18 +104,26 @@ def refinar_html(
     return raw
 
 
-def sugerir_seccion_ancla(instruccion: str, headings: list[str]) -> str:
-    """Sugiere el heading del MD que mejor coincide con el prompt."""
-    if not headings:
+def sugerir_seccion_ancla(instruccion: str, opciones: list[str]) -> str:
+    """Sugiere la opción de ancla (sección o figura) que mejor coincide con el prompt.
+
+    Las opciones pueden incluir headings ##/### y marcadores [FIGURA: ...].
+    Para figuras, el matching ignora el prefijo [FIGURA: ] y usa la descripción.
+    """
+    if not opciones:
         return ""
     inst_norm = instruccion.lower()
     mejor = ""
     mejor_score = 0
-    for h in headings:
-        h_low = h.lower()
-        if h_low in inst_norm or any(w in inst_norm for w in h_low.split() if len(w) > 3):
-            score = len(h_low)
+    for opcion in opciones:
+        if opcion.startswith("[FIGURA:") and opcion.endswith("]"):
+            texto = opcion[8:-1].strip()
+        else:
+            texto = opcion
+        texto_low = texto.lower()
+        if texto_low in inst_norm or any(w in inst_norm for w in texto_low.split() if len(w) > 3):
+            score = len(texto_low)
             if score > mejor_score:
                 mejor_score = score
-                mejor = h
-    return mejor or headings[0]
+                mejor = opcion
+    return mejor or opciones[0]
