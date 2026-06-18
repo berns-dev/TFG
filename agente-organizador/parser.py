@@ -85,6 +85,14 @@ def extraer_texto(archivo_bytes, nombre_archivo) -> str:
 
 _SUBTEMA_NUM_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
 _PAGINA_FOOTER_RE = re.compile(r"^\d+\s+de\s+\d+$", re.I)
+# Etiquetas que encabezan títulos de figura, tabla o nota — no son secciones.
+# Usada en Strategy 1 para descartar "Figura 4.5 …", "NOTA: …", etc.
+_ETIQUETA_LABEL_RE = re.compile(
+    r"^(fig(ura)?|tabla|cuadro|ilustraci[oó]n|gr[aá]fica?|esquema|imagen"
+    r"|figure|table|image|graph|diagram"
+    r"|nota|note|remark|aviso)\b",
+    re.IGNORECASE,
+)
 
 
 def normalizar_subtema(texto: str) -> str:
@@ -685,9 +693,16 @@ def extraer_candidatos_con_evidencia(
         # Regla A: prefijos que empiezan por 0 (e.g. "0.8") nunca son secciones reales.
         if prefijo.split(".")[0] == "0":
             continue
+        # Regla C: prefijo sin punto → número suelto (ítem de lista, ecuación,
+        # pie de figura). Secciones docentes reales siempre tienen forma X.Y o X.Y.Z.
+        if "." not in prefijo:
+            continue
         nombre = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", linea).strip()
         # Regla B: título en minúscula → prosa partida en líneas, no sección.
         if nombre and nombre[0].islower():
+            continue
+        # Regla D: etiqueta de figura/tabla/nota → no es título de sección.
+        if _ETIQUETA_LABEL_RE.match(nombre):
             continue
         if not nombre or not es_subtema_valido(nombre):
             continue
