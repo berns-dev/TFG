@@ -24,7 +24,7 @@ Extrae temas, subbloques y distribución horaria de una asignatura a partir de l
 
 ## Stack técnico
 
-- **UI:** Streamlit (`layout="wide"`, sidebar para uploads)
+- **UI:** integrada en `app-unificada/app.py` (standalone `app.py` eliminado jun 2026)
 - **API:** Anthropic directo — `claude-sonnet-4-5` (generación y refinamiento)
 - **Extracción:** `pdfplumber` (PDF), `python-pptx` (PPTX) vía `parser.py`
 - **Credenciales:** `.env` + `python-dotenv`
@@ -387,7 +387,9 @@ Fuente de verdad: plantilla en `prompts.py` → `construir_prompt()`.
 **Sin subbloques confirmados (libre):**
 La columna "Evidencia" contiene la referencia estructural detectada por el LLM (más susceptible a imprecisión; el flujo normal con confirmación es preferible).
 
-**Contrato con el Agente Contenido:** El Agente Contenido parsea bloques con `## Bloque N — … · Xh` (`parse_organization_md()` en `agente-contenido/app.py`). El cambio de columnas en la tabla de subbloques NO rompe este contrato (el Agente Contenido no parsea las filas de la tabla).
+**Contrato con el Agente Contenido:** el Organizador persiste bloques y subtemas en BD;
+el Contenido los lee vía `database/db.py` y reparte con `split_monotono()`. El Markdown
+canónico usa `## Bloque N — … · Xh` y tabla `| Subtema | Evidencia | Origen |`.
 
 ---
 

@@ -21,51 +21,78 @@ Convierte PDFs y PPTXs de material docente a Markdown estructurado y fiel al ori
 ## Estado
 
 Funcional. Validado con:
-- Temas 1 y 2 de Tecnología de Materiales (PDFs con texto extraíble)
-- Validación con PPTX reales: pendiente
-- Pipeline de reparto monótono: `tools/validate_split_monotono.py` (15 checks)
+- Temas 1 y 2 de Tecnología de Materiales (PDF)
+- Frenos (PDF exportado desde PowerPoint) — extracción PyMuPDF + cleaner ligero
+- PPTX nativo: soporte en `extractor.py`; validación sistemática pendiente
+- Tests sin API: `validate_split_monotono.py`, `validate_cleaner.py`, `validate_pdf_enriched.py`
 
-Limitación documentada: Los PDFs exportados desde PowerPoint contienen texto extraíble, pero sin orden de lectura coherente — los cuadros de texto de cada diapositiva se depositan en el PDF en orden de edición, no visual. Decisión adoptada: aviso visible en UI cuando el nombre del archivo sugiere origen PowerPoint, recomendar PPTX nativo.
+**Punto de entrada UI:** `app-unificada/app.py` (no hay `app.py` standalone en este agente).
+
+Limitación documentada: los PDFs exportados desde PowerPoint siguen siendo peores que el
+PPTX nativo (orden de lectura, ecuaciones). La UI avisa cuando el nombre sugiere origen PPT.
+Preferir PPTX cuando exista.
 
 ---
 
 ## Stack técnico
 
-- **UI:** Streamlit (`layout="wide"`, sidebar para uploads)
+- **UI:** integrada en `app-unificada/app.py` (vista Contenido)
 - **API:** Anthropic directo
   - `claude-haiku-4-5-20251001` — chunks sin densidad matemática alta
   - `claude-sonnet-4-5` — chunks con ecuaciones, notación matemática densa
-- **Extracción:** `pdfplumber` (PDF enriquecido vía `shared/pdf_enriched.py` + fallback plano), `python-pptx` (PPTX) vía `extractor.py`
-- **Credenciales:** `.env` + `python-dotenv`
+- **Extracción PDF** (`extractor.py` + `shared/pdf_enriched.py`):
+  1. **PyMuPDF** (`build_pdf_markdown_pymupdf`) — primario; mejor decodificación math y orden de lectura
+  2. **pdfplumber enriquecido** (`build_pdf_markdown`) — fallback
+  3. **pdfplumber plano** — último recurso
+- **Limpieza** (`cleaner.py`): modo **ligero** en PDF enriquecido (sin filtro de frecuencia
+  estructural; sí regex + glifos de cabecera 1–2 chars repetidos en ≥80% páginas);
+  modo **completo** en extracción plana y PPTX. Headings `#`/`##`/`###` nunca se eliminan
+  por frecuencia. Ecuaciones corruptas → `[ECUACION_PARCIAL: …]` / `[ECUACION_NO_EXTRAIBLE]`.
+- **PPTX:** `python-pptx` vía `extractor.py`
+- **Credenciales:** `agente-contenido/.env` + `python-dotenv`
 
 ---
 
 ## Arquitectura de archivos
 
 ```
+extractor.py        — extract_text(); cadena pymupdf → pdfplumber → plano; PPTX
+cleaner.py          — clean_extracted_text(light=…); filtro de glifos repetidos
 classifier.py       — selección de modelo, SYSTEM_PROMPT, classify_and_format()
 chunker.py          — split_into_chunks() — chunking semántico
-extractor.py        — extract_text() para PDF (enriquecido + fallback) y PPTX
 split_monotono.py   — split_monotono() — reparto del markdown curado por subtema
 subblock_state.py   — SubbloqueResult, calcular_progreso_bloque/asignatura()
 assembler.py        — assemble_markdown(), assemble_subbloque_body(), …
 validator.py        — validate_items() — validador de fidelidad léxica
 pipeline.py         — procesar_bloque(), procesar_segmento()
 cnt_config.py       — constantes: modelos, thresholds, MAX_WORKERS
-tools/validate_split_monotono.py — validación del reparto (sin API)
-tools/validate_subbloques.py     — parseo Organizador + ensamblado + progreso
-fixtures/           — artefactos de validación (Tema_3_curado.md)
+../shared/pdf_enriched.py — build_pdf_markdown_pymupdf(), build_pdf_markdown()
+tools/validate_split_monotono.py
+tools/validate_cleaner.py
+tools/validate_pdf_enriched.py
+tools/validate_subbloques.py
+tools/validate_pdf.py       — debug CLI (extract → chunk, sin API)
+fixtures/                   — artefactos de validación (Tema_3_curado.md)
 ```
 
 ---
 
 ## Flujo principal (app-unificada)
 
-1. **Extracción** — `extract_text()` de todos los PDF/PPTX del bloque. PDF: `shared/pdf_enriched.build_pdf_markdown()` añade `#`/`##`/`###` según tamaño/negrita; si no hay metadatos de fuente, extracción plana.
-2. **Curado del bloque** — `procesar_bloque(texto, horas_bloque)` → un markdown con frontmatter
-3. **Reparto** — `split_monotono(markdown, subtemas_bd)` → N fragmentos (preview en UI)
-4. **Confirmación** — persistir cada fragmento en `contenido_subbloque.markdown_borrador`
-5. **Revisión** — el profesor edita y aprueba por subtema (estados `generado` → `aprobado`)
+1. **Extracción** — `extract_text()` de todos los PDF/PPTX del bloque (rutas en BD desde Organizador).
+2. **Curado del bloque** — `procesar_bloque(texto, horas_bloque)` → un markdown con frontmatter (API).
+3. **Reparto** — `split_monotono(markdown, subtemas_bd)` → N fragmentos; preview con anclas y confianza.
+4. **Confirmación** — «Confirmar reparto» → cada fragmento en `contenido_subbloque.markdown_borrador`.
+5. **Revisión** — el profesor edita, puntúa (1–10) y aprueba por subtema (`generado` → `aprobado`).
+
+### Extracción PDF (detalle)
+
+```
+PDF → build_pdf_markdown_pymupdf()     [prefijos #/##/###, spans math]
+  → _clean_page_blocks(light=True)     [cleaner ligero + glifos]
+  → fallback build_pdf_markdown()      [pdfplumber enriquecido]
+  → fallback _extract_pdf_plain()      [pdfplumber + cleaner completo]
+```
 
 ---
 
@@ -247,61 +274,38 @@ La UI que agrege los resultados de varios bloques debe construir esa lista.
 
 ---
 
-## Input de organización (sidebar, opcional)
+## Input de organización (opcional en scripts; vía BD en app-unificada)
 
-### Sección 1 — Organización del tema
+El bloque y sus subtemas llegan desde SQLite (generados por el Organizador). Para parsear
+un `.md` del Organizador fuera de la app, usar `parsear_bloques_organizador()` en
+`agente-organizador/parser.py` o la lógica equivalente en `app-unificada/app.py`.
 
-El usuario puede subir el `.md` generado por el Agente Organizador.
+Patrón de bloque: `^##\s+Bloque\s+\d+\s+—\s+(.+?)\s*·\s*([\d,.]+)h`
 
-**`parse_organization_md(content: str) -> list[dict]`** en `app.py`:
-- Patrón bloque: `^##\s+Bloque\s+\d+\s+—\s+(.+?)\s*·\s*([\d,.]+)h` (re.MULTILINE)
-- Por cada bloque, parsea la tabla de subbloques (`_parse_subbloques_table()`)
-- Soporta tablas de 4 columnas (`| Subtema | Horas | Evidencia | Origen |`) y
-  3 columnas (`| Subtema | Horas | Origen |`, flujo post-edición manual)
-- Devuelve lista de dicts `{"nombre": str, "horas": float, "subbloques": list[dict]}`
-
-El selectbox muestra las opciones `"Nombre (Xh)"` para que el usuario seleccione
-manualmente cuál corresponde al material. No hay matching automático por nombre de
-archivo. Si el bloque tiene subbloques, se muestra el recuento en el sidebar.
-
-### Sección 2 — Material del tema (sidebar, obligatorio)
-Uno o varios PDF/PPTX. Sin cambios respecto a la versión anterior.
+Tabla de subtemas: `| Subtema | Evidencia | Origen |` (sin horas por subtema).
 
 ---
 
-## App unificada — vista Contenido (`app-unificada/app.py`)
+## App unificada — vista Contenido
 
-Flujo de trabajo del profesor sobre un bloque temático:
+Flujo del profesor sobre un bloque temático (datos en SQLite):
 
-1. **Índice** de sub-bloques con estado (pendiente / en revisión / aprobado con nota y % modificación).
-2. **Generación por selección:** checkboxes solo en sub-bloques sin borrador previo + botón
-   «Generar seleccionados (N)». Cada sub-bloque marcado dispara **su propia** llamada a la API
-   (segmentación por evidencia independiente). No se regeneran los que ya tienen borrador.
-3. **Revisión paralela:** todos los sub-bloques en estado `generado`/`editado` quedan abiertos
-   a la vez; el profesor confirma y puntúa cada uno en el orden que prefiera.
-4. **Confirmación:** slider 1-10 + «Confirmar y valorar» → `puntuacion_profesor` en
-   `contenido_subbloque` (no en `valoraciones_profesor`).
+1. **Índice** de sub-bloques con estado (sin borrador / en revisión / aprobado con nota).
+2. **Generar borrador del bloque** — una pasada API sobre todo el material + reparto monótono;
+   vista previa con anclas, confianza y avisos de `requiere_revision`.
+3. **Confirmar reparto** — persiste borradores en `contenido_subbloque`.
+4. **Revisión** — expanders por subtema; edición, slider 1–10, «Confirmar y valorar».
 
-**Valoración:** Contenido puntúa por sub-bloque. La tabla global `valoraciones_profesor` es solo
-para el Organizador (zoom out curricular). Ver `database/CLAUDE.md` — no unificar sin decisión explícita.
+**Valoración:** nota por sub-bloque en `contenido_subbloque.puntuacion_profesor`. La tabla
+`valoraciones_profesor` es solo para el Organizador. Ver `database/CLAUDE.md`.
 
 ---
 
-## Interfaz (estado actual)
+## Interfaz e identidad visual
 
-### Identidad visual compartida con Agente Organizador
-- **Tipografía:** Playfair Display (títulos, vía Google Fonts) + DM Sans (cuerpo)
-- **Acento:** `#185FA5` (fijo, identidad de marca)
-- **Fondos/textos:** variables CSS de Streamlit (`var(--background-color)`, `var(--secondary-background-color)`, `var(--text-color)`)
-- **Bordes:** `rgba(128,128,128,0.2)` (adaptativos)
-
-### Layout `layout="wide"`
-- **Sidebar:** branding (Suite de Agentes / Agente Contenido) + steps 1-2-3 + sección 1 con file uploader `.md` + selectbox (+ caption con n.º subbloques) + separador + sección 2 con file uploader PDF/PPTX + botón "Procesar"
-- **Área principal:** hero + warning PDF exportado + processing loop + resultados
-
-### Métricas en resultados
-- Con subbloques: `Subbloques (n)` + `Aprobados (X/n, %)` + resumen de estados
-- Sin subbloques (clásico): `Bloques totales (n)` + resumen de tipos
+La UI vive en `app-unificada/app.py` (pestaña/vista Contenido). Identidad compartida:
+Playfair Display + DM Sans, acento `#185FA5`, layout `wide`. Aviso visible si el material
+parece PDF exportado desde PowerPoint.
 
 ---
 
@@ -365,11 +369,16 @@ sección `##` **una sola vez**, en orden canónico fijo. Reglas:
 
 ## Limitaciones documentadas
 
-1. **PDFs exportados desde PowerPoint:** texto extraíble pero sin orden de lectura coherente (cuadros depositados en orden de edición, no visual). Aviso en UI. Preferir PPTX nativo.
-2. **Subíndices químicos:** `pdfplumber` pierde subíndices (ZrO₂ → "ZrO"). Limitación de la biblioteca.
-3. **Chunking en posición no ideal:** `[TEXTO_ILEGIBLE]` puede aparecer por partición a mitad de contexto, no por fallo de extracción.
-4. **Rate limit 429 Haiku:** concurrencia puede agotar el límite de 10.000 tokens output/min de Haiku con muchos chunks. No es bug del agente.
-5. **Segmentación parcial:** si la evidencia de un subbloque no se encuentra en el texto (p. ej., las señales estructurales del material no coinciden exactamente con las del Organizador), ese subbloque queda con estado `pendiente` y texto vacío. La UI emite un `st.warning()` indicando qué referencia concreta no se localizó. El profesor puede editarlo manualmente.
+1. **PDFs exportados desde PowerPoint:** peor que PPTX nativo (orden, ecuaciones). PyMuPDF y el
+   cleaner mitigan pero no eliminan el problema. Aviso en UI; preferir PPTX.
+2. **Subíndices químicos:** pueden perderse según fuente y extractor (pdfplumber peor que pymupdf en algunos casos).
+3. **Chunking en posición no ideal:** `[TEXTO_ILEGIBLE]` puede aparecer por partición a mitad de contexto.
+4. **Rate limit 429 Haiku:** concurrencia alta con muchos chunks puede agotar el límite de output/min.
+5. **Reparto monótono:** si un subtema no tiene ancla en el markdown curado, el fragmento queda débil
+   (`requiere_revision` en preview); el profesor corrige en revisión. No hay segmentación PDF por evidencia
+   (eliminada junio 2026).
+6. **Ecuaciones:** pymupdf emite `[ECUACION]` en spans ilegibles; el cleaner emite `[ECUACION_PARCIAL]`.
+   El LLM no completa fórmulas por conocimiento general (principio de fidelidad).
 
 ---
 

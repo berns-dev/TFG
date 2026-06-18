@@ -1,37 +1,39 @@
 # Agente Organizador — Reglas de Cursor
 
 ## Contexto del proyecto
-Aplicación Streamlit que actúa como agente de IA para extraer y organizar 
-temas y subtemas de una asignatura universitaria de ingeniería, estimando 
-la distribución de horas por tema. El agente NO inventa contenido: extrae 
-únicamente lo que aparece explícitamente en los documentos del profesor 
+Módulo de IA que extrae y organiza temas y subtemas de una asignatura universitaria
+de ingeniería, estimando la distribución de horas por bloque. El agente NO inventa
+contenido: extrae únicamente lo que aparece en los documentos del profesor
 (guía docente + materiales de teoría).
 
+La UI vive en `app-unificada/app.py`. No hay `app.py` standalone en este agente.
+`parser.py` y `org_prompts.py` son módulos puros importables por la app unificada.
+
 ## Stack técnico
-- Python 3.11+
-- Streamlit (interfaz web)
-- Anthropic SDK (librería oficial `anthropic`)
-- pdfplumber para extracción de texto de PDFs
-- python-pptx para extracción de texto de archivos PPTX
-- python-dotenv para gestión de variables de entorno
+- Python 3.10+
+- Streamlit (solo en app-unificada)
+- Anthropic SDK (`anthropic`)
+- pdfplumber — extracción PDF (Organizador no usa pymupdf)
+- python-pptx — extracción PPTX
+- python-dotenv — variables de entorno
+- SQLite vía `database/db.py` — persistencia en app unificada
 
 ## Selección de modelo
 - Todas las generaciones usan `claude-sonnet-4-5` (fijo en agente.py)
-- Justificación: la tarea exige razonamiento sobre distribución proporcional de horas y adherencia a plantilla con restricciones numéricas
+- Justificación: razonamiento sobre distribución proporcional de horas y adherencia a plantilla
 
 ## Principios de desarrollo
 - El agente extrae, no genera. Si algo no está en el material, no aparece en el output.
 - Cada función tiene una responsabilidad única y clara.
 - Los errores se muestran al usuario en la interfaz, nunca se silencian.
 - El prompt al LLM siempre incluye restricción explícita de no inventar contenido.
-- El output final es Markdown renderizado en pantalla y descargable como archivo .md.
 - Comentarios en español, código en inglés.
+- No duplicar lógica de `parser.py` en `app-unificada/app.py`.
 
 ## Estructura de archivos
-- app.py: interfaz Streamlit + lógica principal
-- parser.py: extracción de texto de PDF y PPTX
-- agente.py: llamada a la API
-- prompts.py: construcción dinámica del prompt (idioma, horas, feedback, plantilla)
+- parser.py: FUENTE DE VERDAD — extracción, señales estructurales, horas, parseo/serialización
+- agente.py: llamada a la API Anthropic
+- org_prompts.py: construir_prompt(), construir_prompt_refinamiento()
 
 ## Convenciones
 - Variables de entorno en .env, nunca hardcodeadas
@@ -39,15 +41,15 @@ la distribución de horas por tema. El agente NO inventa contenido: extrae
 - No usar frameworks de agentes (LangChain, etc.), llamadas directas a la API
 
 ## Regla de agnosticismo
-El sistema no contiene ninguna referencia a asignaturas, bloques
-temáticos, horas o contenidos específicos de ninguna materia.
-Si en cualquier momento se detecta que un archivo contiene nombres
-de asignaturas o bloques hardcodeados, debe considerarse un bug
-crítico y corregirse inmediatamente.
+El sistema no contiene referencias hardcodeadas a asignaturas, bloques temáticos u horas
+de materias concretas. Si se detectan, es un bug crítico.
+
+## Contrato con Contenido
+Markdown canónico: `## Bloque N — Nombre · Xh` y tabla `| Subtema | Evidencia | Origen |`.
+Horas solo a nivel bloque. Contenido lee bloques/subtemas desde BD.
 
 ## Estado actual
-- API: Anthropic directo (ANTHROPIC_API_KEY)
+- API: Anthropic directo (ANTHROPIC_API_KEY en .env)
 - Una sola llamada LLM por generación/regeneración
-- Loop de feedback hasta 5 iteraciones (historial acumulado)
-- Truncado automático a 20.000 chars/archivo si el total supera 120.000 chars
-- extraer_horas_docencia: 2 estrategias, 3 categorías (TE, PA, PL)
+- Loop de feedback hasta 5 iteraciones
+- extraer_horas_docencia: heurísticas deterministas (TE, PA, PL)

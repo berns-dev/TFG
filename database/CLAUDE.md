@@ -1,7 +1,7 @@
 # Base de datos — Estado del módulo
 
 **Monorepo:** `berns-dev/TFG`
-**Última actualización:** 2026-06-17
+**Última actualización:** 2026-06-18
 
 ---
 
@@ -19,11 +19,13 @@ de progreso como campo — siempre se calcula al consultar para evitar inconsist
 - **Motor:** SQLite (`sqlite3` de stdlib — sin dependencias externas)
 - **Archivo:** `data/tfg.db` (generado, no versionado — está en `.gitignore`)
 - **Código:** `database/db.py`
-- **Versión de esquema actual:** `user_version = 2` (`PRAGMA user_version`)
+- **Versión de esquema actual:** `user_version = 6` (ver `VERSION_SCHEMA` en `db.py`)
 
 ---
 
-## Esquema v2 — tablas y columnas clave
+## Esquema — tablas y columnas clave
+
+*(Resumen; el esquema completo y migraciones están en `db.py`.)*
 
 ### Jerarquía curricular
 

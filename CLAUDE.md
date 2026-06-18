@@ -77,11 +77,13 @@ Toda la lógica de cálculo y transformación vive aquí (módulo importable, si
 `app-unificada` lo carga vía `_cargar_modulos_agente` (`_org_parser`) y lo usa
 directamente. Detalle en `agente-organizador/CLAUDE.md`.
 
-### Contenido → `agente-contenido/pipeline.py` + `split_monotono.py`
+### Contenido → `agente-contenido/pipeline.py` + `split_monotono.py` + `extractor.py`
 
-- **Curado:** `procesar_bloque()` — bloque completo, horas del **bloque** (no por subtema).
-- **Reparto:** `split_monotono()` — divide el markdown curado por nombres/orden del Organizador (sin API).
-- App-unificada: generar bloque → preview del reparto → confirmar → borradores en `contenido_subbloque`.
+- **Extracción:** `extract_text()` — PyMuPDF → pdfplumber enriquecido → plano; PPTX nativo.
+- **Limpieza:** `cleaner.py` — modo ligero en PDF enriquecido.
+- **Curado:** `procesar_bloque()` — bloque completo, horas del **bloque**.
+- **Reparto:** `split_monotono()` — sin API.
+- App-unificada: generar bloque → preview → confirmar → borradores en `contenido_subbloque`.
 
 ### Presentación → `agente-presentacion/generador_html.py`
 
@@ -131,7 +133,7 @@ se ocultan tanto la edición manual como el refinamiento por prompt.
   - Tipografía: Playfair Display + DM Sans (Google Fonts CDN)
   - Acento: `#185FA5` (fijo, identidad de marca)
   - Dark/light mode: JS `sync()` en iframes, `var(--background-color)` en estilos Streamlit
-- **Extracción:** `pdfplumber` (PDF), `python-pptx` (PPTX)
+- **Extracción PDF (Contenido):** `pymupdf` (primario, vía `shared/pdf_enriched.build_pdf_markdown_pymupdf`) → `pdfplumber` enriquecido → plano; `python-pptx` (PPTX). Organizador sigue con `pdfplumber`.
 - **PDF generado:** `reportlab` (puro Python, sin GTK)
 - **HTML interactivo:** Chart.js + MathJax (CDN)
 - **Credenciales:** `.env` en cada subcarpeta + `python-dotenv`
@@ -157,69 +159,64 @@ TFG/
 ├── CLAUDE.md                     ← este archivo — contexto global para Claude Code
 ├── shared/
 │   ├── ui_hero.py                ← render_hero() compartido entre los tres agentes
-│   └── pdf_enriched.py           ← extracción PDF con jerarquía visual (fontname/size)
+│   └── pdf_enriched.py           ← extracción PDF con jerarquía visual (pymupdf + pdfplumber)
 ├── database/
 │   ├── CLAUDE.md                 ← esquema SQLite, migraciones, APIs de progreso
-│   ├── db.py                     ← motor SQLite (esquema v2, init, progreso, CRUD)
+│   ├── db.py                     ← motor SQLite (esquema v6, init, progreso, CRUD)
 │   └── validar_esquema.py        ← script de validación del esquema (no producto)
 ├── app-unificada/
-│   └── app.py                    ← app Streamlit unificada (todos los agentes + BD).
-│                                    Importa desde los módulos de cada agente vía
-│                                    _cargar_modulos_agente(); no duplica lógica.
+│   ├── README.md
+│   └── app.py                    ← UI única; importa agentes vía _cargar_modulos_agente()
 ├── data/
 │   └── tfg.db                    ← base de datos SQLite (generado, no versionado)
 ├── agente-organizador/
-│   ├── CLAUDE.md                 ← contexto específico del Agente Organizador
+│   ├── CLAUDE.md
 │   ├── README.md
 │   ├── agente.py                 ← cliente Anthropic, ejecutar_agente()
-│   ├── parser.py                 ← FUENTE DE VERDAD importable: toda la lógica pura
-│   │                                (horas, normalización, conteo, parseo/serialización,
-│   │                                 detección de señales estructurales PDF/PPTX)
-│   ├── org_prompts.py            ← construir_prompt(), construir_prompt_refinamiento()
-│   ├── requirements.txt
-│   ├── .env.example
-│   ├── .gitignore
-│   └── .cursorrules
+│   ├── parser.py                 ← FUENTE DE VERDAD: lógica pura (horas, señales, parseo)
+│   ├── org_prompts.py
+│   └── requirements.txt          ← sin UI standalone (eliminada jun 2026)
 ├── agente-contenido/
-│   ├── CLAUDE.md                 ← contexto específico del Agente Contenido
+│   ├── CLAUDE.md
 │   ├── README.md
-│   ├── classifier.py
-│   ├── chunker.py
-│   ├── extractor.py
-│   ├── cleaner.py
-│   ├── assembler.py
-│   ├── validator.py
+│   ├── extractor.py              ← extract_text(); pymupdf → pdfplumber → plano
+│   ├── cleaner.py                ← limpieza determinista (modo ligero + glifos en PDF enriquecido)
+│   ├── classifier.py, chunker.py, assembler.py, validator.py
 │   ├── split_monotono.py         ← reparto del markdown curado por subtema (sin API)
-│   ├── pipeline.py               ← procesar_bloque() / procesar_segmento()
-│   ├── subblock_state.py         ← SubbloqueResult, calcular_progreso_bloque/asignatura
-│   ├── pipeline.py               ← FUENTE DE VERDAD importable: procesar_segmento()
-│   │                                (chunk→classify en paralelo→assemble→validate)
-│   │                                Usada por app-unificada
+│   ├── pipeline.py               ← procesar_bloque(), procesar_segmento()
+│   ├── subblock_state.py
 │   ├── tools/
-│   │   ├── validate_pdf.py       ← debug CLI (extract → chunk, sin API)
-│   │   └── validate_subbloques.py ← validación pipeline de subbloques (sin API)
-│   ├── fixtures/
-│   │   └── Tema_3_curado.md      ← artefacto de validación
-│   ├── config.py
-│   ├── requirements.txt
-│   ├── .env.example
-│   ├── .gitignore
-│   └── .cursorrules
+│   │   ├── validate_pdf.py
+│   │   ├── validate_pdf_enriched.py
+│   │   ├── validate_cleaner.py
+│   │   ├── validate_split_monotono.py
+│   │   └── validate_subbloques.py
+│   └── requirements.txt          ← incluye pymupdf>=1.24.0
 └── agente-presentacion/
-    ├── CLAUDE.md                 ← contexto específico del Agente Presentación
+    ├── CLAUDE.md
     ├── README.md
-    ├── detector.py
-    ├── generador_pdf.py
-    ├── generador_html.py
-    ├── generador_presentacion.py
+    ├── detector.py, generador_pdf.py, generador_html.py, generador_presentacion.py
     ├── prompts.py
-    ├── config.py
-    ├── tools/razonador_fixture.py   ← debug CLI del razonador (consume API)
-    ├── requirements.txt
-    ├── .env.example
-    ├── .gitignore
-    └── .cursorrules
+    └── requirements.txt          ← sin UI standalone (eliminada jun 2026)
 ```
+
+*(Las entradas `.env`, `.cursorrules` y `fixtures/` de cada agente se omiten en el árbol.)*
+
+---
+
+## Arranque — app unificada
+
+```bash
+cd TFG
+pip install -r agente-organizador/requirements.txt
+pip install -r agente-contenido/requirements.txt
+pip install -r agente-presentacion/requirements.txt
+cp agente-contenido/.env.example agente-contenido/.env   # ANTHROPIC_API_KEY
+streamlit run app-unificada/app.py
+```
+
+La BD SQLite se crea en `data/tfg.db` al primer uso. Flujo típico: Organizador (asignatura
++ bloques) → Contenido (borrador por bloque + reparto) → Presentación (PDF/HTML).
 
 ---
 
@@ -253,6 +250,6 @@ Detalle del esquema y APIs: **`database/CLAUDE.md`**.
 | Agente/módulo | Estado | Validado con |
 |---------------|--------|-------------|
 | Organizador | Funcional — subbloques anclados a evidencia estructural; detección de página índice (Prioridad 3a) + scan visual relativo 20% (Prioridad 3b); Reglas A/B/C/D para eliminar FP en Strategy 1; prompt de horas consolidado; residuo normalización → bloque más grande. Lógica pura en `parser.py`; `app-unificada` la consume sin duplicar. Standalone eliminado. | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales, Frenos |
-| Contenido | Funcional — curado por bloque + reparto monótono (`split_monotono.py`), preview y confirmación, valoración 1-10 por sub-bloque | Temas 1 y 2 de Tecnología de Materiales (PDF) |
+| Contenido | Funcional — curado por bloque + `split_monotono`; extracción PyMuPDF + cleaner ligero; preview y confirmación del reparto; valoración 1-10 por sub-bloque | Tec. Materiales (PDF), Frenos (PDF PPT) |
 | Presentación | Funcional — 3 outputs (PDF institucional UO, HTML interactivo, HTML presentación completa); LaTeX con matplotlib mathtext | Tema 1 (Tec. Materiales), TEMA7 (Elementos de Máquinas) |
-| Base de datos | Esquema v4 — jerarquía asignatura→bloque→subbloque + estado del ciclo de vida + progreso en tiempo real + valoración por agente | Tecnología de Materiales (script `database/validar_esquema.py`) |
+| Base de datos | Esquema v6 — jerarquía asignatura→bloque→subbloque + ciclo de vida + progreso + valoración por agente | `database/validar_esquema.py` |

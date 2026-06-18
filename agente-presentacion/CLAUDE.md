@@ -1,6 +1,6 @@
 # Agente Presentación — Estado del proyecto
 
-**Última actualización:** 2026-06-10
+**Última actualización:** 2026-06-18
 
 ---
 
@@ -23,48 +23,20 @@ El patrón de visualización no está fijado de antemano. Para cada sección, So
 
 ## 2. ARQUITECTURA DE ARCHIVOS
 
+**Punto de entrada UI:** `app-unificada/app.py` — no hay `app.py` standalone en este agente.
+
 ```
-app.py              — UI Streamlit; importa render_hero desde shared/ui_hero.py
-                      (compact=True, disabled_button_styles=True,
-                      upload_zone_background=True); extracción de texto del
-                      PDF/PPTX opcional; priorización de páginas por densidad
-                      numérica; triggers de detección, PDF y HTML; checkboxes
-detector.py         — Regex + filtro Haiku + evaluar_advertencia() Sonnet
-                      (opt-in UI); agrupa por sección (un elemento por ##/###)
-generador_pdf.py    — Markdown → PDF con plantilla institucional UO:
-                      protege LaTeX, convierte a HTML, parsea a Flowables
-                      ReportLab; cabecera con logo (assets/logo_uniovi.png)
-                      + asignatura; pie "X de N" con NumberedCanvas;
-                      renderiza ecuaciones con matplotlib mathtext
-assets/logo_uniovi.png — Logo Universidad de Oviedo para la cabecera del
-                      PDF (versionado en el repo)
-generador_html.py   — Pipeline por elemento: razonador Sonnet → generador Sonnet;
-                      post-procesado Python de rangos (aplicar_rangos);
-                      ThreadPoolExecutor; plantilla HTML con pestañas CSS;
-                      reintento correctivo (reenvía el motivo de rechazo) y
-                      backoff ante RateLimitError (429);
-                      logging con logger.debug() / logger.warning().
-                      Función pública generar_bloque_con_visualizacion(elemento,
-                      visualizacion) para uso desde app-unificada (omite el
-                      razonador cuando el patrón ya fue elegido por el profesor)
-generador_presentacion.py — Presentación completa del tema: división por H2,
-                      render Markdown con LaTeX protegido, inserción de
-                      bloques interactivos (reutiliza _generar_bloque, no
-                      duplica), SVG opcionales Haiku, índice con scroll-spy,
-                      init lazy por IntersectionObserver
-prompts.py          — PROMPT_RAZONADOR_VISUALIZACION, PROMPT_GENERADOR_HTML,
-                      PROMPT_DETECTOR_INTERACTIVIDAD, PROMPT_GENERADOR_SVG;
-                      build_razonador_message, build_generador_message,
-                      build_detector_message, build_svg_message
-config.py           — Carga centralizada de .env; MODEL_FAST/MODEL_SMART;
-                      MIN_LATEX_CHARS, MIN_VARIABLES_FOR_RELACION, CONTEXTO_CHARS
-requirements.txt    — anthropic, streamlit, reportlab, markdown,
-                      matplotlib, python-dotenv, pdfplumber, python-pptx
-tools/razonador_fixture.py — debug CLI: ejecuta el razonador sobre casos
-                      canónicos (Hall-Petch, Q(P_i,P_s), Gay-Lussac, σ por
-                      material) y comprueba familia/sliders/descartados;
-                      consume API (--repeat N estabilidad). No es del pipeline.
+detector.py         — Regex + filtro Haiku + evaluar_advertencia() Sonnet (opt-in UI)
+generador_pdf.py    — Markdown → PDF institucional UO (ReportLab + matplotlib mathtext)
+generador_html.py   — Razonador + generador Sonnet; aplicar_rangos(); generar_bloque_con_visualizacion()
+generador_presentacion.py — HTML presentación completa del tema
+prompts.py          — PROMPT_* y builders de mensajes
+config.py           — .env, modelos, umbrales
+assets/logo_uniovi.png
+tools/razonador_fixture.py — debug CLI del razonador (consume API)
 ```
+
+Detalle de flujo y prompts en secciones siguientes (la lógica de generación no cambió; la UI pasó a `app-unificada`).
 
 ---
 
