@@ -56,9 +56,9 @@ Este es el contrato que el Agente Contenido lee con `parse_organization_md()` (p
 formato exacto no será parseado correctamente por el Agente Contenido.
 
 **Nota:** la tabla de subbloques usa `| Subtema | Evidencia | Origen |` (sin horas por
-subtema — las horas viven solo en el encabezado del bloque). Formatos legados con
-columna Horas siguen parseándose. El Agente Contenido usa `Evidencia` para segmentar
-el material; si falta, los subbloques quedan en estado `pendiente`.
+subtema — las horas viven solo en el encabezado del bloque). El Agente Contenido usa
+los **nombres y el orden** de los subtemas para el reparto monótono del markdown curado;
+`Evidencia` refuerza el emparejamiento de títulos cuando está disponible.
 
 ---
 
@@ -77,17 +77,11 @@ Toda la lógica de cálculo y transformación vive aquí (módulo importable, si
 `app-unificada` lo carga vía `_cargar_modulos_agente` (`_org_parser`) y lo usa
 directamente. Detalle en `agente-organizador/CLAUDE.md`.
 
-### Contenido → `agente-contenido/pipeline.py`
+### Contenido → `agente-contenido/pipeline.py` + `split_monotono.py`
 
-La orquestación del pipeline (chunk → classify en paralelo → assemble → validate)
-vive en `pipeline.py` como función importable `procesar_segmento()`. Solo
-`app-unificada` la usa (los standalone fueron eliminados en junio 2026):
-
-- App-unificada: `_cnt_curar_subbloque()` llama a `procesar_segmento()` y
-  extrae la fidelidad media para guardar en BD.
-
-El markdown que produce `procesar_segmento()` usa `assemble_subbloque_body()` —
-cuerpo sin frontmatter YAML, con H1 del nombre del subbloque.
+- **Curado:** `procesar_bloque()` — bloque completo, horas del **bloque** (no por subtema).
+- **Reparto:** `split_monotono()` — divide el markdown curado por nombres/orden del Organizador (sin API).
+- App-unificada: generar bloque → preview del reparto → confirmar → borradores en `contenido_subbloque`.
 
 ### Presentación → `agente-presentacion/generador_html.py`
 
@@ -162,7 +156,8 @@ TFG/
 ├── README.md                     ← README principal del proyecto
 ├── CLAUDE.md                     ← este archivo — contexto global para Claude Code
 ├── shared/
-│   └── ui_hero.py                ← render_hero() compartido entre los tres agentes
+│   ├── ui_hero.py                ← render_hero() compartido entre los tres agentes
+│   └── pdf_enriched.py           ← extracción PDF con jerarquía visual (fontname/size)
 ├── database/
 │   ├── CLAUDE.md                 ← esquema SQLite, migraciones, APIs de progreso
 │   ├── db.py                     ← motor SQLite (esquema v2, init, progreso, CRUD)
@@ -194,7 +189,8 @@ TFG/
 │   ├── cleaner.py
 │   ├── assembler.py
 │   ├── validator.py
-│   ├── segmentor.py              ← segmentación de texto por subbloque (evidencia estructural)
+│   ├── split_monotono.py         ← reparto del markdown curado por subtema (sin API)
+│   ├── pipeline.py               ← procesar_bloque() / procesar_segmento()
 │   ├── subblock_state.py         ← SubbloqueResult, calcular_progreso_bloque/asignatura
 │   ├── pipeline.py               ← FUENTE DE VERDAD importable: procesar_segmento()
 │   │                                (chunk→classify en paralelo→assemble→validate)
@@ -257,6 +253,6 @@ Detalle del esquema y APIs: **`database/CLAUDE.md`**.
 | Agente/módulo | Estado | Validado con |
 |---------------|--------|-------------|
 | Organizador | Funcional — subbloques anclados a evidencia estructural; detección de página índice (Prioridad 3a) + scan visual relativo 20% (Prioridad 3b); Reglas A/B/C/D para eliminar FP en Strategy 1; prompt de horas consolidado; residuo normalización → bloque más grande. Lógica pura en `parser.py`; `app-unificada` la consume sin duplicar. Standalone eliminado. | Oleohidráulica, Elementos de Máquinas, Tecnología de Materiales, Frenos |
-| Contenido | Funcional — granularidad de subbloque: segmentación por evidencia, generación por selección (cada sub-bloque = llamada API independiente), valoración 1-10 por sub-bloque, estados pendiente/generado/editado/aprobado | Temas 1 y 2 de Tecnología de Materiales (PDF) |
+| Contenido | Funcional — curado por bloque + reparto monótono (`split_monotono.py`), preview y confirmación, valoración 1-10 por sub-bloque | Temas 1 y 2 de Tecnología de Materiales (PDF) |
 | Presentación | Funcional — 3 outputs (PDF institucional UO, HTML interactivo, HTML presentación completa); LaTeX con matplotlib mathtext | Tema 1 (Tec. Materiales), TEMA7 (Elementos de Máquinas) |
 | Base de datos | Esquema v4 — jerarquía asignatura→bloque→subbloque + estado del ciclo de vida + progreso en tiempo real + valoración por agente | Tecnología de Materiales (script `database/validar_esquema.py`) |

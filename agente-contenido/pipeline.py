@@ -8,7 +8,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from assembler import assemble_subbloque_body
+from assembler import assemble_markdown, assemble_subbloque_body
 from chunker import split_into_chunks
 from classifier import classify_and_format
 from cnt_config import MAX_WORKERS
@@ -75,3 +75,50 @@ def procesar_segmento(
     )
     validacion = validate_items(items, original_chunks=chunks_raw)
     return items, markdown_body, validacion
+
+
+def procesar_bloque(
+    texto: str,
+    nombre_bloque: str,
+    nombre_archivo: str,
+    horas: float | None,
+    max_workers: int | None = None,
+) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+    """Curado de un bloque temático completo → un único markdown con frontmatter.
+
+    Usa las horas del bloque (no por subtema) para el contexto de densidad.
+    """
+    if max_workers is None:
+        max_workers = MAX_WORKERS
+
+    chunks = split_into_chunks(texto)
+    if not chunks:
+        return [], "", {"ok": True, "errores": [], "fidelity": []}
+
+    ordered: list[dict[str, Any] | None] = [None] * len(chunks)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_to_i = {
+            pool.submit(classify_and_format, chunk, horas): i
+            for i, chunk in enumerate(chunks)
+        }
+        for fut in as_completed(future_to_i):
+            ordered[future_to_i[fut]] = fut.result()
+
+    items: list[dict[str, Any]] = []
+    chunks_raw: list[str] = []
+    for chunk_raw, item in zip(chunks, ordered):
+        if item is not None:
+            items.append(item)
+            chunks_raw.append(chunk_raw)
+
+    if not items:
+        return [], "", {"ok": True, "errores": [], "fidelity": []}
+
+    markdown = assemble_markdown(items, nombre_del_archivo=nombre_archivo)
+    if nombre_bloque and "tema_detectado: No detectado" in markdown:
+        markdown = markdown.replace(
+            "tema_detectado: No detectado",
+            f"tema_detectado: {nombre_bloque}",
+        )
+    validacion = validate_items(items, original_chunks=chunks_raw)
+    return items, markdown, validacion

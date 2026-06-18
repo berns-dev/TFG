@@ -6,10 +6,9 @@ Ejecutar desde agente-contenido/:
 
 Comprueba:
 1. Parseo de subbloques desde .md del Organizador (tablas de 3 y 4 columnas)
-2. Segmentación de texto extraído por subbloques (Slide N, Sección X.X, fallback)
+2. Reparto monotono (ver también tools/validate_split_monotono.py)
 3. Ensamblado del Markdown por bloque con marcadores SUBBLOQUE_INICIO/FIN
 4. Cálculo de progreso (aprobados/total) con estados simulados
-5. Tratamiento del bloque fallback (único subbloque, "Sin señal verificable")
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from assembler import assemble_block_with_subbloques
-from segmentor import segment_text_by_subbloques
+from split_monotono import split_monotono
 from subblock_state import SubbloqueResult, calcular_progreso_asignatura, calcular_progreso_bloque
 
 # ── Utilidades de test ────────────────────────────────────────────────────────
@@ -117,100 +116,30 @@ def test_parseo_org_md() -> None:
     )
 
 
-# ── 2. Segmentación de texto ──────────────────────────────────────────────────
+# ── 2. Reparto monótono (sustituye segmentación de PDF bruto) ─────────────────
 
-TEXTO_PDF = """\
-[PAGINA 1]
-Introducción general al tema.
+def test_split_monotono_basico() -> None:
+    print("\n[2] Reparto monótono sobre markdown curado")
+    md = """---
+tema_detectado: Tema
+---
 
-3.1. Defectos y dislocaciones
-Los defectos cristalinos incluyen vacancias, dislocaciones y juntas de grano.
-Las dislocaciones son los portadores de la deformación plástica.
+### Alpha
 
-3.2. Mecanismos de endurecimiento
-Los cuatro mecanismos principales son: solución sólida, deformación plástica,
-afino de grano y precipitación. Cada uno actúa obstaculizando las dislocaciones.
+Contenido A.
 
-3.3. Fractura y fatiga
-La fractura puede ser dúctil o frágil. La fatiga ocurre bajo cargas cíclicas.
+### Beta
+
+Contenido B.
 """
-
-TEXTO_PPTX = """\
-[SLIDE 1]
-# Introducción
-
-[SLIDE 12]
-# Templado y revenido
-El templado consiste en calentar el acero y enfriarlo bruscamente en agua o aceite.
-El revenido reduce las tensiones internas mediante calentamiento controlado.
-
-[SLIDE 18]
-# Recocido y normalizado
-El recocido ablanda el material eliminando tensiones residuales.
-El normalizado refina el grano mediante enfriamiento al aire.
-"""
-
-TEXTO_SIN_SENALES = """\
-Contenido general sobre polímeros sin estructura clara de secciones numeradas.
-Termoplásticos, termoestables y elastómeros son los tipos principales.
-"""
-
-
-def test_segmentacion() -> None:
-    print("\n[2] Segmentación de texto por subbloques")
-
-    # 2a. Texto PDF con secciones numeradas
-    subbloques_pdf = [
-        {"nombre": "Defectos y dislocaciones", "horas": 3.0, "evidencia": "Sección 3.1", "origen": "Detectado"},
-        {"nombre": "Mecanismos de endurecimiento", "horas": 3.0, "evidencia": "Sección 3.2", "origen": "Detectado"},
-        {"nombre": "Fractura y fatiga", "horas": 2.0, "evidencia": "Sección 3.3", "origen": "Detectado"},
+    subs = [
+        {"id": 1, "nombre": "Alpha", "orden": 1, "evidencia": ""},
+        {"id": 2, "nombre": "Beta", "orden": 2, "evidencia": ""},
     ]
-    segments_pdf = segment_text_by_subbloques(TEXTO_PDF, subbloques_pdf)
-
-    check("PDF: devuelve 3 segmentos", len(segments_pdf) == 3)
-    _, seg1 = segments_pdf[0]
-    _, seg2 = segments_pdf[1]
-    _, seg3 = segments_pdf[2]
-    check("PDF: seg1 contiene '3.1'", "3.1" in seg1, f"primeros 60: {seg1[:60]!r}")
-    check("PDF: seg2 contiene '3.2'", "3.2" in seg2, f"primeros 60: {seg2[:60]!r}")
-    check("PDF: seg3 contiene '3.3'", "3.3" in seg3, f"primeros 60: {seg3[:60]!r}")
-    check("PDF: seg1 NO contiene '3.2'", "3.2" not in seg1)
-    check("PDF: texto intro va a seg1 (antes del primer boundary)", "Introducción" in seg1)
-
-    # 2b. Texto PPTX con marcadores [SLIDE N]
-    subbloques_pptx = [
-        {"nombre": "Templado y revenido", "horas": 3.0, "evidencia": "Slide 12", "origen": "Detectado"},
-        {"nombre": "Recocido y normalizado", "horas": 3.0, "evidencia": "Slide 18", "origen": "Detectado"},
-    ]
-    segments_pptx = segment_text_by_subbloques(TEXTO_PPTX, subbloques_pptx)
-
-    check("PPTX: devuelve 2 segmentos", len(segments_pptx) == 2)
-    _, sp1 = segments_pptx[0]
-    _, sp2 = segments_pptx[1]
-    check("PPTX: seg1 contiene 'Templado'", "Templado" in sp1)
-    check("PPTX: seg2 contiene 'Recocido'", "Recocido" in sp2)
-    check("PPTX: intro (SLIDE 1) va a seg1", "Introducción" in sp1)
-
-    # 2c. Fallback: único subbloque sin señal verificable
-    sb_fallback = [
-        {"nombre": "Polímeros", "horas": 3.0, "evidencia": "Sin señal verificable", "origen": "Fallback"},
-    ]
-    segments_fb = segment_text_by_subbloques(TEXTO_SIN_SENALES, sb_fallback)
-    check("Fallback: 1 segmento", len(segments_fb) == 1)
-    _, seg_fb = segments_fb[0]
-    check("Fallback: recibe todo el texto", "Termoplásticos" in seg_fb)
-
-    # 2d. Subbloques sin boundary encontrado: primero recibe todo, resto vacíos
-    sb_sin_boundary = [
-        {"nombre": "Sub A", "horas": 1.0, "evidencia": "Sección 99.99", "origen": "Detectado"},
-        {"nombre": "Sub B", "horas": 1.0, "evidencia": "Sección 99.98", "origen": "Detectado"},
-    ]
-    segs_no_boundary = segment_text_by_subbloques(TEXTO_SIN_SENALES, sb_sin_boundary)
-    check("Sin boundary: 2 resultados devueltos", len(segs_no_boundary) == 2)
-    _, seg_a = segs_no_boundary[0]
-    _, seg_b = segs_no_boundary[1]
-    check("Sin boundary: primer subbloque recibe texto", len(seg_a) > 0)
-    check("Sin boundary: segundo subbloque vacío", seg_b == "")
+    r = split_monotono(md, subs)
+    check("2 fragmentos", len(r.fragmentos) == 2)
+    check("alpha en frag 1", "Contenido A" in r.fragmentos[0].markdown)
+    check("beta en frag 2", "Contenido B" in r.fragmentos[1].markdown)
 
 
 # ── 3. Ensamblado con marcadores SUBBLOQUE_INICIO/FIN ───────────────────────
@@ -324,21 +253,8 @@ def test_progreso() -> None:
 # ── 5. Fallback: bloque sin subbloques (comportamiento clásico) ───────────────
 
 def test_fallback_sin_subbloques() -> None:
-    print("\n[5] Fallback: sin subbloques (bloque único, comportamiento clásico)")
+    print("\n[5] Ensamblado: bloque con un único subbloque")
 
-    # Sin subbloques → lista vacía → segment devuelve lista vacía
-    segs = segment_text_by_subbloques("Texto cualquiera.", [])
-    check("Lista vacia de subbloques: resultado vacio", segs == [])
-
-    # Subbloque unico fallback: todo el texto al unico subbloque
-    sb_unico = [{"nombre": "Polimeros", "horas": 3.0, "evidencia": "Sin senal verificable", "origen": "Fallback"}]
-    segs_unico = segment_text_by_subbloques("Texto de polimeros.", sb_unico)
-    check("Unico subbloque: 1 resultado", len(segs_unico) == 1)
-    meta, txt = segs_unico[0]
-    check("Unico subbloque: recibe todo el texto", txt == "Texto de polimeros.")
-    check("Unico subbloque: meta correcta", meta["nombre"] == "Polimeros")
-
-    # Ensamblado con subbloque unico
     md = assemble_block_with_subbloques(
         [{"nombre": "Polimeros", "horas": 3.0, "evidencia": "Sin senal verificable",
           "origen": "Fallback", "estado": "generado", "markdown": "# Polimeros\n\nContenido.",
@@ -352,68 +268,6 @@ def test_fallback_sin_subbloques() -> None:
     check("Fallback: 1 marcador INICIO", len(inicios) == 1)
 
 
-# ── 6. Detección de boundary no encontrado (condición de aviso UI) ───────────
-#
-# Esta sección valida la lógica de detección que app.py usa para emitir st.warning()
-# cuando una evidencia estructural no se localiza en el texto. No es posible testear
-# el st.warning() directamente (requiere Streamlit), pero sí la condición que lo activa.
-
-_EVIDENCIAS_FALLBACK_TEST = frozenset({
-    "sin señal verificable", "sin senal verificable",
-    "fallback", "sin señal", "sin senal", "",
-})
-
-
-def _detectar_avisos(segs: list) -> list[str]:
-    """Reproduce la lógica de detección de app.py: retorna nombres de subbloques
-    cuya evidencia no se encontró (seg vacío + evidencia no-fallback)."""
-    avisos: list[str] = []
-    for sb_meta, seg_text in segs:
-        ev = (sb_meta.get("evidencia") or "").strip().lower()
-        if not seg_text.strip() and ev not in _EVIDENCIAS_FALLBACK_TEST:
-            avisos.append(sb_meta.get("nombre", "?"))
-    return avisos
-
-
-def test_deteccion_boundary_no_encontrado() -> None:
-    print("\n[6] Detección de boundary no encontrado (condición de aviso)")
-
-    # Texto sin secciones numeradas ni marcadores de slide
-    texto_sin_estructura = (
-        "Contenido general sin secciones numeradas ni marcadores de diapositiva. "
-        "Este texto no contiene ni '5.1.' ni '[SLIDE 7]'."
-    )
-
-    # 6a. Ningún boundary encontrado: primer sub recibe todo; resto vacíos
-    sb_ninguno = [
-        {"nombre": "Sub A", "horas": 1.0, "evidencia": "Sección 5.1", "origen": "Detectado"},
-        {"nombre": "Sub B", "horas": 1.0, "evidencia": "Slide 7", "origen": "Detectado"},
-        {"nombre": "Sub C", "horas": 1.0, "evidencia": "Sin señal verificable", "origen": "Fallback"},
-    ]
-    segs_ninguno = segment_text_by_subbloques(texto_sin_estructura, sb_ninguno)
-    avisos = _detectar_avisos(segs_ninguno)
-
-    check("Sub A (recibe texto, no avisa aunque boundary no encontrado)", "Sub A" not in avisos)
-    check("Sub B (Slide 7 no encontrado, avisa)", "Sub B" in avisos)
-    check("Sub C (fallback, no avisa)", "Sub C" not in avisos)
-    check("Solo 1 aviso generado", len(avisos) == 1)
-
-    # 6b. Caso mixto: una evidencia encontrada, otra no
-    texto_con_seccion = (
-        "[PAGINA 1]\n3.1. Sección primera\nContenido de la sección primera.\n"
-    )
-    sb_mixto = [
-        {"nombre": "Sub D", "horas": 1.0, "evidencia": "Sección 3.1", "origen": "Detectado"},
-        {"nombre": "Sub E", "horas": 1.0, "evidencia": "Sección 99.99", "origen": "Detectado"},
-    ]
-    segs_mixto = segment_text_by_subbloques(texto_con_seccion, sb_mixto)
-    avisos_mixto = _detectar_avisos(segs_mixto)
-
-    check("Sub D (Sección 3.1 encontrada, no avisa)", "Sub D" not in avisos_mixto)
-    check("Sub E (Sección 99.99 no encontrada, avisa)", "Sub E" in avisos_mixto)
-    check("Solo 1 aviso en caso mixto", len(avisos_mixto) == 1)
-
-
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -422,11 +276,10 @@ if __name__ == "__main__":
     print("=" * 60)
 
     test_parseo_org_md()
-    test_segmentacion()
+    test_split_monotono_basico()
     test_ensamblado()
     test_progreso()
     test_fallback_sin_subbloques()
-    test_deteccion_boundary_no_encontrado()
 
     total = len(_results)
     passed = sum(1 for _, ok in _results if ok)

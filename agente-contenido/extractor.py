@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from pathlib import Path
 
 from cleaner import clean_extracted_text
+
+_MONOREPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_MONOREPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_MONOREPO_ROOT))
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,7 +80,54 @@ def _is_mirrored_text(line: str) -> bool:
     return False
 
 
-def _extract_pdf(path: Path) -> str:
+_PAGE_MARK_RE = re.compile(r"^\[PAGINA\s+(\d+)\]", re.MULTILINE | re.IGNORECASE)
+
+
+def _clean_page_blocks(raw_document: str, filename: str) -> str:
+    """Aplica filtro de espejo y cleaner por bloque [PAGINA N]."""
+    doc = (raw_document or "").strip()
+    if not doc:
+        return ""
+
+    matches = list(_PAGE_MARK_RE.finditer(doc))
+    if not matches:
+        filtered = [ln for ln in doc.split("\n") if not _is_mirrored_text(ln)]
+        return clean_extracted_text("\n".join(filtered), filename).strip()
+
+    parts: list[str] = []
+    for i, m in enumerate(matches):
+        label = m.group(0).strip()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(doc)
+        body = doc[start:end].strip()
+        if body == "[TEXTO_ILEGIBLE]":
+            parts.append(f"{label}\n[TEXTO_ILEGIBLE]")
+            continue
+        filtered_lines = [ln for ln in body.split("\n") if not _is_mirrored_text(ln)]
+        text = clean_extracted_text("\n".join(filtered_lines), filename).strip()
+        if text:
+            parts.append(f"{label}\n{text}")
+        else:
+            parts.append(f"{label}\n[TEXTO_ILEGIBLE]")
+    return "\n\n".join(parts).strip()
+
+
+def _extract_pdf_enriched(path: Path) -> str | None:
+    """Extracción con jerarquía visual (#/##/###). None → usar plana."""
+    try:
+        from shared.pdf_enriched import build_pdf_markdown
+
+        raw = build_pdf_markdown(path)
+        if not raw:
+            return None
+        cleaned = _clean_page_blocks(raw, path.name)
+        return cleaned if cleaned.strip() else None
+    except Exception as exc:
+        _LOGGER.warning("Extracción PDF enriquecida no disponible: %s", exc)
+        return None
+
+
+def _extract_pdf_plain(path: Path) -> str:
     import pdfplumber
 
     parts: list[str] = []
@@ -102,6 +154,29 @@ def _extract_pdf(path: Path) -> str:
                 _LOGGER.warning("Página %s: error en extracción, marcando ilegible", idx)
                 parts.append(f"[PAGINA {idx}]\n[TEXTO_ILEGIBLE]")
     return "\n\n".join(parts).strip()
+
+
+def _extract_pdf(path: Path) -> str:
+    enriched = _extract_pdf_enriched(path)
+    if enriched:
+        n_headings = sum(
+            1
+            for ln in enriched.splitlines()
+            if ln.lstrip().startswith(("# ", "## ", "### "))
+        )
+        _LOGGER.info(
+            "PDF enriquecido %s: %s chars, %s líneas con prefijo de título",
+            path.name,
+            len(enriched),
+            n_headings,
+        )
+        return enriched
+
+    _LOGGER.info(
+        "PDF %s: extracción plana (metadatos de fuente insuficientes)",
+        path.name,
+    )
+    return _extract_pdf_plain(path)
 
 
 def _escape_markdown_table_cell(text: str) -> str:

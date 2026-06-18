@@ -116,16 +116,5 @@ def main() -> None:
                 print(f"  {needle!r} @ {idx}:")
                 print(f"    {snippet!r}")
 
-    # Comparar segmentor boundary para Seccion 3.2 si existe
-    print("\n--- Prueba boundary segmentor (patron Seccion X.X) ---")
-    from segmentor import _find_boundary_in_text  # noqa: E402
-
-    sys.path.insert(0, str(ROOT / "agente-contenido"))
-    for ev in ["Sección 3.2", "Sección 1.1"]:
-        pos_org = _find_boundary_in_text(t_org, ev)
-        pos_cnt = _find_boundary_in_text(t_cnt, ev)
-        print(f"  {ev}: org={pos_org}, cnt={pos_cnt}")
-
-
 if __name__ == "__main__":
     main()

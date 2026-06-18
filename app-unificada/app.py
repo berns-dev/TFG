@@ -157,7 +157,7 @@ try:
         RAIZ_CONTENIDO, "contenido",
         [
             "cnt_config", "cleaner", "extractor", "chunker", "classifier",
-            "assembler", "validator", "segmentor", "pipeline",
+            "assembler", "validator", "split_monotono", "pipeline",
         ],
     )
     _cnt_config = _cnt_mods["cnt_config"]
@@ -167,12 +167,12 @@ try:
     _cnt_classifier = _cnt_mods["classifier"]
     _cnt_assembler = _cnt_mods["assembler"]
     _cnt_validator = _cnt_mods["validator"]
-    _cnt_segmentor = _cnt_mods["segmentor"]
+    _cnt_split = _cnt_mods["split_monotono"]
     _cnt_pipeline = _cnt_mods["pipeline"]
     _CNT_ERROR: str | None = None
 except Exception as _ce:
     _cnt_config = _cnt_cleaner = _cnt_extractor = _cnt_chunker = _cnt_classifier = None
-    _cnt_assembler = _cnt_validator = _cnt_segmentor = _cnt_pipeline = None
+    _cnt_assembler = _cnt_validator = _cnt_split = _cnt_pipeline = None
     _CNT_ERROR = str(_ce)
 
 
@@ -1019,44 +1019,17 @@ def _db_cnt_aprobar_subbloque(subbloque_id: int, puntuacion: int) -> None:
 
 
 # =============================================================================
-# Lógica de curación por sub-bloque — Agente Contenido
+# Lógica de curación por bloque — Agente Contenido
 # =============================================================================
 
-_CNT_EVIDENCIAS_FALLBACK = frozenset({
-    "sin señal verificable", "sin senal verificable",
-    "fallback", "sin señal", "sin senal", "",
-})
+
+def _cnt_preview_key(tema_id: int) -> str:
+    return f"cnt_split_preview_{tema_id}"
 
 
-def _cnt_metas_para_segmentacion(subbloques: list[dict]) -> list[dict]:
-    """Adapta filas de BD al formato que espera segment_text_by_subbloques."""
-    return [
-        {
-            "nombre": sb["nombre"],
-            "horas": float(sb.get("horas") or 0.0),
-            "evidencia": sb.get("evidencia") or "",
-            "origen": sb.get("origen") or "",
-        }
-        for sb in subbloques
-    ]
-
-
-def _cnt_extraer_segmento_subbloque(
-    subbloque_meta: dict,
-    todos_subbloques: list[dict],
-    rutas_material: list[str],
-) -> str:
-    """Acota el texto de entrada al tramo del sub-bloque usando evidencia estructural."""
-    target_idx = next(
-        (i for i, sb in enumerate(todos_subbloques) if sb["id"] == subbloque_meta["id"]),
-        None,
-    )
-    if target_idx is None:
-        return ""
-
-    sb_metas = _cnt_metas_para_segmentacion(todos_subbloques)
+def _cnt_extraer_texto_bloque(rutas_material: list[str]) -> str:
+    """Concatena el texto extraído de todos los materiales del bloque."""
     partes: list[str] = []
-
     for ruta in rutas_material:
         if not os.path.exists(ruta):
             continue
@@ -1064,75 +1037,115 @@ def _cnt_extraer_segmento_subbloque(
             texto = _cnt_extractor.extract_text(ruta)
         except Exception:
             continue
-        if not (texto or "").strip():
-            continue
-
-        segments = _cnt_segmentor.segment_text_by_subbloques(texto, sb_metas)
-        if target_idx < len(segments):
-            _, seg_text = segments[target_idx]
-            if seg_text and seg_text.strip():
-                partes.append(seg_text.strip())
-
+        if (texto or "").strip():
+            partes.append(texto.strip())
     return "\n\n".join(partes)
 
 
-def _cnt_curar_subbloque(
-    subbloque_meta: dict,
-    todos_subbloques: list[dict],
+def _cnt_curar_bloque(
     tema_nombre: str,
     tema_horas: float | None,
     rutas_material: list[str],
 ) -> tuple[str, float | None]:
-    """Genera markdown curado para un sub-bloque usando el pipeline del Agente Contenido.
+    """Genera el markdown curado de un bloque temático completo (una pasada API)."""
+    texto = _cnt_extraer_texto_bloque(rutas_material)
+    if not texto.strip():
+        return "", None
 
-    Segmenta el material por evidencia estructural, luego delega en
-    `pipeline.procesar_segmento()` (fuente única del pipeline chunk→classify→assemble→validate).
-    Devuelve (markdown_body, fidelidad). La fidelidad es la media de los coverage_score
-    del validador, o None si no hubo nada que validar.
-    """
-    subbloque_nombre = subbloque_meta["nombre"]
-    sb_horas = float(subbloque_meta.get("horas") or 0.0)
-    effective_horas = sb_horas if sb_horas > 0 else tema_horas
-
-    seg_text = _cnt_extraer_segmento_subbloque(subbloque_meta, todos_subbloques, rutas_material)
-    if not seg_text.strip():
-        return (
-            f"# {subbloque_nombre}\n\n*No se pudo extraer contenido del material de entrada.*",
-            None,
-        )
-
-    sub_ctx = (
-        f"[CONTEXTO SUBTEMA: Este fragmento pertenece al subtema «{subbloque_nombre}» "
-        f"del bloque «{tema_nombre}». "
-        f"Extrae y estructura únicamente el contenido relevante para este subtema.]\n\n"
-    )
     max_w = getattr(_cnt_config, "MAX_WORKERS", 5)
-
-    items, markdown, reporte = _cnt_pipeline.procesar_segmento(
-        seg_text=seg_text,
-        nombre_subbloque=subbloque_nombre,
-        nombre_archivo=f"{subbloque_nombre}.md",
-        horas=effective_horas,
-        contexto_prefix=sub_ctx,
+    _items, markdown, reporte = _cnt_pipeline.procesar_bloque(
+        texto=texto,
+        nombre_bloque=tema_nombre,
+        nombre_archivo=f"{tema_nombre}.md",
+        horas=tema_horas,
         max_workers=max_w,
     )
+    if not markdown.strip():
+        return "", None
 
-    if not items:
-        return (
-            f"# {subbloque_nombre}\n\n*No se pudo extraer contenido del material de entrada.*",
-            None,
-        )
-
-    fidelidad: float | None = None
     scores = [
         r["coverage_score"]
         for r in (reporte.get("fidelity") or [])
         if r.get("coverage_score") is not None
     ]
-    if scores:
-        fidelidad = round(sum(scores) / len(scores), 3)
-
+    fidelidad: float | None = round(sum(scores) / len(scores), 3) if scores else None
     return markdown, fidelidad
+
+
+def _cnt_generar_bloque_y_preview(
+    tema_id: int,
+    tema_nombre: str,
+    tema_horas: float | None,
+    subbloques: list[dict],
+    rutas_material: list[str],
+    asignatura_id: int,
+) -> None:
+    """Curado del bloque + reparto monótono; resultado en session_state hasta confirmar."""
+    umbral = float(getattr(_cnt_config, "FIDELITY_THRESHOLD", 0.85))
+    ejecucion_id = _db_crear_ejecucion_contenido(asignatura_id)
+    hubo_error = False
+    preview_key = _cnt_preview_key(tema_id)
+
+    with st.status(f"Generando bloque: {tema_nombre}…", expanded=True) as status:
+        try:
+            st.write("📚 Extrayendo y curando material del bloque…")
+            md_bloque, fidelidad = _cnt_curar_bloque(
+                tema_nombre=tema_nombre,
+                tema_horas=tema_horas,
+                rutas_material=rutas_material,
+            )
+            if not md_bloque.strip():
+                raise ValueError("No se pudo extraer ni curar contenido del material.")
+
+            st.write("✂️ Repartiendo por apartados del Organizador…")
+            split_result = _cnt_split.split_monotono(md_bloque, subbloques)
+
+            st.session_state[preview_key] = {
+                "markdown_bloque": md_bloque,
+                "fragmentos": [f.__dict__ for f in split_result.fragmentos],
+                "confianza_global": split_result.confianza_global,
+                "requiere_revision": split_result.requiere_revision,
+                "fidelidad": fidelidad,
+            }
+
+            if fidelidad is not None and fidelidad < umbral:
+                _db_registrar_validacion(
+                    ejecucion_id=ejecucion_id,
+                    tipo="fidelidad_baja",
+                    descripcion=(
+                        f"bloque '{tema_nombre}' con fidelidad media {fidelidad}"
+                    ),
+                    valor_afectado=fidelidad,
+                    bloqueante=0,
+                )
+
+            label = f"✅ Borrador del bloque listo: {tema_nombre}"
+            if split_result.requiere_revision:
+                label += " — revisa el reparto antes de confirmar"
+            if fidelidad is not None and fidelidad < umbral:
+                label += f" (fidelidad {fidelidad} < {umbral})"
+            status.update(label=label, state="complete")
+        except Exception as err:
+            hubo_error = True
+            st.session_state.pop(preview_key, None)
+            status.update(label="❌ Error", state="error")
+            st.error(f"Error al generar el bloque: {err}")
+
+    _db_actualizar_ejecucion(ejecucion_id, "error" if hubo_error else "completado")
+
+
+def _cnt_confirmar_reparto(tema_id: int) -> None:
+    """Persiste los fragmentos del preview en contenido_subbloque."""
+    preview = st.session_state.get(_cnt_preview_key(tema_id))
+    if not preview:
+        return
+    for frag in preview.get("fragmentos") or []:
+        _db_cnt_upsert_borrador(int(frag["subbloque_id"]), frag["markdown"])
+    st.session_state.pop(_cnt_preview_key(tema_id), None)
+
+
+def _cnt_cancelar_preview(tema_id: int) -> None:
+    st.session_state.pop(_cnt_preview_key(tema_id), None)
 
 
 def _cnt_init_edicion_state() -> None:
@@ -1183,73 +1196,6 @@ def _cnt_persistir_edicion(subbloque_id: int, texto: str, borrador: str) -> None
     _db_cnt_guardar_final(subbloque_id, texto_limpio, pct)
     _cnt_init_edicion_state()
     st.session_state["cnt_en_edicion"].discard(subbloque_id)
-
-
-def _cnt_generar_borrador_subbloque(
-    sub: dict,
-    subbloques: list[dict],
-    tema_nombre: str,
-    tema_horas: float | None,
-    rutas_material: list[str],
-    asignatura_id: int,
-) -> None:
-    """Genera el borrador de un único sub-bloque (una llamada a la API por sub-bloque)."""
-    umbral = float(getattr(_cnt_config, "FIDELITY_THRESHOLD", 0.85))
-    ejecucion_id = _db_crear_ejecucion_contenido(asignatura_id)
-    hubo_error = False
-    with st.status(f"Generando: {sub['nombre']}…", expanded=True) as status:
-        try:
-            st.write("📚 Segmentando y clasificando material…")
-            ev_norm = (sub.get("evidencia") or "").strip().lower()
-            if (
-                not sub.get("es_fallback")
-                and ev_norm not in _CNT_EVIDENCIAS_FALLBACK
-            ):
-                seg_previo = _cnt_extraer_segmento_subbloque(
-                    sub, subbloques, rutas_material
-                )
-                if not seg_previo.strip():
-                    st.warning(
-                        f"⚠️ La referencia «{sub.get('evidencia', '')}» "
-                        "no se encontró en el material. "
-                        "El borrador puede quedar vacío — "
-                        "puedes editarlo manualmente tras generarlo."
-                    )
-            md, fidelidad = _cnt_curar_subbloque(
-                subbloque_meta=sub,
-                todos_subbloques=subbloques,
-                tema_nombre=tema_nombre,
-                tema_horas=tema_horas,
-                rutas_material=rutas_material,
-            )
-            _db_cnt_upsert_borrador(sub["id"], md)
-            if fidelidad is not None and fidelidad < umbral:
-                _db_registrar_validacion(
-                    ejecucion_id=ejecucion_id,
-                    tipo="fidelidad_baja",
-                    descripcion=(
-                        f"sub-bloque '{sub['nombre']}' con fidelidad {fidelidad}"
-                    ),
-                    valor_afectado=fidelidad,
-                    bloqueante=0,
-                )
-                status.update(
-                    label=(
-                        f"⚠️ Borrador listo (fidelidad {fidelidad} < {umbral}): "
-                        f"{sub['nombre']}"
-                    ),
-                    state="complete",
-                )
-            else:
-                status.update(
-                    label=f"✅ Borrador listo: {sub['nombre']}",
-                    state="complete",
-                )
-        except Exception as err:
-            hubo_error = True
-            status.update(label="❌ Error", state="error")
-            st.error(f"Error en «{sub['nombre']}»: {err}")
-    _db_actualizar_ejecucion(ejecucion_id, "error" if hubo_error else "completado")
 
 
 # =============================================================================
@@ -1320,7 +1266,6 @@ def _vista_contenido() -> None:
             "estado": cs["estado"] if cs else "pendiente",
         })
 
-    pendientes = [e for e in estados_sb if e["cs"] is None]
     en_revision_count = sum(
         1 for e in estados_sb if e["estado"] in ("generado", "editado")
     )
@@ -1361,52 +1306,83 @@ def _vista_contenido() -> None:
 
     st.divider()
 
-    # ── Generación por selección (cada sub-bloque = una llamada a la API) ───
-    if pendientes:
+    preview_key = _cnt_preview_key(tema_id)
+    preview = st.session_state.get(preview_key)
+    sin_borrador = all(e["cs"] is None for e in estados_sb)
+
+    # ── Generación del bloque + preview del reparto ─────────────────────────
+    if preview:
+        st.markdown("**Vista previa del reparto por apartados**")
+        conf = preview.get("confianza_global", 0)
+        st.caption(
+            f"Confianza media del emparejamiento: **{conf:.0%}**. "
+            "Revisa la tabla y confirma para crear los borradores por subtema."
+        )
+        if preview.get("requiere_revision"):
+            st.warning(
+                "Algunos apartados tienen coincidencia débil o sin título detectado. "
+                "Comprueba el reparto antes de confirmar."
+            )
+        fid = preview.get("fidelidad")
+        if fid is not None:
+            umbral = float(getattr(_cnt_config, "FIDELITY_THRESHOLD", 0.85))
+            if fid < umbral:
+                st.warning(f"Fidelidad media del bloque: {fid} (umbral {umbral}).")
+
+        for frag in preview.get("fragmentos") or []:
+            ancla = frag.get("ancla_texto") or "— (inferido por posición)"
+            st.caption(
+                f"**{frag.get('nombre')}** — ancla: {ancla} — "
+                f"confianza: {frag.get('confianza')} ({frag.get('ancla_score', 0):.2f})"
+            )
+            for aviso in frag.get("avisos") or []:
+                st.caption(f"  ↳ {aviso}")
+
+        col_ok, col_cancel = st.columns(2)
+        with col_ok:
+            if st.button(
+                "✅ Confirmar reparto",
+                type="primary",
+                use_container_width=True,
+                key="cnt_btn_confirmar_split",
+            ):
+                _cnt_confirmar_reparto(tema_id)
+                st.rerun()
+        with col_cancel:
+            if st.button(
+                "Descartar vista previa",
+                use_container_width=True,
+                key="cnt_btn_cancelar_split",
+            ):
+                _cnt_cancelar_preview(tema_id)
+                st.rerun()
+
+    elif sin_borrador:
         if not rutas_material:
             st.warning(
                 "No hay materiales de teoría en disco. "
                 "Sube los archivos en el **Agente Organizador** primero."
             )
         else:
-            st.markdown("**Generar borradores**")
+            st.markdown("**Generar borrador del bloque**")
             st.caption(
-                "Marca los sub-bloques pendientes que quieras procesar. "
-                "Cada uno se genera por separado (segmentación independiente)."
+                "Se cura todo el material del bloque en una pasada y se reparte "
+                "automáticamente entre los apartados del Organizador (orden monótono)."
             )
-            seleccionados: list[dict] = []
-            for i, e in enumerate(estados_sb, 1):
-                if e["cs"] is not None:
-                    continue
-                sub = e["sub"]
-                col_chk, col_lbl = st.columns([0.06, 0.94])
-                with col_chk:
-                    if st.checkbox(
-                        "Seleccionar",
-                        key=f"cnt_sel_{sub['id']}",
-                        label_visibility="collapsed",
-                    ):
-                        seleccionados.append(sub)
-                with col_lbl:
-                    st.markdown(f"{i}. **{sub['nombre']}** — ⚪ Pendiente")
-
-            n_sel = len(seleccionados)
             if st.button(
-                f"Generar seleccionados ({n_sel})",
+                "Generar borrador del bloque",
                 type="primary",
                 use_container_width=True,
-                key="cnt_btn_generar",
-                disabled=n_sel == 0,
+                key="cnt_btn_generar_bloque",
             ):
-                for sub in seleccionados:
-                    _cnt_generar_borrador_subbloque(
-                        sub=sub,
-                        subbloques=subbloques,
-                        tema_nombre=tema_nombre,
-                        tema_horas=tema_horas,
-                        rutas_material=rutas_material,
-                        asignatura_id=asignatura_id,
-                    )
+                _cnt_generar_bloque_y_preview(
+                    tema_id=tema_id,
+                    tema_nombre=tema_nombre,
+                    tema_horas=tema_horas,
+                    subbloques=subbloques,
+                    rutas_material=rutas_material,
+                    asignatura_id=asignatura_id,
+                )
                 st.rerun()
     elif todos_aprobados:
         st.success("Todos los sub-bloques de este tema están aprobados y valorados.")
@@ -1518,8 +1494,8 @@ def _vista_contenido() -> None:
                         st.rerun()
             elif not tiene_contenido:
                 st.caption(
-                    "Sin contenido todavía — selecciónalo arriba y pulsa "
-                    "**Generar seleccionados**."
+                    "Sin contenido todavía — genera el borrador del bloque arriba "
+                    "y confirma el reparto."
                 )
 
 

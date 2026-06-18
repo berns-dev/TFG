@@ -1,7 +1,7 @@
 # Agente Contenido — Estado del proyecto
 
 **Monorepo:** `berns-dev/TFG`
-**Última actualización:** 2026-06-17
+**Última actualización:** 2026-06-18
 
 ---
 
@@ -9,9 +9,10 @@
 
 Convierte PDFs y PPTXs de material docente a Markdown estructurado y fiel al original. Incluye validador de fidelidad léxica (umbral 0.85), chunking semántico, selección de modelo por heurística y protocolo XML para parseo robusto.
 
-**Granularidad de procesamiento:** cuando el profesor sube el `.md` del Agente Organizador, el agente lee los subbloques del bloque seleccionado (con sus evidencias estructurales), segmenta el texto del material en trozos correspondientes a cada subbloque, y genera un Markdown curado independiente por subbloque. El output final del bloque es un Markdown único con secciones identificables por subbloque.
-
-Cuando el profesor aporta el `.md` del Agente Organizador, el agente lee las horas lectivas del subbloque seleccionado y calibra la extensión y profundidad del Markdown en proporción a ese tiempo. Esta información se inyecta como prefijo del user message (`_DENSITY_CONTEXT_TMPL` en `classifier.py`) sin alterar el SYSTEM_PROMPT ni el principio de no añadir contenido ausente en el material.
+**Granularidad de procesamiento (app-unificada):**
+1. Curado del **bloque completo** — `procesar_bloque()` con las **horas del bloque** (no por subtema).
+2. Reparto monótono — `split_monotono()` divide el markdown curado usando **nombres y orden** de los subtemas del Organizador (vía BD). La `evidencia` refuerza el emparejamiento de títulos. Sin llamadas a la API.
+3. El profesor revisa el preview del reparto, confirma, y cura/aprueba **por subtema**.
 
 **Principio rector:** Extrae y estructura. No inventa. Si algo no está en el material del profesor, no aparece en el output.
 
@@ -22,7 +23,7 @@ Cuando el profesor aporta el `.md` del Agente Organizador, el agente lee las hor
 Funcional. Validado con:
 - Temas 1 y 2 de Tecnología de Materiales (PDFs con texto extraíble)
 - Validación con PPTX reales: pendiente
-- Pipeline de subbloques: validado programáticamente (53/53 checks, `tools/validate_subbloques.py`)
+- Pipeline de reparto monótono: `tools/validate_split_monotono.py` (15 checks)
 
 Limitación documentada: Los PDFs exportados desde PowerPoint contienen texto extraíble, pero sin orden de lectura coherente — los cuadros de texto de cada diapositiva se depositan en el PDF en orden de edición, no visual. Decisión adoptada: aviso visible en UI cuando el nombre del archivo sugiere origen PowerPoint, recomendar PPTX nativo.
 
@@ -34,7 +35,7 @@ Limitación documentada: Los PDFs exportados desde PowerPoint contienen texto ex
 - **API:** Anthropic directo
   - `claude-haiku-4-5-20251001` — chunks sin densidad matemática alta
   - `claude-sonnet-4-5` — chunks con ecuaciones, notación matemática densa
-- **Extracción:** `pdfplumber` (PDF), `python-pptx` (PPTX) vía `extractor.py`
+- **Extracción:** `pdfplumber` (PDF enriquecido vía `shared/pdf_enriched.py` + fallback plano), `python-pptx` (PPTX) vía `extractor.py`
 - **Credenciales:** `.env` + `python-dotenv`
 
 ---
@@ -42,51 +43,29 @@ Limitación documentada: Los PDFs exportados desde PowerPoint contienen texto ex
 ## Arquitectura de archivos
 
 ```
-app.py              — UI Streamlit + sidebar + processing loop (por subbloque o clásico)
 classifier.py       — selección de modelo, SYSTEM_PROMPT, classify_and_format()
 chunker.py          — split_into_chunks() — chunking semántico
-extractor.py        — extract_text() para PDF y PPTX
-segmentor.py        — segment_text_by_subbloques() — segmentación por evidencia estructural
+extractor.py        — extract_text() para PDF (enriquecido + fallback) y PPTX
+split_monotono.py   — split_monotono() — reparto del markdown curado por subtema
 subblock_state.py   — SubbloqueResult, calcular_progreso_bloque/asignatura()
-assembler.py        — assemble_markdown(), assemble_subbloque_body(),
-                      assemble_block_with_subbloques(), assemble_multiple()
+assembler.py        — assemble_markdown(), assemble_subbloque_body(), …
 validator.py        — validate_items() — validador de fidelidad léxica
-pipeline.py         — FUENTE DE VERDAD importable: procesar_segmento()
-                      (chunk → classify paralelo → assemble_subbloque_body → validate)
-                      Compartida entre app.py standalone y app-unificada
-config.py           — constantes: modelos, thresholds, MAX_WORKERS
-tools/validate_pdf.py        — debug CLI extract → chunk (no producto)
-tools/validate_subbloques.py — validación de la pipeline de subbloques (sin API)
+pipeline.py         — procesar_bloque(), procesar_segmento()
+cnt_config.py       — constantes: modelos, thresholds, MAX_WORKERS
+tools/validate_split_monotono.py — validación del reparto (sin API)
+tools/validate_subbloques.py     — parseo Organizador + ensamblado + progreso
 fixtures/           — artefactos de validación (Tema_3_curado.md)
 ```
 
 ---
 
-## Flujo principal (con subbloques)
+## Flujo principal (app-unificada)
 
-1. **Extracción** — `extract_text(tmp_path)` desde archivo temporal
-2. **Segmentación** — `segment_text_by_subbloques(text, subbloques)` — divide el texto
-   en segmentos correspondientes a cada subbloque del Organizador, usando las evidencias
-   estructurales (`[SLIDE N]`, `^X.X. Título`) como marcadores de frontera
-3. **Por cada subbloque:** chunking → clasificación paralela → ensamblado → validación
-4. **Ensamblado del bloque** — `assemble_block_with_subbloques(...)` → Markdown con
-   marcadores `<!-- SUBBLOQUE_INICIO/FIN: ... -->` que delimitan cada subbloque
-5. **Progreso** — `calcular_progreso_bloque(sb_results)` → dict con total/aprobados/porcentaje
-
-**Flujo clásico (sin subbloques):** si no hay `.md` del Organizador o el bloque
-tiene un único subbloque fallback, el agente usa el pipeline original
-(chunks del bloque completo → `assemble_markdown()`). El `session_state` siempre tiene
-la misma estructura con un único subbloque envolviendo el resultado.
-
----
-
-## Flujo principal (clásico, sin subbloques)
-
-1. **Extracción** — `extract_text(tmp_path)` desde archivo temporal
-2. **Chunking** — `split_into_chunks(text)` — partición semántica, respeta frases
-3. **Clasificación paralela** — `ThreadPoolExecutor(MAX_WORKERS)` → `classify_and_format(chunk, tema_horas)` por chunk
-4. **Ensamblado** — `assemble_markdown(items, nombre_del_archivo)` → Markdown con frontmatter YAML
-5. **Validación** — `validate_items(items, original_chunks)` — fidelidad léxica, umbral 0.85
+1. **Extracción** — `extract_text()` de todos los PDF/PPTX del bloque. PDF: `shared/pdf_enriched.build_pdf_markdown()` añade `#`/`##`/`###` según tamaño/negrita; si no hay metadatos de fuente, extracción plana.
+2. **Curado del bloque** — `procesar_bloque(texto, horas_bloque)` → un markdown con frontmatter
+3. **Reparto** — `split_monotono(markdown, subtemas_bd)` → N fragmentos (preview en UI)
+4. **Confirmación** — persistir cada fragmento en `contenido_subbloque.markdown_borrador`
+5. **Revisión** — el profesor edita y aprueba por subtema (estados `generado` → `aprobado`)
 
 ---
 
@@ -114,44 +93,21 @@ El modelo responde con delimitadores estrictos:
 El SYSTEM_PROMPT no se modifica bajo ninguna circunstancia. Es la restricción de fidelidad del agente. Los contextos adicionales (densidad de horas) van exclusivamente en el user message. Ver sección "Contexto de densidad" abajo.
 
 ### Contexto de densidad (`classifier.py: _build_user_message()`)
-Cuando el usuario sube un `.md` del Agente Organizador y selecciona un bloque, las horas del **subbloque** (no del bloque completo) se inyectan como prefijo del user message:
-
-```
-[CONTEXTO DE DENSIDAD: Este tema tiene asignadas {horas}h lectivas.
-Ajusta la extensión y profundidad del markdown en proporción al tiempo disponible —
-más horas implica mayor desarrollo, menos horas mayor síntesis.
-Restricción absoluta: no añadas contenido ausente en el material.]
-
-{chunk_text}
-```
-
-Implementado en `_DENSITY_CONTEXT_TMPL` + `_build_user_message(chunk_text, tema_horas)`. Si `tema_horas is None`, el user message es el chunk directamente — el agente opera exactamente igual que antes.
+Cuando se cura un bloque, las **horas del bloque temático** (no por subtema) se inyectan
+como prefijo del user message vía `_DENSITY_CONTEXT_TMPL`. Si `tema_horas is None`, el
+chunk se envía sin prefijo de densidad.
 
 ---
 
-## Segmentación de texto por subbloque (`segmentor.py`)
+## Reparto monótono (`split_monotono.py`)
 
-### Cómo funciona
-`segment_text_by_subbloques(text, subbloques) → list[tuple[dict, str]]`
+`split_monotono(markdown_bloque, subtemas) → SplitResult`
 
-Para cada subbloque, usa el campo `evidencia` del Organizador para localizar su
-frontera de inicio en el texto extraído:
-
-| Tipo de evidencia | Qué busca en el texto |
-|---|---|
-| `"Slide N"` | `[SLIDE N]` (inyectado por `_extract_pptx`) |
-| `"Sección X.X"` | `^X.X.?\s+\S` al inicio de línea (encabezado numerado) |
-| `"Sin señal verificable"` | No segmenta; todo el texto va al único subbloque |
-
-El texto antes del primer boundary encontrado se adjunta al primer subbloque (material introductorio).
-Subbloques cuya evidencia no se localiza en el texto reciben segmento vacío y estado `pendiente`.
-
-### Garantías
-- Un único subbloque (incluido el fallback "Sin señal verificable"): recibe todo el texto. ✓
-- Sin ningún boundary encontrado: primer subbloque recibe todo el texto; resto vacíos. ✓
-- Los boundaries se ordenan por posición en el texto (defensivo). ✓
-- Cuando un subbloque queda vacío por boundary no encontrado (evidencia no-fallback),
-  `app.py` emite `st.warning()` indicando el nombre del subbloque y la referencia buscada. ✓
+- Empareja nombres de subtemas (BD / Organizador) con headings `#`–`####` del markdown curado.
+- Restricción **monótona**: anclas en orden documental (evita reasignar por referencias cruzadas).
+- `evidencia` (`Sección X.X`) refuerza el match; no segmenta PDF bruto.
+- Confianza por fragmento + `requiere_revision` para la UI de preview.
+- Validación: `tools/validate_split_monotono.py`.
 
 ---
 
