@@ -51,6 +51,9 @@ subblock_state.py   — SubbloqueResult, calcular_progreso_bloque/asignatura()
 assembler.py        — assemble_markdown(), assemble_subbloque_body(),
                       assemble_block_with_subbloques(), assemble_multiple()
 validator.py        — validate_items() — validador de fidelidad léxica
+pipeline.py         — FUENTE DE VERDAD importable: procesar_segmento()
+                      (chunk → classify paralelo → assemble_subbloque_body → validate)
+                      Compartida entre app.py standalone y app-unificada
 config.py           — constantes: modelos, thresholds, MAX_WORKERS
 tools/validate_pdf.py        — debug CLI extract → chunk (no producto)
 tools/validate_subbloques.py — validación de la pipeline de subbloques (sin API)

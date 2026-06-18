@@ -43,7 +43,10 @@ generador_html.py   — Pipeline por elemento: razonador Sonnet → generador So
                       ThreadPoolExecutor; plantilla HTML con pestañas CSS;
                       reintento correctivo (reenvía el motivo de rechazo) y
                       backoff ante RateLimitError (429);
-                      logging con logger.debug() / logger.warning()
+                      logging con logger.debug() / logger.warning().
+                      Función pública generar_bloque_con_visualizacion(elemento,
+                      visualizacion) para uso desde app-unificada (omite el
+                      razonador cuando el patrón ya fue elegido por el profesor)
 generador_presentacion.py — Presentación completa del tema: división por H2,
                       render Markdown con LaTeX protegido, inserción de
                       bloques interactivos (reutiliza _generar_bloque, no

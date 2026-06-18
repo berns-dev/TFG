@@ -25,13 +25,13 @@ from assembler import (
     assemble_block_with_subbloques,
     assemble_markdown,
     assemble_multiple,
-    assemble_subbloque_body,
     unified_download_filename,
 )
 from chunker import split_into_chunks
 from classifier import classify_and_format
 from config import FIDELITY_THRESHOLD, MAX_WORKERS
 from extractor import extract_text
+from pipeline import procesar_segmento
 from segmentor import segment_text_by_subbloques
 from subblock_state import SubbloqueResult, calcular_progreso_bloque
 from validator import validate_items
@@ -78,8 +78,17 @@ def _process_subbloque(
             validacion={"ok": True, "errores": [], "fidelity": []},
         )
 
-    chunks = split_into_chunks(seg_text)
-    if not chunks:
+    status.write(f"{sb_label} — procesando…")  # type: ignore[attr-defined]
+    items, sb_markdown, sb_validacion = procesar_segmento(
+        seg_text=seg_text,
+        nombre_subbloque=nombre,
+        nombre_archivo=nombre_del_archivo,
+        horas=effective_horas,
+        max_workers=MAX_WORKERS,
+    )
+    status.write(f"{sb_label} — listo")  # type: ignore[attr-defined]
+
+    if not items:
         return SubbloqueResult(
             nombre=nombre,
             horas=horas,
@@ -90,39 +99,6 @@ def _process_subbloque(
             items=[],
             validacion={"ok": True, "errores": [], "fidelity": []},
         )
-
-    n_chunks = len(chunks)
-    ordered: list = [None] * n_chunks
-    done = 0
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        future_to_i = {
-            pool.submit(classify_and_format, chunk, effective_horas): i
-            for i, chunk in enumerate(chunks)
-        }
-        for fut in as_completed(future_to_i):
-            i = future_to_i[fut]
-            try:
-                ordered[i] = fut.result()
-            except Exception as chunk_exc:
-                error_msg = str(chunk_exc)
-                st.warning(
-                    f"⚠️ Error en chunk {i + 1}/{n_chunks} ({sb_label}): {error_msg}"
-                )
-                ordered[i] = {
-                    "tipo": "mixto",
-                    "titulo_detectado": None,
-                    "idioma": "es",
-                    "contenido_markdown": f"[ERROR EN CHUNK {i + 1}: {error_msg}]",
-                }
-            done += 1
-            status.write(f"{sb_label} — chunk {done}/{n_chunks}…")  # type: ignore[attr-defined]
-
-    items = ordered
-    sb_markdown = assemble_subbloque_body(
-        items, nombre_subbloque=nombre, nombre_del_archivo=nombre_del_archivo
-    )
-    sb_validacion = validate_items(items, original_chunks=chunks)
 
     if not sb_validacion.get("ok"):
         failed = [

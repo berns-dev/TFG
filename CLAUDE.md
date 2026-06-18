@@ -62,26 +62,53 @@ el material; si falta, los subbloques quedan en estado `pendiente`.
 
 ---
 
-## Reutilización de la lógica del Organizador (sin duplicación)
+## Fuentes de verdad únicas por agente (sin duplicación)
 
-El Organizador tiene dos interfaces: el **standalone** (`agente-organizador/app.py`)
-y la sección Organizador de la **app unificada** (`app-unificada/app.py`). Ambas
-comparten la misma lógica de cálculo y transformación, que vive **solo** en
-`agente-organizador/parser.py` (módulo importable, sin Streamlit):
+Cada agente tiene **una sola implementación** de su lógica de negocio. `app-unificada`
+importa siempre desde las carpetas de cada agente — no duplica código.
 
-- `extraer_horas_docencia`, `normalizar_horas_output`, `contar_bloques_output`,
-  `construir_nombre_descarga`, `parsear_bloques_desde_markdown`,
-  `parsear_bloques_organizador`, `regenerar_markdown_desde_bloques`.
+### Organizador → `agente-organizador/parser.py`
 
-`app-unificada` carga ese módulo vía `importlib` (`_org_parser`) y lo usa
-directamente; ya **no** mantiene copias literales de esas funciones (se eliminaron).
+Toda la lógica de cálculo y transformación vive aquí (módulo importable, sin Streamlit):
+`extraer_horas_docencia`, `normalizar_horas_output`, `contar_bloques_output`,
+`construir_nombre_descarga`, `parsear_bloques_desde_markdown`,
+`parsear_bloques_organizador`, `regenerar_markdown_desde_bloques`.
+
+`app-unificada` lo carga vía `_cargar_modulos_agente` (`_org_parser`) y lo usa
+directamente. Detalle en `agente-organizador/CLAUDE.md`.
+
+### Contenido → `agente-contenido/pipeline.py`
+
+La orquestación del pipeline (chunk → classify en paralelo → assemble → validate)
+vive en `pipeline.py` como función importable `procesar_segmento()`. Tanto el
+standalone (`agente-contenido/app.py`) como `app-unificada` la usan:
+
+- Standalone: `_process_subbloque()` llama a `procesar_segmento()` y envuelve
+  el resultado en `SubbloqueResult` con avisos Streamlit.
+- App-unificada: `_cnt_curar_subbloque()` llama a `procesar_segmento()` y
+  extrae la fidelidad media para guardar en BD.
+
+El markdown que produce `procesar_segmento()` usa `assemble_subbloque_body()` —
+cuerpo sin frontmatter YAML, con H1 del nombre del subbloque. Esto es igual en
+ambas interfaces y es lo que el profesor ve en el editor de texto de la app.
+
+### Presentación → `agente-presentacion/generador_html.py`
+
+El bucle de generación HTML (reintentos, `aplicar_rangos`, `validar_bloque_html`)
+vive en `_generar_bloque()`. `app-unificada` no duplica ese bucle: usa
+`generar_bloque_con_visualizacion(elemento, visualizacion)`, función pública que
+recibe el dict `visualizacion` ya construido desde BD (sin volver a llamar al
+razonador, porque el patrón ya lo eligió el profesor) y delega en `_generar_bloque`.
+
+La distinción razonador vs. sin razonador se expresa como un parámetro opcional
+`visualizacion: dict | None = None` en `_generar_bloque`: si se pasa, se omite
+el paso del razonador; si no, el flujo normal del standalone lo computa.
+
 La edición de la organización en **app-unificada** es una vista única interactiva
 (tabla por bloque/subbloque); el standalone conserva el editor en expander. En ambas
 solo en fase de revisión; una vez cerrada/confirmada la organización
 (en la unificada, al confirmarla se persiste a BD para Contenido), la estructura
 queda congelada y se ocultan tanto la edición manual como el refinamiento por prompt.
-El detalle de la separación lógica pura↔UI y la equivalencia entre interfaces está
-en `agente-organizador/CLAUDE.md`.
 
 ---
 
@@ -147,8 +174,8 @@ TFG/
 │   └── validar_esquema.py        ← script de validación del esquema (no producto)
 ├── app-unificada/
 │   └── app.py                    ← app Streamlit unificada (todos los agentes + BD).
-│                                    Importa la lógica pura del Organizador desde
-│                                    agente-organizador/parser.py (no la duplica).
+│                                    Importa desde los módulos de cada agente vía
+│                                    _cargar_modulos_agente(); no duplica lógica.
 ├── data/
 │   └── tfg.db                    ← base de datos SQLite (generado, no versionado)
 ├── agente-organizador/
@@ -175,6 +202,9 @@ TFG/
 │   ├── validator.py
 │   ├── segmentor.py              ← segmentación de texto por subbloque (evidencia estructural)
 │   ├── subblock_state.py         ← SubbloqueResult, calcular_progreso_bloque/asignatura
+│   ├── pipeline.py               ← FUENTE DE VERDAD importable: procesar_segmento()
+│   │                                (chunk→classify en paralelo→assemble→validate)
+│   │                                Usada por app.py standalone y app-unificada
 │   ├── tools/
 │   │   ├── validate_pdf.py       ← debug CLI (extract → chunk, sin API)
 │   │   └── validate_subbloques.py ← validación pipeline de subbloques (sin API)
@@ -229,7 +259,7 @@ Detalle del esquema y APIs: **`database/CLAUDE.md`**.
 
 ---
 
-## Estado del proyecto (2026-06-17)
+## Estado del proyecto (2026-06-18)
 
 | Agente/módulo | Estado | Validado con |
 |---------------|--------|-------------|

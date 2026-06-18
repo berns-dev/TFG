@@ -1030,10 +1030,12 @@ def _generar_bloque(
     verbose: bool = False,
     texto_original: str | None = None,
     requiere_autoarranque: bool = True,
+    visualizacion: dict | None = None,
 ) -> tuple[int, str]:
     """Call Sonnet to generate the interactive HTML panel for one element.
 
-    Paso 1: razonador de visualización (patrón adaptativo).
+    Paso 1: razonador de visualización (patrón adaptativo) — se omite si
+        `visualizacion` se pasa directamente (patrón ya elegido por el profesor).
     Paso 2: generador HTML — siempre genera si el elemento fue seleccionado.
 
     Retries up to _MAX_RETRIES times if the response does not look like
@@ -1053,6 +1055,9 @@ def _generar_bloque(
             initBloque_{slug}(). False (presentación completa) omite esa
             exigencia: el contenedor invoca initBloque_{slug}() vía
             IntersectionObserver al entrar en el viewport.
+        visualizacion: Si se proporciona, se usa directamente sin llamar al
+            razonador. Útil cuando el patrón ya ha sido elegido previamente
+            (p. ej., persistido en BD por el profesor).
 
     Returns:
         (idx, html_block) where html_block is the Sonnet-generated HTML
@@ -1075,17 +1080,18 @@ def _generar_bloque(
         timeout=float(REQUEST_TIMEOUT_SECONDS),
     )
 
-    try:
-        visualizacion = _razonar_visualizacion(
-            elemento, client, verbose=verbose, texto_original=texto_original
-        )
-    except Exception as exc:  # noqa: BLE001
-        if verbose:
-            logger.warning("[%s] Razonador falló: %s — usando CURVA_SIMPLE", nombre, exc)
-        visualizacion = _fallback_visualizacion(elemento)
+    if visualizacion is None:
+        try:
+            visualizacion = _razonar_visualizacion(
+                elemento, client, verbose=verbose, texto_original=texto_original
+            )
+        except Exception as exc:  # noqa: BLE001
+            if verbose:
+                logger.warning("[%s] Razonador falló: %s — usando CURVA_SIMPLE", nombre, exc)
+            visualizacion = _fallback_visualizacion(elemento)
 
-    if visualizacion.get("VISUALIZABLE") == "NO":
-        visualizacion = _fallback_visualizacion(elemento)
+        if visualizacion.get("VISUALIZABLE") == "NO":
+            visualizacion = _fallback_visualizacion(elemento)
 
     rangos_raw = visualizacion.get("RANGO_VARIABLES", "")
     if verbose:
@@ -1236,6 +1242,35 @@ def _generar_bloque(
         "</div>"
     )
     return idx, error_html
+
+
+def generar_bloque_con_visualizacion(
+    elemento: dict,
+    visualizacion: dict,
+    requiere_autoarranque: bool = True,
+) -> str:
+    """Genera el bloque HTML para un elemento usando un `visualizacion` dict ya construido.
+
+    A diferencia del pipeline completo (razonador → generador), esta función recibe
+    directamente el dict de visualización — útil cuando el patrón fue elegido
+    previamente por el profesor y persistido en BD. El bucle de reintentos,
+    `aplicar_rangos` y `validar_bloque_html` se ejecutan igual que en `_generar_bloque`.
+
+    Args:
+        elemento: Dict del elemento con claves nombre, expresion, contexto.
+        visualizacion: Dict con PATRON, PARAMETROS_SLIDER, RANGO_VARIABLES, etc.
+            Debe contener al menos {'VISUALIZABLE': 'SI', 'PATRON': '<PATRON>'}.
+        requiere_autoarranque: Ver `_generar_bloque`.
+
+    Returns:
+        HTML del bloque generado, o placeholder de error si todos los intentos fallan.
+    """
+    _, html = _generar_bloque(
+        elemento, 0,
+        requiere_autoarranque=requiere_autoarranque,
+        visualizacion=visualizacion,
+    )
+    return html
 
 
 # ---------------------------------------------------------------------------

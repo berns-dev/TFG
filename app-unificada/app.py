@@ -15,7 +15,6 @@ import os
 import re
 import sys
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import streamlit as st
@@ -141,12 +140,13 @@ except Exception as _e:
 
 
 # ── Agente Contenido (extractor←cleaner; chunker/classifier/validator←config) ─
+# pipeline importa de chunker, classifier, assembler, validator → va al final.
 try:
     _cnt_mods = _cargar_modulos_agente(
         RAIZ_CONTENIDO, "contenido",
         [
             "config", "cleaner", "extractor", "chunker", "classifier",
-            "assembler", "validator", "segmentor",
+            "assembler", "validator", "segmentor", "pipeline",
         ],
     )
     _cnt_config = _cnt_mods["config"]
@@ -157,18 +157,15 @@ try:
     _cnt_assembler = _cnt_mods["assembler"]
     _cnt_validator = _cnt_mods["validator"]
     _cnt_segmentor = _cnt_mods["segmentor"]
+    _cnt_pipeline = _cnt_mods["pipeline"]
     _CNT_ERROR: str | None = None
 except Exception as _ce:
     _cnt_config = _cnt_cleaner = _cnt_extractor = _cnt_chunker = _cnt_classifier = None
-    _cnt_assembler = _cnt_validator = _cnt_segmentor = None
+    _cnt_assembler = _cnt_validator = _cnt_segmentor = _cnt_pipeline = None
     _CNT_ERROR = str(_ce)
 
 
 # ── Agente Presentación (detector/generador_html←config, prompts) ─────────────
-# Documentación de cambio de firma: _generar_bloque no se modifica; en su lugar
-# _prs_generar_html_subbloque() (más abajo) llama directamente a
-# build_generador_message + API con el patrón y los parámetros elegidos por el
-# profesor como argumentos explícitos, sin volver a pasar por el razonador.
 try:
     _prs_mods = _cargar_modulos_agente(
         RAIZ_PRESENTACION, "presentacion",
@@ -409,6 +406,7 @@ _ORG_KEYS: dict[str, object] = {
     "org_contador_add_subtema": lambda: {},
     "org_contador_add_bloque": 0,
     "org_subtemas_detectados": lambda: [],
+    "org_sub_widget_rev": lambda: {},
 }
 
 
@@ -605,35 +603,22 @@ def _org_actualizar_desde_bloques(slug: str) -> None:
 
 
 def _org_build_subtemas_confirmados(
+    texto_guia: str,
     textos_teoria: list[str],
     archivos_teoria: list[str],
     archivos_bytes: list[bytes],
-) -> list[list[dict]]:
-    """Construye la lista de subtemas confirmados para el prompt del LLM.
+) -> list[list[dict]] | None:
+    """Guía docente primero (modo libre); lista cerrada del material solo sin guía."""
+    return _org_parser.construir_subtemas_confirmados(
+        texto_guia, textos_teoria, archivos_teoria, archivos_bytes
+    )
 
-    Usa extraer_candidatos_con_evidencia (misma ruta que el standalone validado):
-    señales estructurales con evidencia verificable, no el regex simple
-    extraer_subtemas_candidatos de la pantalla intermedia eliminada.
-    """
-    resultado: list[list[dict]] = []
-    for texto_mat, nombre_arch, bytes_arch in zip(
-        textos_teoria, archivos_teoria, archivos_bytes
-    ):
-        cands_con_ev = _org_parser.extraer_candidatos_con_evidencia(
-            texto_mat, nombre_arch, bytes_arch
-        )
-        if cands_con_ev:
-            resultado.append([
-                {
-                    "nombre": c["nombre"],
-                    "evidencia": c["evidencia"],
-                    "origen": "Detectado",
-                }
-                for c in cands_con_ev
-            ])
-        else:
-            resultado.append([])
-    return resultado
+
+def _org_bump_sub_widget_rev(idx_b: int) -> None:
+    """Invalida widgets de subtemas tras borrar o reordenar filas (evita desfase Streamlit)."""
+    revs = st.session_state.setdefault("org_sub_widget_rev", {})
+    revs[idx_b] = revs.get(idx_b, 0) + 1
+    st.session_state["org_sub_widget_rev"] = revs
 
 
 def _org_resolver_archivo_bloque(nombre_bloque: str, archivos: list[str], idx: int) -> str:
@@ -823,11 +808,21 @@ def _org_generar_organizacion(
             st.session_state["org_ultimas_horas_totales"] = horas_totales if horas_totales > 0 else None
 
             if subtemas_confirmados is None:
-                st.write("🔍 Detectando señales estructurales en los materiales...")
+                st.write("🔍 Detectando subtemas (guía docente + señales del material)…")
                 subtemas_confirmados = _org_build_subtemas_confirmados(
+                    texto_guia,
                     textos_teoria, archivos_teoria, archivos_teoria_bytes
                 )
-            st.session_state["org_subtemas_detectados"] = subtemas_confirmados
+            st.session_state["org_subtemas_detectados"] = subtemas_confirmados or []
+            st.session_state["org_candidatos_guia"] = _org_parser.extraer_subtemas_guia(
+                texto_guia
+            )
+            if subtemas_confirmados is None:
+                n_guia = len(st.session_state["org_candidatos_guia"])
+                st.caption(
+                    f"Guía docente: {n_guia} bloques temáticos detectados — "
+                    "el modelo estructurará los subtemas libremente (sin lista cerrada del PDF)."
+                )
 
             st.write("🌐 Detectando idioma de los materiales...")
             prompt, _idioma = _org_prompts.construir_prompt(
@@ -1082,16 +1077,12 @@ def _cnt_curar_subbloque(
     tema_horas: float | None,
     rutas_material: list[str],
 ) -> tuple[str, float | None]:
-    """Genera markdown curado para un sub-bloque reutilizando la pipeline del Agente Contenido.
+    """Genera markdown curado para un sub-bloque usando el pipeline del Agente Contenido.
 
-    Segmenta el material con `segment_text_by_subbloques` (igual que el standalone)
-    antes de clasificar, de modo que cada sub-bloque solo recibe el tramo de texto
-    acotado por su evidencia estructural. Sobre ese segmento se prepende un contexto
-    de sub-bloque a cada chunk antes de clasificar.
-
-    Devuelve (markdown, fidelidad). La fidelidad es la media de los coverage_score
-    de `validator.validate_items` sobre los chunks originales del sub-bloque (sin el
-    prefijo de contexto), o None si no hubo nada que validar.
+    Segmenta el material por evidencia estructural, luego delega en
+    `pipeline.procesar_segmento()` (fuente única del pipeline chunk→classify→assemble→validate).
+    Devuelve (markdown_body, fidelidad). La fidelidad es la media de los coverage_score
+    del validador, o None si no hubo nada que validar.
     """
     subbloque_nombre = subbloque_meta["nombre"]
     sb_horas = float(subbloque_meta.get("horas") or 0.0)
@@ -1111,55 +1102,29 @@ def _cnt_curar_subbloque(
     )
     max_w = getattr(_cnt_config, "MAX_WORKERS", 5)
 
-    chunks = _cnt_chunker.split_into_chunks(seg_text)
-    if not chunks:
+    items, markdown, reporte = _cnt_pipeline.procesar_segmento(
+        seg_text=seg_text,
+        nombre_subbloque=subbloque_nombre,
+        nombre_archivo=f"{subbloque_nombre}.md",
+        horas=effective_horas,
+        contexto_prefix=sub_ctx,
+        max_workers=max_w,
+    )
+
+    if not items:
         return (
             f"# {subbloque_nombre}\n\n*No se pudo extraer contenido del material de entrada.*",
             None,
         )
-
-    chunks_con_ctx = [sub_ctx + c for c in chunks]
-    all_items: list[dict] = []
-    all_chunks_raw: list[str] = []
-
-    ordered: list[dict | None] = [None] * len(chunks_con_ctx)
-    with ThreadPoolExecutor(max_workers=max_w) as ex:
-        future_to_i = {
-            ex.submit(_cnt_classifier.classify_and_format, chunk, effective_horas): i
-            for i, chunk in enumerate(chunks_con_ctx)
-        }
-        for fut in as_completed(future_to_i):
-            i = future_to_i[fut]
-            try:
-                ordered[i] = fut.result()
-            except Exception:
-                ordered[i] = None
-
-    for item, chunk_raw in zip(ordered, chunks):
-        if item is not None:
-            all_items.append(item)
-            all_chunks_raw.append(chunk_raw)
-
-    if not all_items:
-        return (
-            f"# {subbloque_nombre}\n\n*No se pudo extraer contenido del material de entrada.*",
-            None,
-        )
-
-    markdown = _cnt_assembler.assemble_markdown(all_items, f"{subbloque_nombre}.md")
 
     fidelidad: float | None = None
-    try:
-        reporte = _cnt_validator.validate_items(all_items, original_chunks=all_chunks_raw)
-        scores = [
-            r["coverage_score"]
-            for r in (reporte.get("fidelity") or [])
-            if r.get("coverage_score") is not None
-        ]
-        if scores:
-            fidelidad = round(sum(scores) / len(scores), 3)
-    except Exception:
-        fidelidad = None
+    scores = [
+        r["coverage_score"]
+        for r in (reporte.get("fidelity") or [])
+        if r.get("coverage_score") is not None
+    ]
+    if scores:
+        fidelidad = round(sum(scores) / len(scores), 3)
 
     return markdown, fidelidad
 
@@ -1799,15 +1764,13 @@ def _prs_generar_html_subbloque(
 ) -> str:
     """Genera el HTML del sub-bloque usando el patrón y parámetros guardados en BD.
 
-    No llama al razonador: construye el dict visualizacion directamente desde los
-    datos de parametros_subbloque y llama al generador Sonnet via build_generador_message.
-    Aplica aplicar_rangos y validar_bloque_html igual que _generar_bloque, pero
-    saltándose el paso del razonador (el patrón ya lo eligió el profesor en la UI).
+    Construye el dict `visualizacion` desde los datos de BD (sin llamar al razonador,
+    porque el patrón ya fue elegido por el profesor) y delega en
+    `generador_html.generar_bloque_con_visualizacion()` (fuente única del bucle
+    de reintentos, aplicar_rangos y validar_bloque_html).
     """
-    import anthropic as _ant
-
     elemento = _prs_elemento_desde_markdown(subbloque_nombre, markdown)
-    slug = _prs_generador_html._slug(subbloque_nombre)
+    patron_api = _PATRON_DB_TO_API.get(patron, "CURVA_SIMPLE")
 
     sliders_activos = [p for p in parametros_db if p["es_slider"]]
     parametros_slider_str = ", ".join(p["simbolo"] for p in sliders_activos)
@@ -1818,10 +1781,7 @@ def _prs_generar_html_subbloque(
         mx = p["valor_max"] if p["valor_max"] is not None else 100.0
         df = p["valor_predeterminado"] if p["valor_predeterminado"] is not None else (mn + mx) / 2
         rango_lines.append(f"{p['simbolo']}: min={mn}, max={mx}, default={df}")
-    rango_variables_str = "\n".join(rango_lines)
 
-    # El generador Sonnet espera el patrón en formato API (UPPERCASE)
-    patron_api = _PATRON_DB_TO_API.get(patron, "CURVA_SIMPLE")
     visualizacion = {
         "VISUALIZABLE": "SI",
         "PATRON": patron_api,
@@ -1831,59 +1791,13 @@ def _prs_generar_html_subbloque(
         "ESCALA_LOG_X": "NO",
         "ESCALA_LOG_Y": "NO",
         "JUSTIFICACION": f"Patrón seleccionado: {patron_api}",
-        "RANGO_VARIABLES": rango_variables_str,
+        "RANGO_VARIABLES": "\n".join(rango_lines),
         "ZONA_VALIDEZ": "ninguna",
     }
 
-    client = _ant.Anthropic(
-        api_key=_prs_config.ANTHROPIC_API_KEY,
-        timeout=float(_prs_config.REQUEST_TIMEOUT_SECONDS),
+    return _prs_generador_html.generar_bloque_con_visualizacion(
+        elemento, visualizacion, requiere_autoarranque=True
     )
-    tabla_variables = _prs_generador_html.construir_tabla_variables(elemento, client)
-    user_msg = _prs_prompts.build_generador_message(
-        elemento, visualizacion, slug, tabla_variables, requiere_autoarranque=True,
-    )
-    rangos_esperados = _prs_generador_html._parse_rango_variables(rango_variables_str)
-
-    motivo_fallo = ""
-    for attempt in range(3):
-        mensaje = user_msg
-        if attempt and motivo_fallo:
-            mensaje = (
-                f"{user_msg}\n\nCORRECCIÓN — rechazado por: {motivo_fallo}.\n"
-                f"Incluye obligatoriamente window['initBloque_{slug}'] = function() {{ ... }}; "
-                f"y al final del script: "
-                f"document.addEventListener('DOMContentLoaded', function() {{"
-                f" try {{ window['initBloque_{slug}'](); }} catch(e) {{"
-                f" console.error('Error en initBloque_{slug}:', e); }} }});"
-            )
-        try:
-            response = client.messages.create(
-                model=_prs_config.MODEL_SMART,
-                max_tokens=8192,
-                system=_prs_prompts.PROMPT_GENERADOR_HTML,
-                messages=[{"role": "user", "content": mensaje}],
-            )
-            raw = response.content[0].text.strip()
-            if raw.startswith("```"):
-                raw = re.sub(r"^```[a-z]*\n?", "", raw)
-                raw = re.sub(r"\n?```$", "", raw).strip()
-            if getattr(response, "stop_reason", None) == "max_tokens":
-                motivo_fallo = "respuesta truncada (max_tokens)"
-                continue
-            if _prs_generador_html._is_valid_html(raw):
-                if rangos_esperados:
-                    raw = _prs_generador_html.aplicar_rangos(
-                        raw, rangos_esperados, parametros_slider=parametros_slider_str,
-                    )
-                es_valido, motivo = _prs_generador_html.validar_bloque_html(raw, slug)
-                if es_valido:
-                    return raw
-                motivo_fallo = motivo
-        except Exception as exc:
-            motivo_fallo = str(exc)
-
-    return _prs_generador_html._bloque_placeholder(slug, subbloque_nombre, motivo_fallo)
 
 
 # =============================================================================
@@ -2230,6 +2144,7 @@ def _render_stepper(pasos: list[str], paso_actual: int) -> None:
 def _org_sync_widgets_a_bloques(iter_key: int) -> bool:
     """Lee los widgets de edición y actualiza org_organizacion_bloques. Devuelve True si hubo cambios."""
     bloques = st.session_state.get("org_organizacion_bloques", [])
+    sub_revs: dict = st.session_state.get("org_sub_widget_rev", {})
     changed = False
     for idx_b, bloque in enumerate(bloques):
         k_n = f"org_bn_{idx_b}_{iter_key}"
@@ -2245,7 +2160,8 @@ def _org_sync_widgets_a_bloques(iter_key: int) -> bool:
                 bloque["horas"] = v
                 changed = True
         for idx_s, sub in enumerate(bloque.get("subtemas", [])):
-            k_s = f"org_sn_{idx_b}_{idx_s}_{iter_key}"
+            sub_rev = sub_revs.get(idx_b, 0)
+            k_s = f"org_sn_{idx_b}_{idx_s}_{iter_key}_{sub_rev}"
             if k_s in st.session_state:
                 v = st.session_state[k_s].strip()
                 if v and v != sub["nombre"]:
@@ -2271,6 +2187,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
         return
 
     iter_key = st.session_state["org_iteracion"]
+    sub_revs: dict = st.session_state.get("org_sub_widget_rev", {})
 
     if editable:
         st.markdown(
@@ -2377,12 +2294,13 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
             for idx_s, sub in enumerate(bloque.get("subtemas", [])):
                 r1, r2, r3, r4 = st.columns([3.5, 2.8, 0.55, 0.55])
                 evidencia = _org_format_evidencia(sub, archivo_bloque)
+                sub_rev = sub_revs.get(idx_b, 0)
                 with r1:
                     if editable:
                         st.text_input(
                             "Subtema",
                             value=sub["nombre"],
-                            key=f"org_sn_{idx_b}_{idx_s}_{iter_key}",
+                            key=f"org_sn_{idx_b}_{idx_s}_{iter_key}_{sub_rev}",
                             label_visibility="collapsed",
                         )
                     else:
@@ -2395,7 +2313,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                         aprobado = sub.get("aprobado", False)
                         if st.button(
                             "✓",
-                            key=f"org_ok_{idx_b}_{idx_s}_{iter_key}",
+                            key=f"org_ok_{idx_b}_{idx_s}_{iter_key}_{sub_rev}",
                             help="Aprobar subbloque",
                             type="primary" if aprobado else "secondary",
                         ):
@@ -2407,11 +2325,12 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                     with r4:
                         if st.button(
                             "✕",
-                            key=f"org_del_sub_{idx_b}_{idx_s}_{iter_key}",
+                            key=f"org_del_sub_{idx_b}_{idx_s}_{iter_key}_{sub_rev}",
                             help="Eliminar subtema",
                         ):
                             _org_sync_widgets_a_bloques(iter_key)
                             st.session_state["org_organizacion_bloques"][idx_b]["subtemas"].pop(idx_s)
+                            _org_bump_sub_widget_rev(idx_b)
                             _org_actualizar_desde_bloques(slug)
                             st.rerun()
 
