@@ -166,18 +166,22 @@ except Exception as _ce:
 
 
 # ── Agente Presentación (detector/generador_html←config, prompts) ─────────────
+# generador_presentacion importa de generador_html → va al final del lote.
 try:
     _prs_mods = _cargar_modulos_agente(
         RAIZ_PRESENTACION, "presentacion",
-        ["config", "prompts", "generador_html", "detector"],
+        ["config", "prompts", "generador_html", "detector", "generador_pdf", "generador_presentacion"],
     )
     _prs_config = _prs_mods["config"]
     _prs_prompts = _prs_mods["prompts"]
     _prs_generador_html = _prs_mods["generador_html"]
     _prs_detector = _prs_mods["detector"]
+    _prs_generador_pdf = _prs_mods["generador_pdf"]
+    _prs_generador_presentacion = _prs_mods["generador_presentacion"]
     _PRS_ERROR: str | None = None
 except Exception as _pe:
     _prs_config = _prs_prompts = _prs_generador_html = _prs_detector = None
+    _prs_generador_pdf = _prs_generador_presentacion = None
     _PRS_ERROR = str(_pe)
 
 
@@ -1804,6 +1808,18 @@ def _prs_generar_html_subbloque(
 # Vista Presentación
 # =============================================================================
 
+def _prs_ensamblar_markdown_bloque(tema_nombre: str, subbloques: list[dict]) -> str:
+    """Concatena el markdown de todos los sub-bloques del tema (final > borrador)."""
+    partes: list[str] = [f"# {tema_nombre}"]
+    for sub in subbloques:
+        cs = _db_cnt_get_contenido_subbloque(sub["id"])
+        if cs:
+            md_sub = cs.get("markdown_final") or cs.get("markdown_borrador") or ""
+            if md_sub.strip():
+                partes.append(md_sub.strip())
+    return "\n\n".join(partes)
+
+
 def _vista_presentacion() -> None:
     if _PRS_ERROR:
         st.error(f"No se pudo cargar el Agente Presentación: {_PRS_ERROR}")
@@ -2095,6 +2111,85 @@ def _vista_presentacion() -> None:
                                 status.update(label="Error en la generación", state="error")
                                 st.error(str(_err))
                         st.rerun()
+
+    # ── Exportar bloque completo ──────────────────────────────────────────────
+    st.divider()
+    st.markdown("### Exportar bloque completo")
+
+    _md_bloque = _prs_ensamblar_markdown_bloque(tema_nombre, subbloques)
+    _tiene_contenido_bloque = len(_md_bloque.splitlines()) > 1  # más que solo el título H1
+
+    if not _tiene_contenido_bloque:
+        st.info(
+            "Genera el contenido de al menos un sub-bloque en la vista **Contenido** "
+            "para poder exportar el bloque completo."
+        )
+        return
+
+    _col_pdf, _col_pres = st.columns(2)
+
+    with _col_pdf:
+        if st.button(
+            "Generar PDF del bloque",
+            key=f"prs_pdf_{tema_id}",
+            use_container_width=True,
+        ):
+            with st.status("Generando PDF…", expanded=True) as _st_pdf:
+                try:
+                    st.write("Renderizando ecuaciones y tablas…")
+                    _pdf_bytes = _prs_generador_pdf.generar_pdf(_md_bloque, titulo=tema_nombre)
+                    st.session_state[f"prs_pdf_bytes_{tema_id}"] = _pdf_bytes
+                    _st_pdf.update(label="PDF generado", state="complete")
+                except Exception as _e:
+                    _st_pdf.update(label="Error al generar el PDF", state="error")
+                    st.error(str(_e))
+            st.rerun()
+
+        if st.session_state.get(f"prs_pdf_bytes_{tema_id}"):
+            st.download_button(
+                "Descargar PDF",
+                data=st.session_state[f"prs_pdf_bytes_{tema_id}"],
+                file_name=f"{_slugify(tema_nombre)}_bloque.pdf",
+                mime="application/pdf",
+                key=f"prs_dl_pdf_{tema_id}",
+                use_container_width=True,
+            )
+
+    with _col_pres:
+        if st.button(
+            "Generar presentación completa",
+            key=f"prs_presentacion_{tema_id}",
+            use_container_width=True,
+        ):
+            with st.status("Generando presentación…", expanded=True) as _st_pres:
+                try:
+                    st.write("Detectando elementos interactivos…")
+                    _elementos_pres = _prs_detector.detectar_elementos(
+                        _md_bloque, analizar_advertencias=False
+                    )
+                    st.write(
+                        f"{len(_elementos_pres)} elementos detectados — "
+                        "generando presentación completa…"
+                    )
+                    _html_pres = _prs_generador_presentacion.generar_presentacion(
+                        _md_bloque, _elementos_pres, tema_nombre, verbose=False
+                    )
+                    st.session_state[f"prs_html_pres_{tema_id}"] = _html_pres.encode("utf-8")
+                    _st_pres.update(label="Presentación generada", state="complete")
+                except Exception as _e:
+                    _st_pres.update(label="Error al generar la presentación", state="error")
+                    st.error(str(_e))
+            st.rerun()
+
+        if st.session_state.get(f"prs_html_pres_{tema_id}"):
+            st.download_button(
+                "Descargar presentación completa",
+                data=st.session_state[f"prs_html_pres_{tema_id}"],
+                file_name=f"{_slugify(tema_nombre)}_presentacion_completa.html",
+                mime="text/html",
+                key=f"prs_dl_pres_{tema_id}",
+                use_container_width=True,
+            )
 
 
 # =============================================================================
