@@ -64,49 +64,23 @@ def construir_prompt(
     bloque_teoria = "\n\n".join(materiales_teoria_formateados).strip()
     bloque_contexto = "\n\n".join(materiales_contexto_formateados).strip() or "[VACÍO]"
 
-    if horas_totales is not None:
-        instruccion_horas = (
-            "DISTRIBUCIÓN DE HORAS: La guía docente de esta asignatura indica\n"
-            f"{horas_totales}h lectivas totales (clases expositivas + prácticas de aula), pero no especifica\n"
-            "la distribución por bloques temáticos. ESE ES TU TRABAJO:\n"
-            f"distribuye las {horas_totales}h entre los bloques de forma\n"
-            "proporcional al volumen de material que encuentres en los\n"
-            "materiales de teoría (número de slides o páginas por bloque).\n"
-            "Justifica el reparto en la columna correspondiente.\n"
-            f"La suma de todas las horas asignadas debe ser exactamente {horas_totales}h."
-        )
-    else:
-        instruccion_horas = (
-            "DISTRIBUCIÓN DE HORAS: La guía docente no especifica las horas\n"
-            "por bloque. Distribuye las horas de forma proporcional al volumen\n"
-            "de material. Indica la distribución propuesta en el output."
-        )
-
-    if horas_totales is not None:
-        instruccion_restriccion_total = (
-            "RESTRICCIÓN ABSOLUTA DE HORAS: La suma de TODAS las horas\n"
-            f"asignadas a TODOS los bloques debe ser EXACTAMENTE {horas_totales}h.\n"
-            "No puede ser ni una hora más ni una hora menos.\n"
-            "Antes de responder, suma todas las horas asignadas y verifica que\n"
-            f"el total es exactamente {horas_totales}h.\n"
-            "Si el total no cuadra, redistribuye hasta que cuadre.\n"
-            "Esta restricción tiene prioridad sobre cualquier otra consideración."
-        )
-        instruccion_bloques_sin_material = (
-            "BLOQUES SIN MATERIAL: Si para algún bloque temático identificado\n"
-            "en la guía docente no encuentras material de teoría suficiente,\n"
-            "NO escribas [MATERIAL INSUFICIENTE]. En su lugar:\n"
-            "1. Asigna las horas de ese bloque de forma proporcional a los\n"
-            "   bloques que sí tienen material\n"
-            "2. Indica en la columna de justificación: 'Horas redistribuidas\n"
-            "   desde bloque sin material disponible'\n"
-            f"La suma total sigue siendo exactamente {horas_totales}h."
-        )
-    else:
-        instruccion_restriccion_total = ""
-        instruccion_bloques_sin_material = ""
-
     n_bloques = len(textos_teoria)
+
+    if horas_totales is not None:
+        instruccion_horas = (
+            f"DISTRIBUCIÓN DE HORAS — RESTRICCIÓN ABSOLUTA:\n"
+            f"La guía docente indica {horas_totales}h lectivas (TE + PA) para distribuir "
+            f"entre los {n_bloques} bloques. Repártelas de forma proporcional al volumen "
+            f"de material de cada bloque (páginas o slides). Todos los bloques deben "
+            f"recibir al menos 0.5h.\n"
+            f"La suma de horas de todos los bloques debe ser EXACTAMENTE {horas_totales}h. "
+            f"Antes de responder, verifica internamente que la suma cuadra y ajusta si es necesario."
+        )
+    else:
+        instruccion_horas = (
+            "DISTRIBUCIÓN DE HORAS: La guía docente no especifica las horas totales. "
+            "Distribuye de forma proporcional al volumen de material de cada bloque."
+        )
     instruccion_cardinalidad = (
         f"RESTRICCIÓN DE CARDINALIDAD — PRIORIDAD MÁXIMA:\n"
         f"La guía docente es la referencia autoritativa para la ESTRUCTURA de bloques\n"
@@ -229,7 +203,6 @@ Instrucciones obligatorias:
 {instruccion_subtemas}
 3) Asigna las horas de cada bloque en su encabezado (## Bloque N — Nombre · Xh) de forma
 proporcional al volumen de material de ese bloque. NO repartas horas entre subtemas en la tabla.
-4) Si en los materiales no hay suficiente información para un bloque, indícalo de forma explícita.
 
 IMPORTANTE: Los materiales de contexto/outline son solo orientativos. 
 Los subtemas deben extraerse ÚNICAMENTE de los materiales de teoría. 
@@ -240,16 +213,11 @@ RESTRICCIÓN DE BLOQUE: Los subtemas de cada bloque provienen
 exclusivamente de los materiales de teoría de ese bloque. No puedes 
 asignar a un bloque subtemas que aparezcan en los materiales de otro.
 
-RESTRICCIÓN CRÍTICA: No puedes añadir, inferir ni inventar ningún tema, 
-subtema o concepto que no aparezca textualmente en los documentos 
-proporcionados. Si el material de un bloque es insuficiente para 
-identificar subtemas, indica explícitamente: [MATERIAL INSUFICIENTE].
+RESTRICCIÓN CRÍTICA: No puedes añadir, inferir ni inventar ningún tema,
+subtema o concepto que no aparezca textualmente en los documentos
+proporcionados.
 
 {instruccion_horas}
-
-{instruccion_restriccion_total}
-
-{instruccion_bloques_sin_material}
 
 {instruccion_cardinalidad}
 
@@ -278,7 +246,6 @@ Formato de salida:
 - El único contenido permitido es el que cabe dentro de la plantilla anterior.
 {instruccion_columna_subtemas}
 - Todos los valores numéricos de horas deben usar punto decimal (.) y nunca coma (,), solo en las horas totales de cada bloque (encabezado ## Bloque N · Xh).
-- La suma de horas de todos los bloques debe ser EXACTAMENTE igual a las horas disponibles.
 - Si necesitas ajustar horas para cuadrar, hazlo internamente y no muestres esos ajustes en el output.
 
 Texto de la guía docente:

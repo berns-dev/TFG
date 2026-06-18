@@ -1376,10 +1376,12 @@ def normalizar_horas_output(markdown: str, total_horas: float) -> tuple[str, dic
         base = round((total_horas / n) * 2) / 2 if n else 0
         horas_nuevas = [base] * n
 
-    # Ajuste fino para cuadrar el total exacto.
+    # Ajuste fino: el residuo va al bloque más grande para minimizar la
+    # distorsión relativa (el último bloque puede ser el más pequeño).
     ajuste_residuo = total_horas - sum(horas_nuevas)
     if horas_nuevas and abs(ajuste_residuo) >= 0.01:
-        horas_nuevas[-1] = round((horas_nuevas[-1] + ajuste_residuo) * 2) / 2
+        idx_mayor = horas_nuevas.index(max(horas_nuevas))
+        horas_nuevas[idx_mayor] = round((horas_nuevas[idx_mayor] + ajuste_residuo) * 2) / 2
 
     ajustes: dict[str, dict] = {}
     nuevas_lineas = list(lineas)
