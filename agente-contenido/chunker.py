@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-from config import CHUNK_CHAR_RATIO, CHUNK_TARGET_TOKENS
+from cnt_config import CHUNK_CHAR_RATIO, CHUNK_TARGET_TOKENS
 
 _LOGGER = logging.getLogger(__name__)
 

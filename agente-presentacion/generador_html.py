@@ -39,13 +39,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import anthropic
 
-from config import (
+from prs_config import (
     ANTHROPIC_API_KEY,
     MODEL_FAST,
     MODEL_SMART,
     REQUEST_TIMEOUT_SECONDS,
 )
-from prompts import (
+from prs_prompts import (
     PROMPT_DESCRIPCION_VARIABLES,
     PROMPT_GENERADOR_HTML,
     PROMPT_RAZONADOR_VISUALIZACION,

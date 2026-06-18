@@ -37,7 +37,7 @@ except Exception:  # noqa: BLE001
 
 import anthropic
 
-from config import ANTHROPIC_API_KEY, REQUEST_TIMEOUT_SECONDS
+from prs_config import ANTHROPIC_API_KEY, REQUEST_TIMEOUT_SECONDS
 from generador_html import _razonar_visualizacion
 
 

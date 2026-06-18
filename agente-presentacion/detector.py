@@ -44,7 +44,7 @@ from typing import Any
 
 import anthropic
 
-from config import (
+from prs_config import (
     ANTHROPIC_API_KEY,
     CONTEXTO_CHARS,
     MIN_LATEX_CHARS,
@@ -53,7 +53,7 @@ from config import (
     MODEL_SMART,
     REQUEST_TIMEOUT_SECONDS,
 )
-from prompts import (
+from prs_prompts import (
     PROMPT_DETECTOR_INTERACTIVIDAD,
     PROMPT_RAZONADOR_VISUALIZACION,
     build_detector_message,

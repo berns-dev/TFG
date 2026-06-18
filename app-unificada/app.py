@@ -128,28 +128,28 @@ def _cargar_modulos_agente(raiz: str, prefijo: str, nombres: list[str]) -> dict:
 # ── Agente Organizador (sin imports cruzados entre los módulos cargados) ──────
 try:
     _org_mods = _cargar_modulos_agente(
-        RAIZ_ORGANIZADOR, "organizador", ["agente", "parser", "prompts"]
+        RAIZ_ORGANIZADOR, "organizador", ["agente", "parser", "org_prompts"]
     )
     _org_agente = _org_mods["agente"]
     _org_parser = _org_mods["parser"]
-    _org_prompts = _org_mods["prompts"]
+    _org_prompts = _org_mods["org_prompts"]
     _ORG_ERROR: str | None = None
 except Exception as _e:
     _org_agente = _org_parser = _org_prompts = None
     _ORG_ERROR = str(_e)
 
 
-# ── Agente Contenido (extractor←cleaner; chunker/classifier/validator←config) ─
+# ── Agente Contenido (extractor←cleaner; chunker/classifier/validator←cnt_config) ─
 # pipeline importa de chunker, classifier, assembler, validator → va al final.
 try:
     _cnt_mods = _cargar_modulos_agente(
         RAIZ_CONTENIDO, "contenido",
         [
-            "config", "cleaner", "extractor", "chunker", "classifier",
+            "cnt_config", "cleaner", "extractor", "chunker", "classifier",
             "assembler", "validator", "segmentor", "pipeline",
         ],
     )
-    _cnt_config = _cnt_mods["config"]
+    _cnt_config = _cnt_mods["cnt_config"]
     _cnt_cleaner = _cnt_mods["cleaner"]
     _cnt_extractor = _cnt_mods["extractor"]
     _cnt_chunker = _cnt_mods["chunker"]
@@ -165,15 +165,15 @@ except Exception as _ce:
     _CNT_ERROR = str(_ce)
 
 
-# ── Agente Presentación (detector/generador_html←config, prompts) ─────────────
+# ── Agente Presentación (detector/generador_html←prs_config, prs_prompts) ─────
 # generador_presentacion importa de generador_html → va al final del lote.
 try:
     _prs_mods = _cargar_modulos_agente(
         RAIZ_PRESENTACION, "presentacion",
-        ["config", "prompts", "generador_html", "detector", "generador_pdf", "generador_presentacion"],
+        ["prs_config", "prs_prompts", "generador_html", "detector", "generador_pdf", "generador_presentacion"],
     )
-    _prs_config = _prs_mods["config"]
-    _prs_prompts = _prs_mods["prompts"]
+    _prs_config = _prs_mods["prs_config"]
+    _prs_prompts = _prs_mods["prs_prompts"]
     _prs_generador_html = _prs_mods["generador_html"]
     _prs_detector = _prs_mods["detector"]
     _prs_generador_pdf = _prs_mods["generador_pdf"]

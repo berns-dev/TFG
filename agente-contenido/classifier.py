@@ -9,7 +9,7 @@ from typing import Any
 
 import anthropic
 
-from config import (
+from cnt_config import (
     ANTHROPIC_API_KEY,
     MIN_CHARS_FOR_SMART,
     MODEL_FAST,

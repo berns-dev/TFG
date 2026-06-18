@@ -48,13 +48,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import anthropic
 import markdown as md_lib
 
-from config import (
+from prs_config import (
     ANTHROPIC_API_KEY,
     MODEL_FAST,
     REQUEST_TIMEOUT_SECONDS,
 )
 from generador_html import _generar_bloque, _slug
-from prompts import PROMPT_GENERADOR_SVG, build_svg_message
+from prs_prompts import PROMPT_GENERADOR_SVG, build_svg_message
 
 logger = logging.getLogger(__name__)
 

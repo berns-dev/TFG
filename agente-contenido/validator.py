@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from config import FIDELITY_THRESHOLD
+from cnt_config import FIDELITY_THRESHOLD
 
 _STOPWORDS = {
     "para",

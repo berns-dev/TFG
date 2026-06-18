@@ -11,7 +11,7 @@ from typing import Any
 from assembler import assemble_subbloque_body
 from chunker import split_into_chunks
 from classifier import classify_and_format
-from config import MAX_WORKERS
+from cnt_config import MAX_WORKERS
 from validator import validate_items
 
 
