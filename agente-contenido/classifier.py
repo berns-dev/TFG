@@ -187,18 +187,10 @@ def _get_client() -> anthropic.Anthropic:
     return _anthropic_client
 
 
-_DENSITY_CONTEXT_TMPL = (
-    "[CONTEXTO DE DENSIDAD: Este tema tiene asignadas {horas}h lectivas. "
-    "Ajusta la extensión y profundidad del markdown en proporción al tiempo disponible — "
-    "más horas implica mayor desarrollo, menos horas mayor síntesis. "
-    "Restricción absoluta: no añadas contenido ausente en el material.]\n\n"
-)
-
-
-def _build_user_message(chunk_text: str, tema_horas: float | None) -> str:
-    if tema_horas is None:
-        return chunk_text
-    return _DENSITY_CONTEXT_TMPL.format(horas=tema_horas) + chunk_text
+def _build_user_message(chunk_text: str, tema_horas: float | None = None) -> str:
+    """Construye el user message sin contexto de densidad horaria."""
+    _ = tema_horas  # legado: ya no se usa para calibrar extensión
+    return chunk_text
 
 
 def _call_anthropic(chunk_text: str, tema_horas: float | None = None) -> dict[str, Any]:

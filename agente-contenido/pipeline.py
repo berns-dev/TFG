@@ -54,7 +54,7 @@ def procesar_segmento(
     ordered: list[dict[str, Any] | None] = [None] * len(chunks_to_classify)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_to_i = {
-            pool.submit(classify_and_format, chunk, horas): i
+            pool.submit(classify_and_format, chunk, None): i
             for i, chunk in enumerate(chunks_to_classify)
         }
         for fut in as_completed(future_to_i):
@@ -86,7 +86,7 @@ def procesar_bloque(
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """Curado de un bloque temático completo → un único markdown con frontmatter.
 
-    Usa las horas del bloque (no por subtema) para el contexto de densidad.
+    Extrae y estructura el material original sin calibrar extensión por horas.
     """
     if max_workers is None:
         max_workers = MAX_WORKERS
@@ -98,7 +98,7 @@ def procesar_bloque(
     ordered: list[dict[str, Any] | None] = [None] * len(chunks)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_to_i = {
-            pool.submit(classify_and_format, chunk, horas): i
+            pool.submit(classify_and_format, chunk, None): i
             for i, chunk in enumerate(chunks)
         }
         for fut in as_completed(future_to_i):

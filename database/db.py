@@ -3,12 +3,13 @@
 Almacén compartido de inputs, outputs, estados y progreso de los tres agentes
 (Organizador, Contenido, Presentación) cuando se unifican en una sola app Streamlit.
 
-Esquema actual: versión 6 (user_version = 6).
+Esquema actual: versión 7 (user_version = 7).
 Migración automática desde v1: añade columnas para evidencia/estado/interactivo.
 Migración v3: tabla valoraciones_profesor (puntuación 1-10 por asignatura y agente).
 Migración v4: puntuacion_profesor por sub-bloque en contenido_subbloque.
 Migración v5: input_id en temas (vínculo bloque → PDF de teoría).
 Migración v6: índice UNIQUE en inputs (asignatura, tipo, nombre) y deduplicación.
+Migración v7: contenido_tema (markdown por bloque) y visualizacion_interactiva.
 
 Uso directo:
     python database/db.py
@@ -19,7 +20,7 @@ import sqlite3
 
 RUTA_DB_POR_DEFECTO = "data/tfg.db"
 
-VERSION_SCHEMA = 6
+VERSION_SCHEMA = 7
 
 # Asignaturas con las que se ha validado la suite (ver CLAUDE.md).
 ASIGNATURAS_CONOCIDAS = [
@@ -169,6 +170,34 @@ ESQUEMA = [
         UNIQUE(asignatura_id, agente)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS contenido_tema (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tema_id INTEGER NOT NULL UNIQUE REFERENCES temas(id),
+        markdown_borrador TEXT,
+        markdown_final TEXT,
+        porcentaje_editado REAL,
+        puntuacion_profesor INTEGER CHECK(puntuacion_profesor BETWEEN 1 AND 10),
+        estado TEXT NOT NULL DEFAULT 'pendiente'
+            CHECK(estado IN ('pendiente','generado','editado','aprobado')),
+        fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS visualizacion_interactiva (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tema_id INTEGER NOT NULL REFERENCES temas(id),
+        titulo TEXT NOT NULL,
+        prompt_inicial TEXT,
+        historial_json TEXT DEFAULT '[]',
+        html_fragment TEXT,
+        seccion_ancla TEXT DEFAULT '',
+        estado TEXT NOT NULL DEFAULT 'borrador'
+            CHECK(estado IN ('borrador','aprobado')),
+        orden INTEGER DEFAULT 0,
+        fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
 ]
 
 # ---------------------------------------------------------------------------
@@ -233,10 +262,43 @@ MIGRACIONES: dict[int, list[str]] = {
             ON inputs(asignatura_id, tipo, nombre_fichero)
         """,
     ],
+    7: [
+        """
+        CREATE TABLE IF NOT EXISTS contenido_tema (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tema_id INTEGER NOT NULL UNIQUE REFERENCES temas(id),
+            markdown_borrador TEXT,
+            markdown_final TEXT,
+            porcentaje_editado REAL,
+            puntuacion_profesor INTEGER CHECK(puntuacion_profesor BETWEEN 1 AND 10),
+            estado TEXT NOT NULL DEFAULT 'pendiente'
+                CHECK(estado IN ('pendiente','generado','editado','aprobado')),
+            fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS visualizacion_interactiva (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tema_id INTEGER NOT NULL REFERENCES temas(id),
+            titulo TEXT NOT NULL,
+            prompt_inicial TEXT,
+            historial_json TEXT DEFAULT '[]',
+            html_fragment TEXT,
+            seccion_ancla TEXT DEFAULT '',
+            estado TEXT NOT NULL DEFAULT 'borrador'
+                CHECK(estado IN ('borrador','aprobado')),
+            orden INTEGER DEFAULT 0,
+            fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+    ],
 }
 
-# Estados válidos para el ciclo de vida de un subbloque de contenido.
+# Estados válidos para el ciclo de vida de un subbloque de contenido (legado).
 ESTADOS_SUBBLOQUE = frozenset({"pendiente", "generado", "editado", "aprobado"})
+
+# Estados válidos para contenido curado a nivel de bloque temático.
+ESTADOS_TEMA = frozenset({"pendiente", "generado", "editado", "aprobado"})
 
 # Agentes que admiten valoración global del profesor (1-10).
 AGENTES_VALORACION = frozenset({"organizador", "contenido", "presentacion"})
@@ -428,7 +490,251 @@ def seed_asignaturas(ruta=RUTA_DB_POR_DEFECTO) -> int:
 
 
 # ---------------------------------------------------------------------------
-# CRUD de estado de subbloque de contenido
+# CRUD de contenido curado por bloque temático (v7)
+# ---------------------------------------------------------------------------
+
+
+def get_contenido_tema(tema_id: int, ruta=RUTA_DB_POR_DEFECTO) -> dict | None:
+    """Devuelve la fila de contenido_tema o None si el bloque no tiene contenido."""
+    conn = get_connection(ruta)
+    try:
+        row = conn.execute(
+            "SELECT id, tema_id, markdown_borrador, markdown_final, porcentaje_editado, "
+            "puntuacion_profesor, estado, fecha_actualizacion "
+            "FROM contenido_tema WHERE tema_id = ?",
+            (tema_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def upsert_contenido_tema_borrador(
+    tema_id: int,
+    markdown_borrador: str,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> None:
+    """Guarda el borrador generado por IA y marca el bloque como 'generado'."""
+    conn = get_connection(ruta)
+    try:
+        existe = conn.execute(
+            "SELECT id FROM contenido_tema WHERE tema_id = ?", (tema_id,)
+        ).fetchone()
+        if existe:
+            conn.execute(
+                "UPDATE contenido_tema SET markdown_borrador = ?, estado = 'generado', "
+                "fecha_actualizacion = CURRENT_TIMESTAMP WHERE tema_id = ?",
+                (markdown_borrador, tema_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO contenido_tema (tema_id, markdown_borrador, estado) "
+                "VALUES (?, ?, 'generado')",
+                (tema_id, markdown_borrador),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def guardar_contenido_tema_edicion(
+    tema_id: int,
+    markdown: str,
+    porcentaje_editado: float,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> None:
+    """Persiste una edición manual del profesor (sin aprobar todavía)."""
+    estado = "aprobado" if porcentaje_editado == 0 else "editado"
+    conn = get_connection(ruta)
+    try:
+        existe = conn.execute(
+            "SELECT id FROM contenido_tema WHERE tema_id = ?", (tema_id,)
+        ).fetchone()
+        if existe:
+            conn.execute(
+                "UPDATE contenido_tema SET markdown_final = ?, porcentaje_editado = ?, "
+                "estado = ?, fecha_actualizacion = CURRENT_TIMESTAMP WHERE tema_id = ?",
+                (markdown, porcentaje_editado, estado, tema_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO contenido_tema "
+                "(tema_id, markdown_borrador, markdown_final, porcentaje_editado, estado) "
+                "VALUES (?, '', ?, ?, ?)",
+                (tema_id, markdown, porcentaje_editado, estado),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def aprobar_contenido_tema(
+    tema_id: int,
+    markdown: str,
+    porcentaje_editado: float,
+    puntuacion: int,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> None:
+    """Marca el bloque temático como aprobado con valoración del profesor."""
+    if not 1 <= puntuacion <= 10:
+        raise ValueError(f"Puntuación fuera de rango: {puntuacion}")
+    conn = get_connection(ruta)
+    try:
+        existe = conn.execute(
+            "SELECT id FROM contenido_tema WHERE tema_id = ?", (tema_id,)
+        ).fetchone()
+        if existe:
+            conn.execute(
+                "UPDATE contenido_tema SET markdown_final = ?, porcentaje_editado = ?, "
+                "estado = 'aprobado', puntuacion_profesor = ?, "
+                "fecha_actualizacion = CURRENT_TIMESTAMP WHERE tema_id = ?",
+                (markdown, porcentaje_editado, puntuacion, tema_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO contenido_tema "
+                "(tema_id, markdown_borrador, markdown_final, porcentaje_editado, "
+                "estado, puntuacion_profesor) VALUES (?, ?, ?, ?, 'aprobado', ?)",
+                (tema_id, markdown, markdown, porcentaje_editado, puntuacion),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# CRUD de visualizaciones interactivas (Presentación v7)
+# ---------------------------------------------------------------------------
+
+
+def listar_visualizaciones_tema(tema_id: int, ruta=RUTA_DB_POR_DEFECTO) -> list[dict]:
+    conn = get_connection(ruta)
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id, tema_id, titulo, prompt_inicial, historial_json, "
+                "html_fragment, seccion_ancla, estado, orden, fecha_actualizacion "
+                "FROM visualizacion_interactiva WHERE tema_id = ? "
+                "ORDER BY orden, id",
+                (tema_id,),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def get_visualizacion(viz_id: int, ruta=RUTA_DB_POR_DEFECTO) -> dict | None:
+    conn = get_connection(ruta)
+    try:
+        row = conn.execute(
+            "SELECT id, tema_id, titulo, prompt_inicial, historial_json, "
+            "html_fragment, seccion_ancla, estado, orden, fecha_actualizacion "
+            "FROM visualizacion_interactiva WHERE id = ?",
+            (viz_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def insertar_visualizacion_borrador(
+    tema_id: int,
+    titulo: str,
+    prompt_inicial: str,
+    historial_json: str,
+    html_fragment: str,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> int:
+    conn = get_connection(ruta)
+    try:
+        max_orden = conn.execute(
+            "SELECT COALESCE(MAX(orden), -1) FROM visualizacion_interactiva WHERE tema_id = ?",
+            (tema_id,),
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO visualizacion_interactiva "
+            "(tema_id, titulo, prompt_inicial, historial_json, html_fragment, orden) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (tema_id, titulo, prompt_inicial, historial_json, html_fragment, max_orden + 1),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def actualizar_visualizacion_borrador(
+    viz_id: int,
+    html_fragment: str,
+    historial_json: str,
+    titulo: str | None = None,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> None:
+    conn = get_connection(ruta)
+    try:
+        if titulo is not None:
+            conn.execute(
+                "UPDATE visualizacion_interactiva SET html_fragment = ?, historial_json = ?, "
+                "titulo = ?, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?",
+                (html_fragment, historial_json, titulo, viz_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE visualizacion_interactiva SET html_fragment = ?, historial_json = ?, "
+                "fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?",
+                (html_fragment, historial_json, viz_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def aprobar_visualizacion(
+    viz_id: int,
+    seccion_ancla: str,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> None:
+    conn = get_connection(ruta)
+    try:
+        conn.execute(
+            "UPDATE visualizacion_interactiva SET estado = 'aprobado', seccion_ancla = ?, "
+            "fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?",
+            (seccion_ancla, viz_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def eliminar_visualizacion(viz_id: int, ruta=RUTA_DB_POR_DEFECTO) -> None:
+    conn = get_connection(ruta)
+    try:
+        conn.execute("DELETE FROM visualizacion_interactiva WHERE id = ?", (viz_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def listar_visualizaciones_aprobadas(tema_id: int, ruta=RUTA_DB_POR_DEFECTO) -> list[dict]:
+    conn = get_connection(ruta)
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id, titulo, html_fragment, seccion_ancla, orden "
+                "FROM visualizacion_interactiva "
+                "WHERE tema_id = ? AND estado = 'aprobado' "
+                "ORDER BY orden, id",
+                (tema_id,),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# CRUD de estado de subbloque de contenido (legado)
 # ---------------------------------------------------------------------------
 
 
@@ -548,43 +854,31 @@ def set_interactivo_subbloque(
 def get_progreso_bloque(tema_id: int, ruta=RUTA_DB_POR_DEFECTO) -> dict:
     """Calcula el progreso de un bloque temático en tiempo real.
 
-    Progreso = subbloques con estado 'aprobado' / total subbloques del bloque.
-    El contenido interactivo (tiene_interactivo) NO entra en este cálculo.
+    Progreso = 1 si contenido_tema.estado == 'aprobado', 0 en caso contrario.
 
     Returns:
         {"total": int, "aprobados": int, "porcentaje": float}
     """
     conn = get_connection(ruta)
     try:
-        total = conn.execute(
-            "SELECT COUNT(*) FROM subbloques WHERE tema_id = ?",
+        row = conn.execute(
+            "SELECT estado FROM contenido_tema WHERE tema_id = ?",
             (tema_id,),
-        ).fetchone()[0]
-        aprobados = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM subbloques s
-            JOIN contenido_subbloque cs ON cs.subbloque_id = s.id
-            WHERE s.tema_id = ? AND cs.estado = 'aprobado'
-            """,
-            (tema_id,),
-        ).fetchone()[0]
+        ).fetchone()
+        aprobado = 1 if row and row["estado"] == "aprobado" else 0
     finally:
         conn.close()
     return {
-        "total": total,
-        "aprobados": aprobados,
-        "porcentaje": round(aprobados / max(total, 1) * 100, 1),
+        "total": 1,
+        "aprobados": aprobado,
+        "porcentaje": 100.0 if aprobado else 0.0,
     }
 
 
 def get_progreso_asignatura(asignatura_id: int, ruta=RUTA_DB_POR_DEFECTO) -> dict:
     """Calcula el progreso global de una asignatura en tiempo real.
 
-    Progreso = subbloques con estado 'aprobado' / total subbloques de la asignatura.
-    Los bloques con un único subbloque (caso fallback del Organizador) se tratan
-    exactamente igual que los bloques con varios subbloques — el denominador es
-    siempre la suma de todos los subbloques sin distinción.
+    Progreso = bloques temáticos con contenido_tema aprobado / total bloques.
 
     Returns:
         {"total": int, "aprobados": int, "porcentaje": float}
@@ -592,21 +886,15 @@ def get_progreso_asignatura(asignatura_id: int, ruta=RUTA_DB_POR_DEFECTO) -> dic
     conn = get_connection(ruta)
     try:
         total = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM subbloques s
-            JOIN temas t ON t.id = s.tema_id
-            WHERE t.asignatura_id = ?
-            """,
+            "SELECT COUNT(*) FROM temas WHERE asignatura_id = ?",
             (asignatura_id,),
         ).fetchone()[0]
         aprobados = conn.execute(
             """
             SELECT COUNT(*)
-            FROM subbloques s
-            JOIN temas t ON t.id = s.tema_id
-            JOIN contenido_subbloque cs ON cs.subbloque_id = s.id
-            WHERE t.asignatura_id = ? AND cs.estado = 'aprobado'
+            FROM temas t
+            JOIN contenido_tema ct ON ct.tema_id = t.id
+            WHERE t.asignatura_id = ? AND ct.estado = 'aprobado'
             """,
             (asignatura_id,),
         ).fetchone()[0]
@@ -628,6 +916,7 @@ def get_desglose_progreso_asignatura(
     Returns:
         list[dict] ordenado por temas.orden, con:
         {"tema_id", "nombre", "horas", "total_sub", "aprobados", "porcentaje"}
+        (total_sub y aprobados son 0/1 por bloque — compatibilidad con la UI)
     """
     conn = get_connection(ruta)
     try:
@@ -638,26 +927,18 @@ def get_desglose_progreso_asignatura(
         ).fetchall()
         resultado = []
         for t in temas:
-            total_sub = conn.execute(
-                "SELECT COUNT(*) FROM subbloques WHERE tema_id = ?",
+            row = conn.execute(
+                "SELECT estado FROM contenido_tema WHERE tema_id = ?",
                 (t["id"],),
-            ).fetchone()[0]
-            aprobados = conn.execute(
-                """
-                SELECT COUNT(*)
-                FROM subbloques s
-                JOIN contenido_subbloque cs ON cs.subbloque_id = s.id
-                WHERE s.tema_id = ? AND cs.estado = 'aprobado'
-                """,
-                (t["id"],),
-            ).fetchone()[0]
+            ).fetchone()
+            aprobado = 1 if row and row["estado"] == "aprobado" else 0
             resultado.append({
                 "tema_id": t["id"],
                 "nombre": t["nombre"],
                 "horas": t["horas"],
-                "total_sub": total_sub,
-                "aprobados": aprobados,
-                "porcentaje": round(aprobados / max(total_sub, 1) * 100, 1),
+                "total_sub": 1,
+                "aprobados": aprobado,
+                "porcentaje": 100.0 if aprobado else 0.0,
             })
         return resultado
     finally:

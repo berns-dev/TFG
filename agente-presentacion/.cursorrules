@@ -2,35 +2,27 @@
 # TFG — Metodologías de Ingeniería Aumentada
 
 ## Propósito
-Este agente genera material de presentación a partir del Markdown estructurado producido
-por el Agente Contenido. Tres salidas: PDF académico institucional UO, HTML interactivo
-por pestañas, y HTML de presentación completa del tema.
-
-El texto descriptivo proviene del Markdown. La implementación de visualizaciones puede
-usar conocimiento de ingeniería del modelo; no puede inventar qué dijo el profesor.
+Genera PDF institucional y HTML de presentación desde el Markdown del Agente Contenido.
+La UI principal es un **taller iterativo**: el profesor describe visualizaciones en
+lenguaje natural, previsualiza, refina y aprueba fragmentos HTML anclados a secciones del MD.
 
 ## UI
-No hay `app.py` en este agente. La interfaz vive en `app-unificada/app.py`, que importa
-`generador_pdf.py`, `generador_html.py`, `generador_presentacion.py`, `detector.py`.
+`app-unificada/app.py` importa `workshop.py`, `generador_presentacion.py`, `generador_pdf.py`.
 
 ## Reglas de desarrollo
-- La API usada es Anthropic directa (no OpenRouter). Nunca uses openrouter en este proyecto.
-- Los modelos válidos son: claude-haiku-4-5-20251001 (fast) y claude-sonnet-4-5 (smart).
-- Haiku: filtro de interactividad en detector.py; SVG opcionales.
-- Sonnet: razonador de visualización + generador HTML (generador_html.py).
-- La detección es híbrida: regex determinista primero, Haiku para ambiguos (fail-open).
-- `aplicar_rangos()` corrige min/max/value de sliders tras la generación Sonnet.
-- El HTML generado debe ser autocontenido (inline) salvo Chart.js y MathJax (CDN).
-- PDF: ReportLab + matplotlib mathtext (no WeasyPrint, no LaTeX de sistema).
+- API Anthropic directa. Modelos: haiku-4-5, sonnet-4-5.
+- Taller: `generar_desde_instruccion()`, `refinar_html()` en workshop.py.
+- Ensamblaje: `generar_presentacion_con_fragmentos()` — teoría + visualizaciones aprobadas.
+- HTML autocontenido (inline) salvo Chart.js y MathJax (CDN).
+- PDF: ReportLab + matplotlib mathtext.
 
 ## Estructura de módulos
-- detector.py: detección híbrida de ecuaciones, relaciones y tablas
-- generador_pdf.py: Markdown → PDF institucional (ReportLab)
-- generador_html.py: razonador + generador; `generar_bloque_con_visualizacion()` para app-unificada
-- generador_presentacion.py: HTML presentación completa del tema
-- prompts.py: PROMPT_* y constructores de mensajes
-- config.py: constantes y carga de .env
+- workshop.py — taller por prompt del profesor
+- generador_presentacion.py — HTML presentación completa + anclaje por sección
+- generador_pdf.py — PDF institucional
+- generador_html.py, detector.py — pipeline legado (razonador/detector; módulos internos)
+- prs_prompts.py — PROMPT_TALLER_* + prompts del razonador/generador
 
-## Archivos críticos que no deben modificarse sin justificación
-- PROMPT_RAZONADOR_VISUALIZACION, PROMPT_GENERADOR_HTML, PROMPT_DETECTOR_INTERACTIVIDAD en prompts.py.
-- Firmas públicas de `generar_pdf()`, `generar_html()`, `generar_bloque_con_visualizacion()`.
+## Archivos críticos
+- PROMPT_GENERADOR_HTML, PROMPT_RAZONADOR_VISUALIZACION en prs_prompts.py.
+- Firmas públicas: `generar_pdf()`, `generar_presentacion_con_fragmentos()`.

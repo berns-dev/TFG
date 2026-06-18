@@ -9,10 +9,10 @@
 
 Convierte PDFs y PPTXs de material docente a Markdown estructurado y fiel al original. Incluye validador de fidelidad léxica (umbral 0.85), chunking semántico, selección de modelo por heurística y protocolo XML para parseo robusto.
 
-**Granularidad de procesamiento (app-unificada):**
-1. Curado del **bloque completo** — `procesar_bloque()` con las **horas del bloque** (no por subtema).
-2. Reparto monótono — `split_monotono()` divide el markdown curado usando **nombres y orden** de los subtemas del Organizador (vía BD). La `evidencia` refuerza el emparejamiento de títulos. Sin llamadas a la API.
-3. El profesor revisa el preview del reparto, confirma, y cura/aprueba **por subtema**.
+**Granularidad de procesamiento (app-unificada, junio 2026):**
+1. Curado del **bloque completo** — `procesar_bloque()` extrae y estructura el material **sin calibrar extensión por horas**.
+2. **Checklist de cobertura** — `verificar_cobertura()` compara apartados del Organizador con el MD curado (avisos, no partición).
+3. El profesor edita y aprueba **un único markdown por bloque** (`contenido_tema` en BD).
 
 **Principio rector:** Extrae y estructura. No inventa. Si algo no está en el material del profesor, no aparece en el output.
 
@@ -60,7 +60,8 @@ extractor.py        — extract_text(); cadena pymupdf → pdfplumber → plano;
 cleaner.py          — clean_extracted_text(light=…); filtro de glifos repetidos
 classifier.py       — selección de modelo, SYSTEM_PROMPT, classify_and_format()
 chunker.py          — split_into_chunks() — chunking semántico
-split_monotono.py   — split_monotono() — reparto del markdown curado por subtema
+split_monotono.py   — legado: reparto por subtema (tests; fuera del flujo UI)
+coverage_checklist.py — verificar_cobertura() — checklist vs Organizador
 subblock_state.py   — SubbloqueResult, calcular_progreso_bloque/asignatura()
 assembler.py        — assemble_markdown(), assemble_subbloque_body(), …
 validator.py        — validate_items() — validador de fidelidad léxica
@@ -79,11 +80,10 @@ fixtures/                   — artefactos de validación (Tema_3_curado.md)
 
 ## Flujo principal (app-unificada)
 
-1. **Extracción** — `extract_text()` de todos los PDF/PPTX del bloque (rutas en BD desde Organizador).
-2. **Curado del bloque** — `procesar_bloque(texto, horas_bloque)` → un markdown con frontmatter (API).
-3. **Reparto** — `split_monotono(markdown, subtemas_bd)` → N fragmentos; preview con anclas y confianza.
-4. **Confirmación** — «Confirmar reparto» → cada fragmento en `contenido_subbloque.markdown_borrador`.
-5. **Revisión** — el profesor edita, puntúa (1–10) y aprueba por subtema (`generado` → `aprobado`).
+1. **Extracción** — `extract_text()` de todos los PDF/PPTX del bloque.
+2. **Curado del bloque** — `procesar_bloque(texto)` → un markdown con frontmatter (API, sin densidad horaria).
+3. **Checklist** — `verificar_cobertura(markdown, subtemas_bd)` → avisos por apartado no detectado.
+4. **Revisión** — el profesor edita, puntúa (1–10) y aprueba el bloque en `contenido_tema`.
 
 ### Extracción PDF (detalle)
 
@@ -117,43 +117,47 @@ El modelo responde con delimitadores estrictos:
 `_parse_delimited_response()` extrae el contenido con regex tolerante. Hasta 3 reintentos si `contenido_markdown` es vacío o `<TIPO>` ausente.
 
 ### SYSTEM_PROMPT (inmutable)
-El SYSTEM_PROMPT no se modifica bajo ninguna circunstancia. Es la restricción de fidelidad del agente. Los contextos adicionales (densidad de horas) van exclusivamente en el user message. Ver sección "Contexto de densidad" abajo.
+El SYSTEM_PROMPT no se modifica bajo ninguna circunstancia. Es la restricción de fidelidad del agente.
 
-### Contexto de densidad (`classifier.py: _build_user_message()`)
-Cuando se cura un bloque, las **horas del bloque temático** (no por subtema) se inyectan
-como prefijo del user message vía `_DENSITY_CONTEXT_TMPL`. Si `tema_horas is None`, el
-chunk se envía sin prefijo de densidad.
-
----
-
-## Reparto monótono (`split_monotono.py`)
-
-`split_monotono(markdown_bloque, subtemas) → SplitResult`
-
-- Empareja nombres de subtemas (BD / Organizador) con headings `#`–`####` del markdown curado.
-- Restricción **monótona**: anclas en orden documental (evita reasignar por referencias cruzadas).
-- `evidencia` (`Sección X.X`) refuerza el match; no segmenta PDF bruto.
-- Confianza por fragmento + `requiere_revision` para la UI de preview.
-- Validación: `tools/validate_split_monotono.py`.
+### Sin densidad horaria (junio 2026)
+`_build_user_message()` ya **no** inyecta contexto de horas lectivas. El curado extrae
+fielmente el material original sin comprimir ni expandir según las horas del bloque.
 
 ---
 
-## Modelo de estados por subbloque (`subblock_state.py`)
+## Checklist de cobertura (`coverage_checklist.py`)
+
+`verificar_cobertura(markdown_bloque, apartados) → list[{nombre, cubierto, detalle}]`
+
+- Compara nombres de apartados del Organizador (BD) con el markdown curado.
+- Matching léxico determinista (sin API).
+- Avisos en UI; no bloquea la generación ni segmenta el documento.
+
+---
+
+## Reparto monótono (`split_monotono.py`) — legado
+
+Módulo conservado para tests (`tools/validate_split_monotono.py`). **Fuera del flujo UI**
+desde junio 2026: el profesor edita un único markdown por bloque.
+
+---
+
+## Modelo de estados por bloque (`contenido_tema` en BD)
 
 ```
-pendiente  →  generado  →  aprobado
-                 ↓              ↑
-              editado  ─────────┘
+pendiente → generado → aprobado
+              ↓           ↑
+           editado ───────┘
 ```
 
 | Estado | Significado |
 |---|---|
-| `pendiente` | Segmento vacío o error de extracción; el profesor edita manualmente |
-| `generado` | La API produjo el Markdown; pendiente de revisión |
-| `editado` | El profesor modificó el Markdown (sin nueva llamada a la API) |
-| `aprobado` | El profesor aceptó el contenido (original o editado) |
+| `pendiente` | Sin borrador generado |
+| `generado` | La API produjo el markdown del bloque |
+| `editado` | El profesor modificó el markdown |
+| `aprobado` | El profesor aceptó el bloque (nota 1–10 en `puntuacion_profesor`) |
 
-**La UI que gestiona las transiciones de estado es una fase posterior.** El modelo de estados está implementado y expuesto en `session_state["resultados"][i]["subbloques"]`. Las transiciones `generado → editado → aprobado` las hará la futura interfaz de revisión.
+La tabla legada `contenido_subbloque` permanece en el esquema pero ya no la usa la UI.
 
 ---
 
@@ -276,28 +280,20 @@ La UI que agrege los resultados de varios bloques debe construir esa lista.
 
 ## Input de organización (opcional en scripts; vía BD en app-unificada)
 
-El bloque y sus subtemas llegan desde SQLite (generados por el Organizador). Para parsear
-un `.md` del Organizador fuera de la app, usar `parsear_bloques_organizador()` en
-`agente-organizador/parser.py` o la lógica equivalente en `app-unificada/app.py`.
-
-Patrón de bloque: `^##\s+Bloque\s+\d+\s+—\s+(.+?)\s*·\s*([\d,.]+)h`
-
-Tabla de subtemas: `| Subtema | Evidencia | Origen |` (sin horas por subtema).
+El bloque y sus apartados llegan desde SQLite (Organizador). Los apartados alimentan
+**solo** la checklist de cobertura (`verificar_cobertura`), no la segmentación del markdown.
 
 ---
 
 ## App unificada — vista Contenido
 
-Flujo del profesor sobre un bloque temático (datos en SQLite):
+Flujo del profesor sobre un bloque temático:
 
-1. **Índice** de sub-bloques con estado (sin borrador / en revisión / aprobado con nota).
-2. **Generar borrador del bloque** — una pasada API sobre todo el material + reparto monótono;
-   vista previa con anclas, confianza y avisos de `requiere_revision`.
-3. **Confirmar reparto** — persiste borradores en `contenido_subbloque`.
-4. **Revisión** — expanders por subtema; edición, slider 1–10, «Confirmar y valorar».
+1. **Checklist** — apartados del Organizador vs cobertura en el MD (tras generar).
+2. **Generar borrador del bloque** — una pasada API; persiste en `contenido_tema`.
+3. **Revisión** — textarea único; guardar edición; aprobar y valorar (1–10) el bloque.
 
-**Valoración:** nota por sub-bloque en `contenido_subbloque.puntuacion_profesor`. La tabla
-`valoraciones_profesor` es solo para el Organizador. Ver `database/CLAUDE.md`.
+**Valoración:** `contenido_tema.puntuacion_profesor`. Ver `database/CLAUDE.md`.
 
 ---
 

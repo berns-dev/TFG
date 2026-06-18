@@ -1,6 +1,6 @@
 # App unificada
 
-Single Streamlit entry point for the three-agent teaching suite and shared SQLite database.
+Single Streamlit entry point for the three-agent teaching suite and shared SQLite database (schema v7).
 
 ## Run
 
@@ -13,25 +13,25 @@ pip install -r agente-presentacion/requirements.txt
 streamlit run app-unificada/app.py
 ```
 
-Configure `ANTHROPIC_API_KEY` in `agente-organizador/.env` and/or `agente-contenido/.env` as needed.
+Configure `ANTHROPIC_API_KEY` in `agente-organizador/.env`, `agente-contenido/.env` and/or `agente-presentacion/.env`.
 
 ## Architecture
 
-`app.py` does **not** duplicate agent business logic. It loads modules via `_cargar_modulos_agente()`:
+`app.py` loads agent modules via `_cargar_modulos_agente()`:
 
 | View | Imports from |
 |------|----------------|
 | Organiser | `agente-organizador/parser.py`, `agente.py`, `org_prompts.py` |
-| Content | `agente-contenido/pipeline.py`, `extractor.py`, `split_monotono.py`, … |
-| Presentation | `agente-presentacion/generador_*.py`, `detector.py` |
+| Content | `pipeline.py`, `coverage_checklist.py`, `extractor.py`, … |
+| Presentation | `workshop.py`, `generador_presentacion.py`, `generador_pdf.py`, … |
 | All | `database/db.py` |
 
-Persistence: `data/tfg.db` (created on first run).
+Persistence: `data/tfg.db` (migrated to v7 on first run).
 
 ## Professor workflow
 
-1. **Organiser** — subject, course guide, theory files → blocks/subtopics in DB.
-2. **Content** — per block: generate draft → preview split → confirm → review subtopics.
-3. **Presentation** — curated Markdown → PDF / interactive HTML / full presentation.
+1. **Organiser** — subject, guide, theory files → blocks/subtopics in DB.
+2. **Content** — per block: generate draft → coverage checklist → edit → approve (`contenido_tema`).
+3. **Presentation** — per block: prompt workshop → preview/refine → approve visualisations → export PDF / full HTML.
 
-See [`../CLAUDE.md`](../CLAUDE.md) for contracts between agents and development rules.
+See [`../CLAUDE.md`](../CLAUDE.md) for contracts and development rules.

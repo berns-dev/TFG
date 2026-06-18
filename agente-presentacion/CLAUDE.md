@@ -4,6 +4,20 @@
 
 ---
 
+## 0. UI PRINCIPAL — TALLER ITERATIVO (junio 2026)
+
+La vista Presentación en `app-unificada/app.py` usa un **taller por bloque**:
+
+1. El profesor describe la visualización en lenguaje natural (`workshop.generar_desde_instruccion`).
+2. Preview embebido en Streamlit; refinamiento con prompts adicionales (`workshop.refinar_html`).
+3. Al aprobar: elige **sección ancla** del markdown (`##` / `###`) → guarda en `visualizacion_interactiva`.
+4. Puede crear **N visualizaciones** aprobadas por bloque.
+5. **Exportar:** PDF del bloque; HTML presentación completa vía `generar_presentacion_con_fragmentos()`.
+
+Módulos legados (`detector.py`, chips de patrón por subbloque) permanecen en el código pero ya no son el flujo principal de la UI.
+
+---
+
 ## 1. PROPÓSITO
 
 Genera tres salidas desde el Markdown producido por el Agente Contenido: un PDF académico con plantilla institucional, una página HTML autocontenida con visualizaciones interactivas por pestañas, y un HTML de presentación completa del tema que integra toda la teoría con los bloques interactivos.
@@ -26,12 +40,12 @@ El patrón de visualización no está fijado de antemano. Para cada sección, So
 **Punto de entrada UI:** `app-unificada/app.py` — no hay `app.py` standalone en este agente.
 
 ```
-detector.py         — Regex + filtro Haiku + evaluar_advertencia() Sonnet (opt-in UI)
-generador_pdf.py    — Markdown → PDF institucional UO (ReportLab + matplotlib mathtext)
-generador_html.py   — Razonador + generador Sonnet; aplicar_rangos(); generar_bloque_con_visualizacion()
-generador_presentacion.py — HTML presentación completa del tema
-prompts.py          — PROMPT_* y builders de mensajes
-config.py           — .env, modelos, umbrales
+workshop.py           — taller: generar_desde_instruccion(), refinar_html()
+generador_presentacion.py — generar_presentacion_con_fragmentos() + generar_presentacion()
+generador_pdf.py    — Markdown → PDF institucional UO
+generador_html.py   — razonador + generador (legado / interno)
+detector.py         — detección híbrida (legado / interno)
+prs_prompts.py      — PROMPT_TALLER_* + prompts del razonador
 assets/logo_uniovi.png
 tools/razonador_fixture.py — debug CLI del razonador (consume API)
 ```

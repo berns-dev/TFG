@@ -7,36 +7,28 @@ NO genera contenido nuevo. Solo transforma la representación del contenido exis
 
 ## UI
 No hay `app.py` en este agente. La interfaz vive en `app-unificada/app.py`, que importa
-`pipeline.py`, `extractor.py`, `split_monotono.py`, etc. vía `_cargar_modulos_agente()`.
+`pipeline.py`, `extractor.py`, `coverage_checklist.py`, etc. vía `_cargar_modulos_agente()`.
 
 ## Reglas de desarrollo
-- La API usada es Anthropic directa (no OpenRouter). Nunca uses openrouter en este proyecto.
-- Los modelos válidos son: claude-haiku-4-5-20251001 (fast) y claude-sonnet-4-5 (smart).
-- Toda llamada a la API debe incluir reintentos (máximo 2) ante respuesta con `<MARKDOWN>` vacío o tag `<TIPO>` ausente. Protocolo de salida: tags XML delimitados (<TIPO>, <TITULO>, <IDIOMA>, <MARKDOWN>).
-- El output SIEMPRE es un único archivo .md con frontmatter YAML al inicio (o fragmentos en BD vía app unificada).
-- NUNCA inventes contenido: el markdown de salida debe ser fiel al texto extraído del documento.
-- Las imágenes y figuras se marcan como [FIGURA: descripción] — no se extraen ni se embeben.
-- Los errores de extracción por página/slide se marcan como [TEXTO_ILEGIBLE] y no detienen el proceso.
-- Ecuaciones corruptas: [ECUACION_PARCIAL: …] / [ECUACION_NO_EXTRAIBLE] (cleaner) o [ECUACION] (pymupdf). No completar fórmulas por conocimiento del modelo.
-- El validador de fidelidad usa umbral 0.85 por defecto (configurable en .env como FIDELITY_THRESHOLD).
+- API Anthropic directa (no OpenRouter). Modelos: haiku-4-5, sonnet-4-5.
+- Reintentos ante `<MARKDOWN>` vacío o `<TIPO>` ausente (máx. 2).
+- Output fiel al material original. NUNCA inventar contenido.
+- Marcadores: `[FIGURA: ...]`, `[TEXTO_ILEGIBLE]`, `[ECUACION_PARCIAL]`.
+- Validador de fidelidad: umbral 0.85 (`FIDELITY_THRESHOLD`).
 
-## Pipeline (app-unificada)
-1. `extract_text()` — PDF: pymupdf → pdfplumber enriquecido → plano; PPTX: python-pptx
-2. `procesar_bloque()` — curado del bloque completo (horas del bloque, no por subtema)
-3. `split_monotono()` — reparto determinista por nombres/orden del Organizador (sin API)
-4. Revisión humana por subtema en BD (`contenido_subbloque`)
+## Pipeline (app-unificada, junio 2026)
+1. `extract_text()` — PDF: pymupdf → pdfplumber → plano; PPTX: python-pptx
+2. `procesar_bloque()` — curado del bloque completo **sin densidad horaria**
+3. `verificar_cobertura()` — checklist apartados Organizador vs MD curado
+4. Revisión humana del **bloque entero** en BD (`contenido_tema`)
 
 ## Estructura de módulos
-- extractor.py: extracción PDF/PPTX; delega en shared/pdf_enriched.py (pymupdf + pdfplumber)
-- cleaner.py: limpieza determinista (modo ligero en PDF enriquecido + filtro glifos)
-- chunker.py: división en chunks respetando límites de página/slide
-- classifier.py: clasificación y formateo via LLM (haiku/sonnet)
-- assembler.py: ensamblado del .md con frontmatter
-- validator.py: verificación de fidelidad léxica post-procesado
-- pipeline.py: procesar_bloque(), procesar_segmento()
-- split_monotono.py: reparto del markdown curado por subtema
-- cnt_config.py: constantes y carga de .env
+- extractor.py, cleaner.py, chunker.py, classifier.py, assembler.py, validator.py
+- pipeline.py — procesar_bloque()
+- coverage_checklist.py — verificar_cobertura()
+- split_monotono.py — legado (tests); fuera del flujo UI
+- cnt_config.py
 
-## Archivos críticos que no deben modificarse sin justificación
-- El SYSTEM_PROMPT en classifier.py es fijo y revisado — no lo cambies sin consenso.
-- El frontmatter YAML en assembler.py debe mantener el campo compatible_agente_organizador: true.
+## Archivos críticos
+- SYSTEM_PROMPT en classifier.py — no modificar sin consenso.
+- Frontmatter YAML en assembler.py — mantener `compatible_agente_organizador: true`.

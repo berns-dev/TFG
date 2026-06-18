@@ -1058,3 +1058,174 @@ def generar_presentacion(
     html_out = html_out.replace("<!--INDICE-->", "\n".join(indice_parts))
     html_out = html_out.replace("<!--SECCIONES-->", "\n".join(secciones_parts))
     return html_out
+
+
+def _localizar_offset_ancla(body: str, seccion_titulo: str, ancla: str) -> int:
+    """Offset en el body donde insertar un fragmento HTML según el heading ancla."""
+    ancla = (ancla or "").strip()
+    if not ancla:
+        return len(body)
+    if ancla.lower() == seccion_titulo.strip().lower():
+        return len(body)
+    m = re.search(
+        rf"^#{{3,4}}\s+{re.escape(ancla)}\s*$",
+        body,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if m:
+        return _fin_de_subseccion(body, m.end())
+    for m in re.finditer(r"^(#{3,4})\s+(.+)$", body, re.MULTILINE):
+        if ancla.lower() in m.group(2).strip().lower():
+            return _fin_de_subseccion(body, m.end())
+    return len(body)
+
+
+def _asignar_fragmentos_a_secciones(
+    secciones: list[dict],
+    fragmentos: list[dict],
+) -> dict[int, list[tuple[int, str]]]:
+    """Asigna fragmentos HTML aprobados a secciones H2 del documento."""
+    asignaciones: dict[int, list[tuple[int, str]]] = {}
+    ordenados = sorted(fragmentos, key=lambda f: (f.get("orden", 0), f.get("id", 0)))
+
+    for frag in ordenados:
+        html_raw = frag.get("html_fragment") or ""
+        if not html_raw.strip():
+            continue
+        titulo = frag.get("titulo") or "Visualización"
+        slug = _slug(titulo)
+        html_prep = _preparar_bloque(html_raw, slug)
+        ancla = (frag.get("seccion_ancla") or "").strip()
+
+        idx_destino: int | None = None
+        offset = 0
+        if ancla:
+            for i, sec in enumerate(secciones):
+                if ancla.lower() == sec["titulo"].strip().lower():
+                    idx_destino = i
+                    offset = _localizar_offset_ancla(sec["body"], sec["titulo"], ancla)
+                    break
+            if idx_destino is None:
+                for i, sec in enumerate(secciones):
+                    off = _localizar_offset_ancla(sec["body"], sec["titulo"], ancla)
+                    if off < len(sec["body"]) or re.search(
+                        rf"^#{{2,4}}\s+.*{re.escape(ancla)}",
+                        sec["body"],
+                        re.MULTILINE | re.IGNORECASE,
+                    ):
+                        idx_destino = i
+                        offset = off
+                        break
+
+        if idx_destino is None and secciones:
+            idx_destino = len(secciones) - 1
+            offset = len(secciones[-1]["body"])
+            logger.warning(
+                "[PRESENTACION] Fragmento %r sin ancla clara — al final del bloque",
+                titulo,
+            )
+
+        if idx_destino is not None:
+            asignaciones.setdefault(idx_destino, []).append((offset, html_prep))
+
+    return asignaciones
+
+
+def _render_seccion_con_html(
+    seccion: dict,
+    inserciones: list[tuple[int, str]],
+    figuras_html: dict[str, str],
+) -> str:
+    """Renderiza el body intercalando fragmentos HTML pregenerados."""
+    body = seccion["body"]
+    inserciones = sorted(inserciones, key=lambda t: t[0])
+    partes: list[str] = []
+    cursor = 0
+    for offset, html_block in inserciones:
+        offset = max(cursor, min(offset, len(body)))
+        segmento = body[cursor:offset]
+        if segmento.strip():
+            partes.append(_render_markdown(segmento, figuras_html))
+        partes.append(html_block)
+        cursor = offset
+    resto = body[cursor:]
+    if resto.strip():
+        partes.append(_render_markdown(resto, figuras_html))
+    return "\n".join(partes)
+
+
+def generar_presentacion_con_fragmentos(
+    markdown_completo: str,
+    fragmentos_aprobados: list[dict],
+    tema_nombre: str = "Material docente",
+) -> str:
+    """Genera HTML de presentación completa con fragmentos interactivos ya aprobados.
+
+    Args:
+        markdown_completo: Markdown curado del bloque (Agente Contenido).
+        fragmentos_aprobados: Lista de dicts con titulo, html_fragment, seccion_ancla, orden.
+        tema_nombre: Título visible del documento.
+    """
+    if not markdown_completo or not markdown_completo.strip():
+        raise ValueError("El Markdown está vacío — nada que presentar.")
+
+    texto = _strip_frontmatter(markdown_completo)
+    titulo = _extraer_titulo(texto, tema_nombre)
+    asignatura = _extraer_asignatura(markdown_completo, titulo)
+    secciones = _dividir_secciones(texto)
+    if not secciones:
+        raise ValueError("No se encontraron secciones en el Markdown.")
+
+    asignaciones_html = _asignar_fragmentos_a_secciones(secciones, fragmentos_aprobados)
+    figuras_html = _generar_figuras(secciones, {})
+
+    titulo_esc = html_lib.escape(titulo)
+    veces_visto: dict[str, int] = {}
+    etiquetas_indice: list[str] = []
+    for seccion in secciones:
+        titulo_sec = seccion["titulo"]
+        veces_visto[titulo_sec] = veces_visto.get(titulo_sec, 0) + 1
+        n = veces_visto[titulo_sec]
+        etiquetas_indice.append(
+            titulo_sec if n == 1 else f"{titulo_sec} ({n})"
+        )
+
+    indice_parts: list[str] = []
+    secciones_parts: list[str] = []
+    for i, seccion in enumerate(secciones):
+        titulo_sec = html_lib.escape(seccion["titulo"])
+        etiqueta = html_lib.escape(etiquetas_indice[i])
+        indice_parts.append(
+            f'    <a class="indice-link" href="#seccion-{i}">{etiqueta}</a>'
+        )
+        cuerpo = _render_seccion_con_html(
+            seccion,
+            asignaciones_html.get(i, []),
+            figuras_html,
+        )
+        secciones_parts.append(
+            f'    <section class="seccion" id="seccion-{i}">\n'
+            f'      <p class="eyebrow">Sección {i + 1} — {titulo_esc}</p>\n'
+            f"      <h2>{titulo_sec}</h2>\n"
+            f"{cuerpo}\n"
+            f"{_nav_seccion(i, secciones)}\n"
+            f"    </section>"
+        )
+
+    logo_b64 = _cargar_logo_base64()
+    if logo_b64:
+        logo_html = (
+            '  <div class="page-header-logo">'
+            '<img src="data:image/png;base64,' + logo_b64 + '" '
+            'alt="Universidad de Oviedo"></div>'
+        )
+    else:
+        logo_html = ""
+
+    html_out = _PAGE_TEMPLATE
+    html_out = html_out.replace("<!--TITULO-->", titulo_esc)
+    html_out = html_out.replace("<!--ASIGNATURA-->", html_lib.escape(asignatura))
+    html_out = html_out.replace("<!--LOGO-->", logo_html)
+    html_out = html_out.replace("<!--INDICE-->", "\n".join(indice_parts))
+    html_out = html_out.replace("<!--SECCIONES-->", "\n".join(secciones_parts))
+    return html_out

@@ -388,7 +388,7 @@ Fuente de verdad: plantilla en `prompts.py` → `construir_prompt()`.
 La columna "Evidencia" contiene la referencia estructural detectada por el LLM (más susceptible a imprecisión; el flujo normal con confirmación es preferible).
 
 **Contrato con el Agente Contenido:** el Organizador persiste bloques y subtemas en BD;
-el Contenido los lee vía `database/db.py` y reparte con `split_monotono()`. El Markdown
+el Contenido los lee vía `database/db.py` como **checklist de cobertura** (`coverage_checklist.verificar_cobertura`). El Markdown
 canónico usa `## Bloque N — … · Xh` y tabla `| Subtema | Evidencia | Origen |`.
 
 ---

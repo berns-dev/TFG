@@ -977,3 +977,65 @@ def build_generador_message(
             "DOMContentLoaded propio aquí es código innecesario.",
         ]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Taller interactivo — generación y refinamiento desde prompt del profesor
+# ---------------------------------------------------------------------------
+
+PROMPT_TALLER_GENERADOR = """Eres un generador de bloques HTML interactivos para material docente de ingeniería mecánica.
+
+El profesor describe en lenguaje natural qué visualización quiere. Implementa un bloque HTML autocontenido:
+- Un único <div> raíz con id único
+- Chart.js o canvas nativo según convenga
+- Sliders solo si el profesor los pide explícitamente
+- Sin tags html/head/body ni CDN (Chart.js ya está en la página)
+- window['initBloque_{slug}'] = function() { ... };
+- Incluye document.addEventListener('DOMContentLoaded', ...) que invoque initBloque_{slug}()
+
+El texto y las ecuaciones deben provenir del MARKDOWN DEL BLOQUE o del MATERIAL ORIGINAL.
+Puedes usar conocimiento de ingeniería para implementar la física en código, no para inventar qué dijo el profesor.
+
+Responde ÚNICAMENTE con el HTML del bloque, sin markdown ni explicaciones."""
+
+
+PROMPT_TALLER_REFINADOR = """Eres un editor de bloques HTML interactivos ya generados para material docente.
+
+Recibirás el HTML actual y una instrucción del profesor. Cambia SOLO lo pedido; conserva la lógica.
+Mantén window['initBloque_{slug}'] y el listener DOMContentLoaded.
+Sin CDN ni tags html/head/body.
+Responde ÚNICAMENTE con el HTML completo actualizado."""
+
+
+def build_taller_generador_message(
+    slug: str,
+    instruccion: str,
+    markdown_bloque: str,
+    texto_original: str | None = None,
+) -> str:
+    lines = [
+        f"SLUG_EXACTO: {slug}",
+        f"INSTRUCCIÓN DEL PROFESOR:\n{instruccion.strip()}",
+        "",
+        "MARKDOWN DEL BLOQUE (contexto teórico):",
+        (markdown_bloque or "")[:12000],
+    ]
+    if texto_original:
+        lines += [
+            "",
+            "MATERIAL ORIGINAL DEL PROFESOR (rangos y valores):",
+            texto_original[:8000],
+        ]
+    return "\n".join(lines)
+
+
+def build_taller_refinador_message(
+    slug: str,
+    html_actual: str,
+    instruccion: str,
+) -> str:
+    return (
+        f"SLUG_EXACTO: {slug}\n\n"
+        f"INSTRUCCIÓN DEL PROFESOR:\n{instruccion.strip()}\n\n"
+        f"HTML ACTUAL:\n{html_actual}"
+    )
