@@ -410,10 +410,18 @@ def build_pdf_markdown_pymupdf(source: bytes | Path | str | BinaryIO) -> str | N
                             continue
 
                         is_math_font = fn and any(s in fn.lower() for s in _MATH_FONT_SUBSTR)
+                        is_superscript = bool(flags & 1)
 
                         if is_math_font:
                             decoded = _classify_math_text(text)
-                            parts_line.append(decoded)
+                            if is_superscript and decoded != "[ECUACION]":
+                                parts_line.append(f"^{{{decoded.strip()}}}")
+                            else:
+                                parts_line.append(decoded)
+                        elif is_superscript:
+                            clean = text.strip()
+                            if clean:
+                                parts_line.append(f"^{{{clean}}}")
                         else:
                             parts_line.append(text)
 
@@ -424,8 +432,9 @@ def build_pdf_markdown_pymupdf(source: bytes | Path | str | BinaryIO) -> str | N
                         continue
 
                     line_text = " ".join(parts_line).strip()
-                    # Colapsar espacios múltiples que pueden venir de la concatenación de spans
+                    # Colapsar espacios múltiples y pegar superíndices al token anterior
                     line_text = re.sub(r" {2,}", " ", line_text)
+                    line_text = re.sub(r" \^\{", "^{", line_text)
                     if not line_text:
                         continue
 
