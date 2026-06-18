@@ -195,8 +195,11 @@ def es_subtema_valido(nombre: str) -> bool:
     n_num = sum(1 for t in tokens if any(ch.isdigit() for ch in t))
     if n_num >= 3:
         return False
-    # Fragmento truncado: corto y acaba en palabra-función.
-    if len(norm) <= 30 and tokens and tokens[-1] in _PALABRAS_FUNCION_FINAL:
+    # Fragmento truncado: acaba en preposición/determinante.
+    # Límite extendido a 80 chars para capturar también líneas de slide
+    # truncadas en la coordenada Y (p. ej. "Relación entre presión...en").
+    # Los títulos reales rara vez acaban en "en", "de", "la", "el", etc.
+    if len(norm) <= 80 and tokens and tokens[-1] in _PALABRAS_FUNCION_FINAL:
         return False
     return True
 
@@ -385,12 +388,17 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
             if len(todas_palabras) < 20:
                 return []
 
-            # 2. Determinar (fontname, size) del cuerpo por frecuencia
+            # 2. Determinar (fontname, size) del cuerpo por frecuencia.
+            # Se excluyen fuentes matemáticas (CambriaMath, Symbol…) y tamaños
+            # < 7 pt (subíndices/superíndices): en PDFs de ingeniería, las
+            # ecuaciones pueden superar en número de palabras al texto corrido,
+            # lo que haría que el cuerpo se detecte como la fuente matemática.
+            _MATH_SUBS = ("math", "symbol", "dingbat", "ding")
             conteo: Counter = Counter()
             for p in todas_palabras:
                 fn = (p.get("fontname") or "").strip()
                 sz = round(float(p.get("size") or 0) * 2) / 2  # resolución 0.5 pt
-                if fn and sz > 0:
+                if fn and sz >= 7 and not any(s in fn.lower() for s in _MATH_SUBS):
                     conteo[(fn, sz)] += 1
 
             if not conteo:
@@ -413,6 +421,14 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
 
                 # Descartar líneas demasiado largas para ser un título
                 if not texto or len(texto) > 120 or len(texto.split()) > 15:
+                    continue
+
+                # Artefacto de layout: primera "palabra" es un carácter suelto.
+                # pdfplumber a veces agrupa una forma tiny (bullet, inicial de
+                # columna) con el texto adyacente al compartir coordenada Y.
+                # Ejemplo real: "e transfieren energía cinética…", "m 3.- Ecuaciones"
+                palabras_raw = texto.split()
+                if palabras_raw and len(palabras_raw[0]) == 1 and palabras_raw[0].isalpha():
                     continue
 
                 # Excluir márgenes: cabeceras y pies de página (~6 % arriba/abajo)
@@ -443,12 +459,18 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
                 if fn_dom == cuerpo_fn and sz_dom == cuerpo_sz:
                     continue
 
-                # Criterio 1: tamaño mayor al cuerpo
-                es_mayor = sz_dom > cuerpo_sz + 0.5
-                # Criterio 2: nombre de fuente con indicador de peso (negrita/heavy)
+                # Criterio 1: tamaño claramente mayor al cuerpo.
+                # Umbral +2.0 pt (no +0.5): descarta el "nivel slide" de 1 pt
+                # sobre el cuerpo que PowerPoint usa para bullets/labels.
+                es_mayor = sz_dom > cuerpo_sz + 2.0
+                # Criterio 2: nombre de fuente con indicador de peso, pero solo
+                # si el tamaño no es mucho menor al cuerpo (evita pies de página
+                # y subíndices en negrita que salen con sz < cuerpo).
                 fn_dom_lower = fn_dom.lower()
-                es_negrita = fn_dom != cuerpo_fn and any(
-                    sub in fn_dom_lower for sub in ("bold", "bd", "black", "heavy")
+                es_negrita = (
+                    fn_dom != cuerpo_fn
+                    and any(sub in fn_dom_lower for sub in ("bold", "bd", "black", "heavy"))
+                    and sz_dom >= cuerpo_sz * 0.9
                 )
 
                 if not (es_mayor or es_negrita):
