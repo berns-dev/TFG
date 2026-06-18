@@ -682,7 +682,13 @@ def extraer_candidatos_con_evidencia(
             continue
         m_pref = re.match(r"^(\d+(?:\.\d+)*)\.?\s*", linea)
         prefijo = m_pref.group(1) if m_pref else ""
+        # Regla A: prefijos que empiezan por 0 (e.g. "0.8") nunca son secciones reales.
+        if prefijo.split(".")[0] == "0":
+            continue
         nombre = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", linea).strip()
+        # Regla B: título en minúscula → prosa partida en líneas, no sección.
+        if nombre and nombre[0].islower():
+            continue
         if not nombre or not es_subtema_valido(nombre):
             continue
         clave = normalizar_subtema(nombre)
