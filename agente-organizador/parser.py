@@ -83,6 +83,7 @@ def extraer_texto(archivo_bytes, nombre_archivo) -> str:
 # ---------------------------------------------------------------------------
 
 _SUBTEMA_NUM_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
+_PAGINA_FOOTER_RE = re.compile(r"^\d+\s+de\s+\d+$", re.I)
 
 
 def normalizar_subtema(texto: str) -> str:
@@ -178,6 +179,17 @@ def es_subtema_valido(nombre: str) -> bool:
     if any(norm == c or norm.startswith(c + " ") for c in _CONECTORES_PROSA):
         return False
     tokens = norm.split()
+    # Encabezados demasiado cortos o tokens sueltos (p. ej. «L», «R», «N»).
+    if len(norm) < 4:
+        return False
+    if len(tokens) == 1 and len(tokens[0]) <= 2:
+        return False
+    # Fragmentos numéricos / unidades (p. ej. «l/100», «0.2 l/100» → «l/100»).
+    compacto = norm.replace(" ", "")
+    if re.fullmatch(r"[\dl./\\-]+", compacto):
+        return False
+    if "/" in nombre and len(norm) < 12:
+        return False
     # Ruido numérico: 3+ tokens con dígitos → fila de tabla / fragmento de cálculo.
     n_num = sum(1 for t in tokens if any(ch.isdigit() for ch in t))
     if n_num >= 3:
@@ -198,6 +210,8 @@ def extraer_subtemas_candidatos(texto: str) -> list[str]:
     vistos: set[str] = set()
     for linea in (texto or "").splitlines():
         linea = linea.strip()
+        if _PAGINA_FOOTER_RE.match(linea):
+            continue
         if not _SUBTEMA_NUM_RE.match(linea):
             continue
         nombre = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", linea).strip()
@@ -240,9 +254,11 @@ def extraer_subtemas_guia(texto: str) -> list[str]:
     candidatos: list[str] = []
     vistos: set[str] = set()
     for ln in lineas[inicio + 1:]:
+        if _PAGINA_FOOTER_RE.match(ln):
+            continue
         if not _SUBTEMA_NUM_RE.match(ln):
             continue
-        nombre = re.sub(r"^\d+(?:\.\d+)*\.\s*", "", ln).strip()
+        nombre = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", ln).strip()
         norm = normalizar_subtema(nombre)
         if not norm:
             continue
@@ -356,6 +372,8 @@ def extraer_candidatos_con_evidencia(
     # Estrategia 1 — secciones numeradas
     for linea in (texto or "").splitlines():
         linea = linea.strip()
+        if _PAGINA_FOOTER_RE.match(linea):
+            continue
         if not _SUBTEMA_NUM_RE.match(linea):
             continue
         m_pref = re.match(r"^(\d+(?:\.\d+)*)\.?\s*", linea)
@@ -392,13 +410,6 @@ def extraer_candidatos_con_evidencia(
     return candidatos  # lista vacía → fallback obligatorio
 
 
-# ---------------------------------------------------------------------------
-# Enriquecimiento de evidencia al confirmar la organización (app-unificada).
-# La detección determinista ocurre antes del LLM; el Markdown generado suele
-# dejar la columna Evidencia en «—». Estas funciones reasignan la evidencia
-# real sin depender de que el modelo la copie fielmente.
-# ---------------------------------------------------------------------------
-
 _EVIDENCIA_VACIA = frozenset({
     "",
     "—",
@@ -409,12 +420,77 @@ _EVIDENCIA_VACIA = frozenset({
     "fallback",
     "sin señal",
     "sin senal",
+    "guía docente",
+    "guia docente",
 })
 
 
 def evidencia_es_vacia(evidencia: str) -> bool:
     """True si la evidencia no aporta una frontera estructural utilizable."""
     return (evidencia or "").strip().lower() in _EVIDENCIA_VACIA
+
+
+def _mapa_evidencia_candidatos(candidatos: list[dict]) -> dict[str, str]:
+    """Índice nombre_normalizado → evidencia para un material."""
+    mapa: dict[str, str] = {}
+    for cand in candidatos:
+        clave = normalizar_subtema(cand.get("nombre", ""))
+        ev = (cand.get("evidencia") or "").strip()
+        if clave and ev and not evidencia_es_vacia(ev):
+            mapa[clave] = ev
+    return mapa
+
+
+# ---------------------------------------------------------------------------
+# Subtemas confirmados para el prompt (app-unificada / standalone)
+# ---------------------------------------------------------------------------
+
+
+def construir_subtemas_confirmados(
+    texto_guia: str,
+    textos_teoria: list[str],
+    archivos_teoria: list[str],
+    archivos_bytes: list[bytes],
+) -> list[list[dict]] | None:
+    """Lista cerrada de subtemas por material para el prompt del Organizador.
+
+    Si la guía docente aporta bloques temáticos (sección Contenidos), devuelve
+    ``None`` para que el LLM estructure subtemas libremente desde guía + material
+    (comportamiento del standalone validado). Solo impone lista cerrada cuando
+    no hay guía y el material tiene señales estructurales fiables.
+    """
+    candidatos_guia = extraer_subtemas_guia(texto_guia)
+    if len(candidatos_guia) >= 2:
+        return None
+
+    resultado: list[list[dict]] = []
+    for texto_mat, nombre_arch, bytes_arch in zip(
+        textos_teoria, archivos_teoria, archivos_bytes
+    ):
+        cands_mat = extraer_candidatos_con_evidencia(
+            texto_mat, nombre_arch, bytes_arch
+        )
+        if cands_mat:
+            resultado.append([
+                {
+                    "nombre": c["nombre"],
+                    "evidencia": c["evidencia"],
+                    "origen": "Detectado",
+                }
+                for c in cands_mat
+            ])
+        else:
+            resultado.append([])
+
+    return resultado
+
+
+# ---------------------------------------------------------------------------
+# Enriquecimiento de evidencia al confirmar la organización (app-unificada).
+# La detección determinista ocurre antes del LLM; el Markdown generado suele
+# dejar la columna Evidencia en «—». Estas funciones reasignan la evidencia
+# real sin depender de que el modelo la copie fielmente.
+# ---------------------------------------------------------------------------
 
 
 def resolver_archivo_bloque(nombre_bloque: str, archivos: list[str], idx: int) -> str:
@@ -433,32 +509,12 @@ def resolver_archivo_bloque(nombre_bloque: str, archivos: list[str], idx: int) -
     return archivos[idx] if idx < len(archivos) else archivos[0]
 
 
-def _mapa_evidencia_candidatos(candidatos: list[dict]) -> dict[str, str]:
-    """Índice nombre_normalizado → evidencia para un material."""
-    mapa: dict[str, str] = {}
-    for cand in candidatos:
-        clave = normalizar_subtema(cand.get("nombre", ""))
-        ev = (cand.get("evidencia") or "").strip()
-        if clave and ev and not evidencia_es_vacia(ev):
-            mapa[clave] = ev
-    return mapa
-
-
 def _buscar_evidencia_subtema(nombre: str, mapa: dict[str, str]) -> str:
-    """Resuelve la evidencia de un subtema por coincidencia exacta o fuzzy."""
+    """Resuelve la evidencia de un subtema por coincidencia exacta de nombre."""
     clave = normalizar_subtema(nombre)
     if not clave:
         return ""
-    if clave in mapa:
-        return mapa[clave]
-    mejor_ev, mejor_ratio = "", 0.0
-    for cand_clave, ev in mapa.items():
-        ratio = difflib.SequenceMatcher(None, clave, cand_clave).ratio()
-        if ratio > mejor_ratio:
-            mejor_ratio, mejor_ev = ratio, ev
-    if mejor_ratio >= 0.85:
-        return mejor_ev
-    return ""
+    return mapa.get(clave, "")
 
 
 def enriquecer_bloques_con_evidencia_detectada(
