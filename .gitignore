@@ -22,3 +22,9 @@ Thumbs.db
 # Runtime data (generado en ejecución, no versionado)
 data/
 database/tfg.db
+
+# Local / no versionado en git
+datos-prueba/
+docs/
+CLAUDE.md
+**/CLAUDE.md

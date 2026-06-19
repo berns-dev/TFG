@@ -41,6 +41,8 @@ A suite of three AI agents that transforms university teaching materials into st
 
 ## Installation & run
 
+From repo root (`TFG/`). Config Streamlit en [`.streamlit/config.toml`](.streamlit/config.toml).
+
 ```bash
 pip install -r requirements.txt
 cp agente-contenido/.env.example agente-contenido/.env   # ANTHROPIC_API_KEY
@@ -53,12 +55,7 @@ streamlit run app-unificada/app.py
 
 ## Documentation
 
-| Document | Purpose |
-|----------|---------|
-| [`CLAUDE.md`](CLAUDE.md) | Architecture, contracts, development rules |
-| [`agente-*/CLAUDE.md`](agente-organizador/) | Per-agent technical detail |
-| [`database/CLAUDE.md`](database/CLAUDE.md) | SQLite schema v8 |
-| [`app-unificada/README.md`](app-unificada/README.md) | Unified Streamlit app |
+Technical notes live in local `CLAUDE.md` files (not in git): repo root and each `agente-*/` module. App entry point: [`app-unificada/README.md`](app-unificada/README.md).
 
 ---
 

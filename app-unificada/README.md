@@ -4,12 +4,10 @@ Single Streamlit entry point for the three-agent teaching suite and shared SQLit
 
 ## Run
 
-From monorepo root (`TFG/`):
+From monorepo root (`TFG/`). Streamlit config: [`.streamlit/config.toml`](../.streamlit/config.toml) (solo en la raíz del repo).
 
 ```bash
-pip install -r agente-organizador/requirements.txt
-pip install -r agente-contenido/requirements.txt
-pip install -r agente-presentacion/requirements.txt
+pip install -r requirements.txt
 streamlit run app-unificada/app.py
 ```
 
@@ -34,4 +32,4 @@ Persistence: `data/tfg.db` (migrated to v7 on first run).
 2. **Content** — per block: generate draft → coverage checklist → edit → approve (`contenido_tema`).
 3. **Presentation** — per block: prompt workshop → preview/refine → approve visualisations → export PDF / full HTML.
 
-See [`../CLAUDE.md`](../CLAUDE.md) for contracts and development rules.
+See local `CLAUDE.md` at repo root for contracts and development rules (not versioned in git).
