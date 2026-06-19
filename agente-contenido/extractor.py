@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -17,12 +18,14 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _ensure_extractor_audit_handler() -> None:
+    audit = os.environ.get("TFG_LOG_EXTRACT", "").strip().lower() in ("1", "true", "yes")
     if _LOGGER.handlers:
         return
-    _LOGGER.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    _LOGGER.addHandler(handler)
+    _LOGGER.setLevel(logging.INFO if audit else logging.WARNING)
+    if audit:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        _LOGGER.addHandler(handler)
     _LOGGER.propagate = False
 
 

@@ -1,0 +1,472 @@
+﻿[
+  {
+    "asignatura": "Elementos de M├íquinas",
+    "teoria": {
+      "archivo": "Cojinetes_2025.pdf",
+      "ronda1_archivo": "Frenos_2025.pdf",
+      "ok": true,
+      "errores": [],
+      "chars_texto_org": 24766,
+      "clasificacion": "teoria",
+      "numeracion_n": 0,
+      "numeracion_muestra": [],
+      "visual_n": 8,
+      "visual_muestra": [
+        {
+          "nombre": "Ôû¬ Introducci├│n",
+          "evidencia": "├ìndice: ┬½Ôû¬ Introducci├│n┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Lubricaci├│n y lubricantes",
+          "evidencia": "├ìndice: ┬½Ôû¬ Lubricaci├│n y lubricantes┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Viscosidad din├ímica y cinem├ítica",
+          "evidencia": "├ìndice: ┬½Ôû¬ Viscosidad din├ímica y cinem├ítica┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Dise├▒o de cojinetes",
+          "evidencia": "├ìndice: ┬½Ôû¬ Dise├▒o de cojinetes┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Aspectos generales",
+          "evidencia": "├ìndice: ┬½Ôû¬ Aspectos generales┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Modelo de Petroff y n├║mero de Sommerfeld",
+          "evidencia": "├ìndice: ┬½Ôû¬ Modelo de Petroff y n├║mero de Sommerfeld┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Gr├íficas caracter├¡sticas",
+          "evidencia": "├ìndice: ┬½Ôû¬ Gr├íficas caracter├¡sticas┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Incremento de temperatura",
+          "evidencia": "├ìndice: ┬½Ôû¬ Incremento de temperatura┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        }
+      ],
+      "fusion_n": 8,
+      "fusion": [
+        {
+          "nombre": "Ôû¬ Introducci├│n",
+          "evidencia": "├ìndice: ┬½Ôû¬ Introducci├│n┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Lubricaci├│n y lubricantes",
+          "evidencia": "├ìndice: ┬½Ôû¬ Lubricaci├│n y lubricantes┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Viscosidad din├ímica y cinem├ítica",
+          "evidencia": "├ìndice: ┬½Ôû¬ Viscosidad din├ímica y cinem├ítica┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Dise├▒o de cojinetes",
+          "evidencia": "├ìndice: ┬½Ôû¬ Dise├▒o de cojinetes┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Aspectos generales",
+          "evidencia": "├ìndice: ┬½Ôû¬ Aspectos generales┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Modelo de Petroff y n├║mero de Sommerfeld",
+          "evidencia": "├ìndice: ┬½Ôû¬ Modelo de Petroff y n├║mero de Sommerfeld┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Gr├íficas caracter├¡sticas",
+          "evidencia": "├ìndice: ┬½Ôû¬ Gr├íficas caracter├¡sticas┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ôû¬ Incremento de temperatura",
+          "evidencia": "├ìndice: ┬½Ôû¬ Incremento de temperatura┬╗ (p. 3)",
+          "fuente": "titulo_visual"
+        }
+      ],
+      "estrategia_efectiva": "titulo_visual",
+      "detectar_por_material_n": 8,
+      "numeracion_duplicados_prefijo": {},
+      "chars_texto_cnt": 21549,
+      "cnt_ilegible_n": 0,
+      "cnt_tiene_ilegible": false,
+      "cnt_tiene_ecuacion": false,
+      "cnt_headings_n": 87,
+      "cnt_headings_muestra": [
+        "# Tema 6",
+        "# Cojinetes de fricci├│n",
+        "### Contexto:",
+        "### TEMARIO",
+        "### Tema 1: C├ílculo de potencia en accionamientos",
+        "### Tema 2: Resortes",
+        "### Tema 3: Frenos y Embragues",
+        "### Tema 4: Uniones atornilladas y tornillos de potencia",
+        "### Tema 5: Uniones soldadas",
+        "### Tema 6: Cojinetes de fricci├│n"
+      ],
+      "cnt_headings_falsos_prosa": [],
+      "cnt_headings_url": [],
+      "cnt_headings_cortos": [
+        "# Tema 6",
+        "# Cojinetes de fricci├│n",
+        "### Contexto:",
+        "### TEMARIO",
+        "### Tema 2: Resortes",
+        "### ├ìndice:",
+        "### L├¡quidos:",
+        "### newtonianos"
+      ],
+      "chunks_n": 34,
+      "chunks_avg_chars": 636,
+      "ratio_cnt_vs_org": 0.87
+    }
+  },
+  {
+    "asignatura": "Oleohidr├íulica y Neum├ítica",
+    "teoria": {
+      "archivo": "OyN_C2_Hydraulic_Components_part_I.pdf",
+      "ronda1_archivo": "OyN_C1_Hyd_and_Pneu_technologies.pdf",
+      "ok": true,
+      "errores": [],
+      "chars_texto_org": 32121,
+      "clasificacion": "teoria",
+      "numeracion_n": 7,
+      "numeracion_muestra": [
+        {
+          "nombre": "Pumps and Hydraulic Motors.",
+          "evidencia": "Secci├│n 2.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Actuators.",
+          "evidencia": "Secci├│n 2.2",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Accumulators.",
+          "evidencia": "Secci├│n 2.3",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Distribution valves.",
+          "evidencia": "Secci├│n 2.4",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Pressure control valves.",
+          "evidencia": "Secci├│n 2.5",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Flow control valves.",
+          "evidencia": "Secci├│n 2.6",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Other elements.",
+          "evidencia": "Secci├│n 2.7",
+          "fuente": "numeracion"
+        }
+      ],
+      "visual_n": 141,
+      "visual_muestra": [
+        {
+          "nombre": "Oleo-hydraulic",
+          "evidencia": "Visual: ┬½Oleo-hydraulic┬╗ (p. 1, 40.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "components (I)",
+          "evidencia": "Visual: ┬½components (I)┬╗ (p. 1, 40.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Chapter",
+          "evidencia": "Visual: ┬½Chapter┬╗ (p. 1, 28.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.1. Pumps and Hydraulic Motors.",
+          "evidencia": "Visual: ┬½2.1. Pumps and Hydraulic Motors.┬╗ (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.2. Actuators.",
+          "evidencia": "Visual: ┬½2.2. Actuators.┬╗ (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.3. Accumulators.",
+          "evidencia": "Visual: ┬½2.3. Accumulators.┬╗ (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.4. Distribution valves.",
+          "evidencia": "Visual: ┬½2.4. Distribution valves.┬╗ (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.5. Pressure control valves.",
+          "evidencia": "Visual: ┬½2.5. Pressure control valves.┬╗ (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        }
+      ],
+      "fusion_n": 7,
+      "fusion": [
+        {
+          "nombre": "Pumps and Hydraulic Motors.",
+          "evidencia": "Secci├│n 2.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Actuators.",
+          "evidencia": "Secci├│n 2.2",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Accumulators.",
+          "evidencia": "Secci├│n 2.3",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Distribution valves.",
+          "evidencia": "Secci├│n 2.4",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Pressure control valves.",
+          "evidencia": "Secci├│n 2.5",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Flow control valves.",
+          "evidencia": "Secci├│n 2.6",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Other elements.",
+          "evidencia": "Secci├│n 2.7",
+          "fuente": "numeracion"
+        }
+      ],
+      "estrategia_efectiva": "numeracion",
+      "detectar_por_material_n": 7,
+      "numeracion_duplicados_prefijo": {},
+      "chars_texto_cnt": 30566,
+      "cnt_ilegible_n": 1,
+      "cnt_tiene_ilegible": true,
+      "cnt_tiene_ecuacion": true,
+      "cnt_headings_n": 262,
+      "cnt_headings_muestra": [
+        "# Chapter 2",
+        "# Oleo-hydraulic",
+        "# components (I)",
+        "### 2.1. Pumps and Hydraulic Motors.",
+        "### 2.2. Actuators.",
+        "### 2.3. Accumulators.",
+        "### 2.4. Distribution valves.",
+        "### 2.5. Pressure control valves.",
+        "### 2.6. Flow control valves.",
+        "### 2.7. Other elements."
+      ],
+      "cnt_headings_falsos_prosa": [],
+      "cnt_headings_url": [],
+      "cnt_headings_cortos": [
+        "# Chapter 2",
+        "# Oleo-hydraulic",
+        "# components (I)",
+        "### 2.2. Actuators.",
+        "### 2.3. Accumulators.",
+        "### 2.7. Other elements.",
+        "### 1 2",
+        "## [ECUACION]"
+      ],
+      "chunks_n": 48,
+      "chunks_avg_chars": 645,
+      "ratio_cnt_vs_org": 0.952
+    }
+  },
+  {
+    "asignatura": "Tecnolog├¡a de Materiales",
+    "teoria": {
+      "archivo": "Tema 2.pdf",
+      "ronda1_archivo": "Tema 6.pdf",
+      "ok": true,
+      "errores": [],
+      "chars_texto_org": 21391,
+      "clasificacion": "teoria",
+      "numeracion_n": 8,
+      "numeracion_muestra": [
+        {
+          "nombre": "Definici├│n de tenacidad",
+          "evidencia": "Secci├│n 2.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Ensayo Charpy",
+          "evidencia": "Secci├│n 2.2",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Factores que influyen en la tenacidad de los aceros",
+          "evidencia": "Secci├│n 2.3",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Selecci├│n de aceros para trabajos a bajas temperaturas",
+          "evidencia": "Secci├│n 2.4",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Uso pr├íctico de los resultados de los ensayos de impacto",
+          "evidencia": "Secci├│n 2.5",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Otros ensayos utilizados para la medida de la tenacidad",
+          "evidencia": "Secci├│n 2.6",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Ensayo NDT (ASTM E208)",
+          "evidencia": "Secci├│n 2.6.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Ensayo DWTT (ASTM E436)",
+          "evidencia": "Secci├│n 2.6.2",
+          "fuente": "numeracion"
+        }
+      ],
+      "visual_n": 9,
+      "visual_muestra": [
+        {
+          "nombre": "2. TENACIDAD DE LOS MATERIALES",
+          "evidencia": "Visual: ┬½2. TENACIDAD DE LOS MATERIALES┬╗ (p. 1, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.1. Definici├│n de tenacidad",
+          "evidencia": "Visual: ┬½2.1. Definici├│n de tenacidad┬╗ (p. 1, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.2. Ensayo Charpy",
+          "evidencia": "Visual: ┬½2.2. Ensayo Charpy┬╗ (p. 1, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.3. Factores que influyen en la tenacidad de los aceros",
+          "evidencia": "Visual: ┬½2.3. Factores que influyen en la tenacidad de los aceros┬╗ (p. 4, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.4. Selecci├│n de aceros para trabajos a bajas temperaturas",
+          "evidencia": "Visual: ┬½2.4. Selecci├│n de aceros para trabajos a bajas temperaturas┬╗ (p. 6, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.5. Uso pr├íctico de los resultados de los ensayos de impacto",
+          "evidencia": "Visual: ┬½2.5. Uso pr├íctico de los resultados de los ensayos de impÔÇª┬╗ (p. 11, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.6 Otros ensayos utilizados para la medida de la tenacidad",
+          "evidencia": "Visual: ┬½2.6 Otros ensayos utilizados para la medida de la tenacidad┬╗ (p. 13, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "2.6.1. Ensayo NDT (ASTM E208)",
+          "evidencia": "Visual: ┬½2.6.1. Ensayo NDT (ASTM E208)┬╗ (p. 13, 12.0pt)",
+          "fuente": "titulo_visual"
+        }
+      ],
+      "fusion_n": 8,
+      "fusion": [
+        {
+          "nombre": "Definici├│n de tenacidad",
+          "evidencia": "Secci├│n 2.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Ensayo Charpy",
+          "evidencia": "Secci├│n 2.2",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Factores que influyen en la tenacidad de los aceros",
+          "evidencia": "Secci├│n 2.3",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Selecci├│n de aceros para trabajos a bajas temperaturas",
+          "evidencia": "Secci├│n 2.4",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Uso pr├íctico de los resultados de los ensayos de impacto",
+          "evidencia": "Secci├│n 2.5",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Otros ensayos utilizados para la medida de la tenacidad",
+          "evidencia": "Secci├│n 2.6",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Ensayo NDT (ASTM E208)",
+          "evidencia": "Secci├│n 2.6.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Ensayo DWTT (ASTM E436)",
+          "evidencia": "Secci├│n 2.6.2",
+          "fuente": "numeracion"
+        }
+      ],
+      "estrategia_efectiva": "numeracion",
+      "detectar_por_material_n": 8,
+      "numeracion_duplicados_prefijo": {},
+      "chars_texto_cnt": 20672,
+      "cnt_ilegible_n": 0,
+      "cnt_tiene_ilegible": false,
+      "cnt_tiene_ecuacion": true,
+      "cnt_headings_n": 13,
+      "cnt_headings_muestra": [
+        "### 2. TENACIDAD DE LOS MATERIALES",
+        "### 2.1. Definici├│n de tenacidad",
+        "### 2.2. Ensayo Charpy",
+        "### 2.3. Factores que influyen en la tenacidad de los aceros",
+        "### 40 J",
+        "### 40 J",
+        "### 2.4. Selecci├│n de aceros para trabajos a bajas temperaturas",
+        "### 40 J",
+        "### 2.5. Uso pr├íctico de los resultados de los ensayos de impacto",
+        "### 1.25 mm de espesor, al utilizar tanto el criterio del 50% de fractura d├║ctil como el de"
+      ],
+      "cnt_headings_falsos_prosa": [],
+      "cnt_headings_url": [],
+      "cnt_headings_cortos": [
+        "### 2.2. Ensayo Charpy",
+        "### 40 J",
+        "### 40 J",
+        "### 40 J"
+      ],
+      "chunks_n": 11,
+      "chunks_avg_chars": 1884,
+      "ratio_cnt_vs_org": 0.966
+    }
+  }
+]

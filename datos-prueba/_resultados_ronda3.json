@@ -1,0 +1,528 @@
+[
+  {
+    "asignatura": "Elementos de Máquinas",
+    "teoria": {
+      "archivo": "Resortes_2025.pdf",
+      "ronda1_archivo": "Frenos_2025.pdf",
+      "ronda2_archivo": "Cojinetes_2025.pdf",
+      "ok": true,
+      "errores": [],
+      "chars_texto_org": 24091,
+      "clasificacion": "teoria",
+      "numeracion_n": 0,
+      "numeracion_muestra": [],
+      "visual_n": 29,
+      "visual_muestra": [
+        {
+          "nombre": "Tema 2",
+          "evidencia": "Visual: «Tema 2» (p. 1, 36.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Resortes",
+          "evidencia": "Visual: «Resortes» (p. 1, 40.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Contexto:",
+          "evidencia": "Visual: «Contexto:» (p. 2, 20.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "TEMARIO",
+          "evidencia": "Visual: «TEMARIO» (p. 2, 20.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 1: Cálculo de potencia en accionamientos",
+          "evidencia": "Visual: «Tema 1: Cálculo de potencia en accionamientos» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 2: Resortes",
+          "evidencia": "Visual: «Tema 2: Resortes» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 3: Frenos y Embragues",
+          "evidencia": "Visual: «Tema 3: Frenos y Embragues» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 4: Tornillos de transmisión de potencia",
+          "evidencia": "Visual: «Tema 4: Tornillos de transmisión de potencia» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        }
+      ],
+      "fusion_n": 29,
+      "fusion": [
+        {
+          "nombre": "Tema 2",
+          "evidencia": "Visual: «Tema 2» (p. 1, 36.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Resortes",
+          "evidencia": "Visual: «Resortes» (p. 1, 40.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Contexto:",
+          "evidencia": "Visual: «Contexto:» (p. 2, 20.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "TEMARIO",
+          "evidencia": "Visual: «TEMARIO» (p. 2, 20.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 1: Cálculo de potencia en accionamientos",
+          "evidencia": "Visual: «Tema 1: Cálculo de potencia en accionamientos» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 2: Resortes",
+          "evidencia": "Visual: «Tema 2: Resortes» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 3: Frenos y Embragues",
+          "evidencia": "Visual: «Tema 3: Frenos y Embragues» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 4: Tornillos de transmisión de potencia",
+          "evidencia": "Visual: «Tema 4: Tornillos de transmisión de potencia» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 5: Uniones atornilladas y soldadas",
+          "evidencia": "Visual: «Tema 5: Uniones atornilladas y soldadas» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 6: Cojinetes a fricción",
+          "evidencia": "Visual: «Tema 6: Cojinetes a fricción» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Tema 7: Fiabilidad, Calidad y Seguridad en Máquinas",
+          "evidencia": "Visual: «Tema 7: Fiabilidad, Calidad y Seguridad en Máquinas» (p. 2, 18.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "• Otros tipos de resortes",
+          "evidencia": "Visual: «• Otros tipos de resortes» (p. 3, 20.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Ejemplos de aplicaciones:",
+          "evidencia": "Visual: «Ejemplos de aplicaciones:» (p. 4, 20.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Permiten la aplicación controlada de una fuerza o de un par de torsión",
+          "evidencia": "Visual: «Permiten la aplicación controlada de una fuerza o de un p…» (p. 5, 20.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Los resortes que trabajan sin rozamiento (excepto los de goma), tienen curvas características rectas",
+          "evidencia": "Visual: «Los resortes que trabajan sin rozamiento (excepto los de …» (p. 6, 17.0pt)",
+          "fuente": "titulo_visual"
+        }
+      ],
+      "estrategia_efectiva": "titulo_visual",
+      "detectar_por_material_n": 29,
+      "numeracion_duplicados_prefijo": {},
+      "chars_texto_cnt": 22544,
+      "cnt_ilegible_n": 0,
+      "cnt_tiene_ilegible": false,
+      "cnt_tiene_ecuacion": true,
+      "cnt_headings_n": 96,
+      "cnt_headings_muestra": [
+        "# Tema 2",
+        "# Resortes",
+        "### Contexto:",
+        "### TEMARIO",
+        "### Tema 1: Cálculo de potencia en accionamientos",
+        "### Tema 2: Resortes",
+        "### Tema 3: Frenos y Embragues",
+        "### Tema 4: Tornillos de transmisión de potencia",
+        "### Tema 5: Uniones atornilladas y soldadas",
+        "### Tema 6: Cojinetes a fricción"
+      ],
+      "cnt_headings_falsos_prosa": [
+        "### EJEMPLO : La figura muestra un resorte que está hecho de acero DNI 17221, con un"
+      ],
+      "cnt_headings_url": [],
+      "cnt_headings_cortos": [
+        "# Tema 2",
+        "# Resortes",
+        "### Contexto:",
+        "### TEMARIO",
+        "### Tema 2: Resortes",
+        "### Tipos:",
+        "### A",
+        "### B"
+      ],
+      "cnt_temario_curso": 8,
+      "chunks_n": 31,
+      "chunks_avg_chars": 730,
+      "ratio_cnt_vs_org": 0.936
+    }
+  },
+  {
+    "asignatura": "Oleohidráulica y Neumática",
+    "teoria": {
+      "archivo": "OyN_C3_Pneumatics_part_I.pdf",
+      "ronda1_archivo": "OyN_C1_Hyd_and_Pneu_technologies.pdf",
+      "ronda2_archivo": "OyN_C2_Hydraulic_Components_part_I.pdf",
+      "ok": true,
+      "errores": [],
+      "chars_texto_org": 39574,
+      "clasificacion": "teoria",
+      "numeracion_n": 9,
+      "numeracion_muestra": [
+        {
+          "nombre": "Compressed air and pneumatics.",
+          "evidencia": "Sección 3.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Basic pneumatic system.",
+          "evidencia": "Sección 3.2",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Compressors.",
+          "evidencia": "Sección 3.3",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Air treatment.",
+          "evidencia": "Sección 3.4",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Air distribution.",
+          "evidencia": "Sección 3.5",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Actuators. Cylinders",
+          "evidencia": "Sección 3.6",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Pneumatic valves.",
+          "evidencia": "Sección 3.7",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Vacuum.",
+          "evidencia": "Sección 3.8",
+          "fuente": "numeracion"
+        }
+      ],
+      "visual_n": 56,
+      "visual_muestra": [
+        {
+          "nombre": "Basic pneumatics (I)",
+          "evidencia": "Visual: «Basic pneumatics (I)» (p. 1, 40.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Chapter 3",
+          "evidencia": "Visual: «Chapter 3» (p. 1, 32.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "3.1. Compressed air and pneumatics.",
+          "evidencia": "Visual: «3.1. Compressed air and pneumatics.» (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "3.2. Basic pneumatic system.",
+          "evidencia": "Visual: «3.2. Basic pneumatic system.» (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "3.3. Compressors.",
+          "evidencia": "Visual: «3.3. Compressors.» (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "3.4. Air treatment.",
+          "evidencia": "Visual: «3.4. Air treatment.» (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "3.5. Air distribution.",
+          "evidencia": "Visual: «3.5. Air distribution.» (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "3.6. Actuators. Cylinders",
+          "evidencia": "Visual: «3.6. Actuators. Cylinders» (p. 2, 24.0pt)",
+          "fuente": "titulo_visual"
+        }
+      ],
+      "fusion_n": 9,
+      "fusion": [
+        {
+          "nombre": "Compressed air and pneumatics.",
+          "evidencia": "Sección 3.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Basic pneumatic system.",
+          "evidencia": "Sección 3.2",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Compressors.",
+          "evidencia": "Sección 3.3",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Air treatment.",
+          "evidencia": "Sección 3.4",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Air distribution.",
+          "evidencia": "Sección 3.5",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Actuators. Cylinders",
+          "evidencia": "Sección 3.6",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Pneumatic valves.",
+          "evidencia": "Sección 3.7",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Vacuum.",
+          "evidencia": "Sección 3.8",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Bibliography and additional material.",
+          "evidencia": "Sección 3.9",
+          "fuente": "numeracion"
+        }
+      ],
+      "estrategia_efectiva": "numeracion",
+      "detectar_por_material_n": 9,
+      "numeracion_duplicados_prefijo": {},
+      "chars_texto_cnt": 37246,
+      "cnt_ilegible_n": 0,
+      "cnt_tiene_ilegible": false,
+      "cnt_tiene_ecuacion": true,
+      "cnt_headings_n": 119,
+      "cnt_headings_muestra": [
+        "# Chapter 3",
+        "# Basic pneumatics (I)",
+        "### 3.1. Compressed air and pneumatics.",
+        "### 3.2. Basic pneumatic system.",
+        "### 3.3. Compressors.",
+        "### 3.4. Air treatment.",
+        "### 3.5. Air distribution.",
+        "### 3.6. Actuators. Cylinders",
+        "### 3.7. Pneumatic valves.",
+        "### 3.8. Vacuum."
+      ],
+      "cnt_headings_falsos_prosa": [],
+      "cnt_headings_url": [],
+      "cnt_headings_cortos": [
+        "# Chapter 3",
+        "# Basic pneumatics (I)",
+        "### 3.3. Compressors.",
+        "### 3.4. Air treatment.",
+        "### 3.8. Vacuum.",
+        "### automation",
+        "### unlimited.",
+        "### variety"
+      ],
+      "cnt_temario_curso": 0,
+      "chunks_n": 43,
+      "chunks_avg_chars": 868,
+      "ratio_cnt_vs_org": 0.941
+    }
+  },
+  {
+    "asignatura": "Tecnología de Materiales",
+    "teoria": {
+      "archivo": "Tema 4.pdf",
+      "ronda1_archivo": "Tema 6.pdf",
+      "ronda2_archivo": "Tema 2.pdf",
+      "ok": true,
+      "errores": [],
+      "chars_texto_org": 35016,
+      "clasificacion": "teoria",
+      "numeracion_n": 8,
+      "numeracion_muestra": [
+        {
+          "nombre": "Criterio energético de fractura",
+          "evidencia": "Sección 4.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Análisis tensional de sólidos agrietados",
+          "evidencia": "Sección 4.2",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Criterio de rotura",
+          "evidencia": "Sección 4.3",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Plasticidad en el frente de la grieta",
+          "evidencia": "Sección 4.4",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Ensayo normalizado para la medida de la tenacidad a la fractura, K",
+          "evidencia": "Sección 4.5",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Tenacidad de los aceros",
+          "evidencia": "Sección 4.6",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Criterios prácticos de fallo",
+          "evidencia": "Sección 4.7",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Fractura frágil en condición distinta de deformación plana",
+          "evidencia": "Sección 4.8",
+          "fuente": "numeracion"
+        }
+      ],
+      "visual_n": 16,
+      "visual_muestra": [
+        {
+          "nombre": "4. MECANICA DE LA FRACTURA ELASTICA LINEAL",
+          "evidencia": "Visual: «4. MECANICA DE LA FRACTURA ELASTICA LINEAL» (p. 1, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "4.1. Criterio energético de fractura",
+          "evidencia": "Visual: «4.1. Criterio energético de fractura» (p. 1, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "4.2. Análisis tensional de sólidos agrietados",
+          "evidencia": "Visual: «4.2. Análisis tensional de sólidos agrietados» (p. 3, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "4.3. Criterio de rotura",
+          "evidencia": "Visual: «4.3. Criterio de rotura» (p. 10, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "4.4. Plasticidad en el frente de la grieta",
+          "evidencia": "Visual: «4.4. Plasticidad en el frente de la grieta» (p. 11, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "ALECIONES BASE HIERRO",
+          "evidencia": "Visual: «ALECIONES BASE HIERRO» (p. 12, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Aceros de construcción",
+          "evidencia": "Visual: «Aceros de construcción» (p. 12, 12.0pt)",
+          "fuente": "titulo_visual"
+        },
+        {
+          "nombre": "Aceros inoxidables",
+          "evidencia": "Visual: «Aceros inoxidables» (p. 12, 12.0pt)",
+          "fuente": "titulo_visual"
+        }
+      ],
+      "fusion_n": 8,
+      "fusion": [
+        {
+          "nombre": "Criterio energético de fractura",
+          "evidencia": "Sección 4.1",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Análisis tensional de sólidos agrietados",
+          "evidencia": "Sección 4.2",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Criterio de rotura",
+          "evidencia": "Sección 4.3",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Plasticidad en el frente de la grieta",
+          "evidencia": "Sección 4.4",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Ensayo normalizado para la medida de la tenacidad a la fractura, K",
+          "evidencia": "Sección 4.5",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Tenacidad de los aceros",
+          "evidencia": "Sección 4.6",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Criterios prácticos de fallo",
+          "evidencia": "Sección 4.7",
+          "fuente": "numeracion"
+        },
+        {
+          "nombre": "Fractura frágil en condición distinta de deformación plana",
+          "evidencia": "Sección 4.8",
+          "fuente": "numeracion"
+        }
+      ],
+      "estrategia_efectiva": "numeracion",
+      "detectar_por_material_n": 8,
+      "numeracion_duplicados_prefijo": {},
+      "chars_texto_cnt": 35200,
+      "cnt_ilegible_n": 1,
+      "cnt_tiene_ilegible": true,
+      "cnt_tiene_ecuacion": true,
+      "cnt_headings_n": 25,
+      "cnt_headings_muestra": [
+        "### 4. MECANICA DE LA FRACTURA ELASTICA LINEAL",
+        "### 4.1. Criterio energético de fractura",
+        "### 4.2. Análisis tensional de sólidos agrietados",
+        "### 1 2",
+        "### 4.8 recoge las expresiones que definen el factor K para diferentes geometrías sencillas",
+        "### 4.3. Criterio de rotura",
+        "### 400 MPa m , mientras que la de los materiales no metálicos lo hace entre valores",
+        "### 4.4. Plasticidad en el frente de la grieta",
+        "### ALECIONES BASE HIERRO",
+        "### Aceros de construcción"
+      ],
+      "cnt_headings_falsos_prosa": [],
+      "cnt_headings_url": [],
+      "cnt_headings_cortos": [
+        "### 1 2",
+        "### Aceros inoxidables"
+      ],
+      "cnt_temario_curso": 0,
+      "chunks_n": 24,
+      "chunks_avg_chars": 1470,
+      "ratio_cnt_vs_org": 1.005
+    }
+  }
+]

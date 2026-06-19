@@ -1,0 +1,248 @@
+{
+  "guia_elementos": {
+    "n_subtemas_guia": 7,
+    "modo_prompt_libre": true,
+    "subtemas": [
+      "Cálculo de potencias de accionamientos",
+      "Resortes.",
+      "Frenos y embragues.",
+      "Tornillos de transmisión de potencia.",
+      "Uniones atornilladas y soldadas.",
+      "Cojinetes a fricción o lisos (rozamiento, lubricación y lubricantes).",
+      "Fiabilidad, Calidad y Seguridad en el Diseño de Máquinas."
+    ]
+  },
+  "rondas": [
+    {
+      "ronda": 1,
+      "casos": [
+        {
+          "asignatura": "Elementos",
+          "teoria": {
+            "archivo": "Frenos_2025.pdf",
+            "ok": true,
+            "numeracion_n": 0,
+            "visual_n": 11,
+            "fusion_n": 11,
+            "estrategia": "titulo_visual",
+            "ratio_cnt_org": 0.956,
+            "headings_n": 95,
+            "temario_headings": 0,
+            "chunks_n": 73,
+            "ilegible_n": 0,
+            "numeracion_dups": 0,
+            "fusion_muestra": [
+              "Concepto",
+              "Clasificación de los frenos y embragues",
+              "Materiales de fricción",
+              "Consideraciones energéticas",
+              "Consideraciones estáticas"
+            ]
+          }
+        },
+        {
+          "asignatura": "Oleohidráulica",
+          "teoria": {
+            "archivo": "OyN_C1_Hyd_and_Pneu_technologies.pdf",
+            "ok": true,
+            "numeracion_n": 6,
+            "visual_n": 78,
+            "fusion_n": 6,
+            "estrategia": "numeracion",
+            "ratio_cnt_org": 0.805,
+            "headings_n": 325,
+            "temario_headings": 0,
+            "chunks_n": 38,
+            "ilegible_n": 3,
+            "numeracion_dups": 0,
+            "fusion_muestra": [
+              "Power transmission systems.",
+              "Fluid power systems.",
+              "Comparison between Oleo-hydraulic and Pneumatic sy",
+              "Applications.",
+              "Symbols."
+            ]
+          }
+        },
+        {
+          "asignatura": "Tec. Materiales",
+          "teoria": {
+            "archivo": "Tema 6.pdf",
+            "ok": true,
+            "numeracion_n": 17,
+            "visual_n": 18,
+            "fusion_n": 17,
+            "estrategia": "numeracion",
+            "ratio_cnt_org": 1.001,
+            "headings_n": 22,
+            "temario_headings": 0,
+            "chunks_n": 43,
+            "ilegible_n": 0,
+            "numeracion_dups": 0,
+            "fusion_muestra": [
+              "Introducción",
+              "Fatiga",
+              "Micromecanismos justificativos del proceso de fati",
+              "Influencia de la tensión media",
+              "Fatiga de amplitud variable y acumulación del daño"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ronda": 2,
+      "casos": [
+        {
+          "asignatura": "Elementos",
+          "teoria": {
+            "archivo": "Cojinetes_2025.pdf",
+            "ok": true,
+            "numeracion_n": 0,
+            "visual_n": 8,
+            "fusion_n": 8,
+            "estrategia": "titulo_visual",
+            "ratio_cnt_org": 0.864,
+            "headings_n": 48,
+            "temario_headings": 0,
+            "chunks_n": 35,
+            "ilegible_n": 0,
+            "numeracion_dups": 0,
+            "fusion_muestra": [
+              "Introducción",
+              "Lubricación y lubricantes",
+              "Viscosidad dinámica y cinemática",
+              "Diseño de cojinetes",
+              "Aspectos generales"
+            ]
+          }
+        },
+        {
+          "asignatura": "Oleohidráulica",
+          "teoria": {
+            "archivo": "OyN_C2_Hydraulic_Components_part_I.pdf",
+            "ok": true,
+            "numeracion_n": 7,
+            "visual_n": 102,
+            "fusion_n": 7,
+            "estrategia": "numeracion",
+            "ratio_cnt_org": 0.937,
+            "headings_n": 128,
+            "temario_headings": 0,
+            "chunks_n": 45,
+            "ilegible_n": 1,
+            "numeracion_dups": 0,
+            "fusion_muestra": [
+              "Pumps and Hydraulic Motors.",
+              "Actuators.",
+              "Accumulators.",
+              "Distribution valves.",
+              "Pressure control valves."
+            ]
+          }
+        },
+        {
+          "asignatura": "Tec. Materiales",
+          "teoria": {
+            "archivo": "Tema 2.pdf",
+            "ok": true,
+            "numeracion_n": 8,
+            "visual_n": 9,
+            "fusion_n": 8,
+            "estrategia": "numeracion",
+            "ratio_cnt_org": 0.966,
+            "headings_n": 12,
+            "temario_headings": 0,
+            "chunks_n": 11,
+            "ilegible_n": 0,
+            "numeracion_dups": 0,
+            "fusion_muestra": [
+              "Definición de tenacidad",
+              "Ensayo Charpy",
+              "Factores que influyen en la tenacidad de los acero",
+              "Selección de aceros para trabajos a bajas temperat",
+              "Uso práctico de los resultados de los ensayos de i"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ronda": 3,
+      "casos": [
+        {
+          "asignatura": "Elementos",
+          "teoria": {
+            "archivo": "Resortes_2025.pdf",
+            "ok": true,
+            "numeracion_n": 0,
+            "visual_n": 10,
+            "fusion_n": 10,
+            "estrategia": "titulo_visual",
+            "ratio_cnt_org": 0.93,
+            "headings_n": 38,
+            "temario_headings": 0,
+            "chunks_n": 29,
+            "ilegible_n": 0,
+            "numeracion_dups": 0,
+            "fusion_muestra": [
+              "Resortes",
+              "Otros tipos de resortes",
+              "Clasificación de materiales para resortes según DI",
+              "Características elásticas de algunos materiales de",
+              "Material del Resorte E (N/mm ) G (N/mm )"
+            ]
+          }
+        },
+        {
+          "asignatura": "Oleohidráulica",
+          "teoria": {
+            "archivo": "OyN_C3_Pneumatics_part_I.pdf",
+            "ok": true,
+            "numeracion_n": 9,
+            "visual_n": 42,
+            "fusion_n": 9,
+            "estrategia": "numeracion",
+            "ratio_cnt_org": 0.936,
+            "headings_n": 58,
+            "temario_headings": 0,
+            "chunks_n": 40,
+            "ilegible_n": 0,
+            "numeracion_dups": 0,
+            "fusion_muestra": [
+              "Compressed air and pneumatics.",
+              "Basic pneumatic system.",
+              "Compressors.",
+              "Air treatment.",
+              "Air distribution."
+            ]
+          }
+        },
+        {
+          "asignatura": "Tec. Materiales",
+          "teoria": {
+            "archivo": "Tema 4.pdf",
+            "ok": true,
+            "numeracion_n": 8,
+            "visual_n": 15,
+            "fusion_n": 8,
+            "estrategia": "numeracion",
+            "ratio_cnt_org": 1.005,
+            "headings_n": 22,
+            "temario_headings": 0,
+            "chunks_n": 24,
+            "ilegible_n": 1,
+            "numeracion_dups": 0,
+            "fusion_muestra": [
+              "Criterio energético de fractura",
+              "Análisis tensional de sólidos agrietados",
+              "Criterio de rotura",
+              "Plasticidad en el frente de la grieta",
+              "Ensayo normalizado para la medida de la tenacidad "
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

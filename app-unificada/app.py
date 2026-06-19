@@ -36,14 +36,30 @@ if RAIZ_APP not in sys.path:
     sys.path.insert(0, RAIZ_APP)
 
 from database import db  # noqa: E402
-from ui.portfolio import render_portfolio  # noqa: E402
-from ui.sidebar import (  # noqa: E402
-    render_marca,
-    render_sidebar_portfolio,
-    render_sidebar_workspace,
+from ui.components import (  # noqa: E402
+    cobertura_item_html,
+    file_meta,
+    file_tag_html,
+    inline_estado,
+    kpi_card,
+    mapa_fila_html,
+    pill_estado,
 )
-from ui.theme import inject_theme  # noqa: E402
-from utils import fichero_existe, formatear_fecha_relativa, slugify  # noqa: E402
+from ui.prototype_html import cobertura_bar_html  # noqa: E402
+from ui.shell import (  # noqa: E402
+    pipeline_subtitulos,
+    render_bloque_chips,
+    render_pipeline_banner,
+    render_topbar,
+)
+from ui.sidebar import render_lista_asignaturas, render_sidebar  # noqa: E402
+from ui.theme import inject_theme, inject_button_fix  # noqa: E402
+from utils import (  # noqa: E402
+    fichero_existe,
+    formatear_fecha_relativa,
+    preparar_carpetas_asignatura,
+    slugify,
+)
 
 RUTA_DB = os.path.join(RAIZ_MONOREPO, "data", "tfg.db")
 
@@ -1026,19 +1042,33 @@ def _cnt_markdown_visible(ct: dict | None) -> str:
 # =============================================================================
 
 
+@st.cache_data(show_spinner=False)
+def _cnt_extract_text_cached(ruta: str, mtime_ns: int) -> str:
+    """Extracción cacheada; ``mtime_ns`` invalida la caché si el fichero cambia."""
+    if _cnt_extractor is None:
+        return ""
+    return (_cnt_extractor.extract_text(ruta) or "").strip()
+
+
+def _cnt_leer_material(ruta: str) -> str:
+    """Texto de un PDF/PPTX en disco, con caché entre reruns de Streamlit."""
+    if not os.path.exists(ruta):
+        return ""
+    try:
+        mtime_ns = os.stat(ruta).st_mtime_ns
+        return _cnt_extract_text_cached(ruta, mtime_ns)
+    except Exception as exc:
+        _log.warning("Extracción texto fallida para %s: %s", ruta, exc)
+        return ""
+
+
 def _cnt_extraer_texto_bloque(rutas_material: list[str]) -> str:
     """Concatena el texto extraído de todos los materiales del bloque."""
     partes: list[str] = []
     for ruta in rutas_material:
-        if not os.path.exists(ruta):
-            continue
-        try:
-            texto = _cnt_extractor.extract_text(ruta)
-        except Exception as exc:
-            _log.warning("Extracción texto fallida para %s: %s", ruta, exc)
-            continue
-        if (texto or "").strip():
-            partes.append(texto.strip())
+        texto = _cnt_leer_material(ruta)
+        if texto:
+            partes.append(texto)
     return "\n\n".join(partes)
 
 
@@ -1242,12 +1272,11 @@ def _vista_contenido() -> None:
         return
 
     tema_labels = [f"{t['bloque']} — {t['nombre']} ({t['horas']}h)" for t in temas]
-    tema_idx = st.selectbox(
-        "Bloque temático:",
-        options=range(len(temas)),
-        format_func=lambda i: tema_labels[i],
-        key="cnt_tema_idx",
-    )
+    if "cnt_tema_idx" not in st.session_state:
+        st.session_state["cnt_tema_idx"] = 0
+    estados_map = _estados_bloques_asignatura(asignatura_id)
+    tema_idx = render_bloque_chips(temas, st.session_state["cnt_tema_idx"], estados_map, "cnt")
+    st.session_state["cnt_tema_idx"] = tema_idx
     tema = temas[tema_idx]
     tema_id: int = tema["id"]
     tema_nombre: str = tema["nombre"]
@@ -1287,129 +1316,56 @@ def _vista_contenido() -> None:
             _cnt_exportar_markdown_disco(slug, tema.get("bloque", ""), texto_md)
 
     prog = db.get_progreso_bloque(tema_id, RUTA_DB)
-    st.progress(
-        prog["porcentaje"] / 100,
-        text=(
-            f"Progreso del bloque: {'aprobado' if prog['aprobados'] else 'pendiente'} "
-            f"({prog['porcentaje']:.0f}%)"
-        ),
-    )
 
-    _render_stepper(["Material", "Curado", "Revisión"], {
-        "pendiente": 0,
-        "generado": 1,
-        "editado": 1,
-        "aprobado": 2,
-    }.get(estado, 0))
+    col_cov, col_ed = st.columns([0.9, 2.1])
 
-    st.divider()
-
-    # ── Checklist de cobertura (guía del Organizador) ───────────────────────
-    if subbloques:
-        st.markdown("**Apartados del Organizador (checklist de cobertura)**")
-        st.caption(
-            "Referencia de lo que el profesor validó en la organización. "
-            "No segmenta el markdown — solo avisa si un apartado no parece cubierto."
-        )
-        if texto_md:
-            cobertura = _cnt_coverage.verificar_cobertura(texto_md, subbloques)
-            for item in cobertura:
-                icono = "✅" if item["cubierto"] else "⚠️"
-                st.caption(f"{icono} **{item['nombre']}** — {item['detalle']}")
-            marcadores = _cnt_coverage.contar_marcadores(texto_md)
-            if marcadores["total_problemas"] > 0:
-                st.caption("**Marcadores de extracción incompleta:**")
-                if marcadores["ecuacion"] > 0:
-                    st.caption(
-                        f"⚠️ `[ECUACION]`: {marcadores['ecuacion']} "
-                        "ocurrencia(s) — ecuaciones ilegibles en el original"
-                    )
-                if marcadores["ecuacion_parcial"] > 0:
-                    st.caption(
-                        f"⚠️ `[ECUACION_PARCIAL]`: {marcadores['ecuacion_parcial']} "
-                        "ocurrencia(s) — ecuaciones parcialmente legibles"
-                    )
-                if marcadores["texto_ilegible"] > 0:
-                    st.caption(
-                        f"⚠️ `[TEXTO_ILEGIBLE]`: {marcadores['texto_ilegible']} "
-                        "ocurrencia(s) — fragmentos no extraíbles"
-                    )
-        else:
-            for sub in subbloques:
-                st.caption(f"⚪ **{sub['nombre']}** — pendiente de generar contenido")
-        st.divider()
-
-    # ── Generación del borrador ─────────────────────────────────────────────
-    if ct is None:
-        if not material_sel:
-            pass
-        elif not fichero_existe(material_sel.get("ruta_disco") or ""):
-            st.error(
-                f"El archivo **{material_sel['nombre_fichero']}** no está en disco. "
-                "Vuelve a subirlo en el **Agente Organizador**."
+    with col_cov:
+        with st.container(gap=None, key="sd_card_cov_panel"):
+            st.markdown(
+                '<div style="font-size:12.5px;font-weight:600;margin-bottom:3px;">Cobertura curricular</div>'
+                '<div style="font-size:11px;color:#6B7A8D;margin-bottom:14px;">'
+                'Apartados del Organizador presentes en el contenido curado.</div>',
+                unsafe_allow_html=True,
             )
-        else:
-            st.markdown("**Generar markdown del bloque**")
-            st.caption(
-                f"Se procesará **{material_sel['nombre_fichero']}** para el bloque "
-                f"«{tema_nombre}». Comprueba que la selección es correcta."
-            )
-            if st.button(
-                "Generar borrador del bloque",
-                type="primary",
-                use_container_width=True,
-                key="cnt_btn_generar_bloque",
-            ):
-                _cnt_generar_bloque_desde_material(
-                    asignatura_id,
-                    tema_id,
-                    tema_nombre,
-                    material_sel,
-                    slug,
-                    tema.get("bloque", ""),
-                    regenerar=False,
+            if subbloques and texto_md:
+                cobertura = _cnt_coverage.verificar_cobertura(texto_md, subbloques)
+                cubiertos = sum(1 for c in cobertura if c["cubierto"])
+                pct_cov = round(cubiertos / max(len(cobertura), 1) * 100)
+                st.markdown(cobertura_bar_html(pct_cov), unsafe_allow_html=True)
+                items_html = "".join(
+                    cobertura_item_html(c["nombre"], c["cubierto"], c["detalle"])
+                    for c in cobertura
                 )
+                st.markdown(items_html, unsafe_allow_html=True)
+            elif subbloques:
+                for sub in subbloques:
+                    st.markdown(
+                        cobertura_item_html(sub["nombre"], False, ""),
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("Sin subtemas del Organizador.")
 
-    # ── Edición y aprobación del bloque ─────────────────────────────────────
-    if ct is not None:
-        _ETIQUETAS = {
-            "pendiente": "⚪ Sin borrador",
-            "generado": "🤖 Borrador generado por IA",
-            "editado": "✏️ Editado por el profesor",
-            "aprobado": "✅ Aprobado",
-        }
-        etiqueta = _ETIQUETAS.get(estado, estado)
-        if estado == "aprobado":
-            nota = ct.get("puntuacion_profesor")
-            mod = _cnt_etiqueta_modificacion(ct)
-            etiqueta = f"✅ Aprobado — {nota}/10 — {mod}" if nota else f"✅ Aprobado — {mod}"
-
-        st.markdown(f"**Contenido del bloque** — {etiqueta}")
-        if material_sel:
-            st.caption(f"Material de teoría: **{material_sel['nombre_fichero']}**")
-        ruta_md = _cnt_ruta_markdown_disco(slug, tema.get("bloque", ""))
-        if fichero_existe(ruta_md):
-            rel = os.path.relpath(ruta_md, RAIZ_MONOREPO).replace("\\", "/")
-            st.caption(f"Copia en disco: `{rel}`")
-
-        if material_sel:
-            with st.expander("Regenerar contenido desde el material"):
+    with col_ed:
+        if ct is None:
+            if not material_sel:
+                pass
+            elif not fichero_existe(material_sel.get("ruta_disco") or ""):
+                st.error(
+                    f"El archivo **{material_sel['nombre_fichero']}** no está en disco. "
+                    "Vuelve a subirlo en el **Agente Organizador**."
+                )
+            else:
+                st.markdown("**Generar markdown del bloque**")
                 st.caption(
-                    f"Vuelve a procesar **{material_sel['nombre_fichero']}** y sustituye "
-                    "el markdown actual por un borrador nuevo."
+                    f"Se procesará **{material_sel['nombre_fichero']}** para el bloque "
+                    f"«{tema_nombre}». Comprueba que la selección es correcta."
                 )
-                if estado == "aprobado":
-                    st.warning(
-                        "Este bloque está aprobado. La regeneración anula la aprobación "
-                        "y las ediciones guardadas."
-                    )
-                elif estado == "editado":
-                    st.info("Se perderán las ediciones manuales no aprobadas.")
                 if st.button(
-                    "🔄 Regenerar borrador",
-                    key=f"cnt_btn_regenerar_{tema_id}",
-                    type="secondary",
+                    "Generar borrador del bloque",
+                    type="primary",
                     use_container_width=True,
+                    key="cnt_btn_generar_bloque",
                 ):
                     _cnt_generar_bloque_desde_material(
                         asignatura_id,
@@ -1418,79 +1374,167 @@ def _vista_contenido() -> None:
                         material_sel,
                         slug,
                         tema.get("bloque", ""),
-                        regenerar=True,
+                        regenerar=False,
                     )
 
-        ta_key = f"cnt_md_{tema_id}"
-        if ta_key not in st.session_state:
-            st.session_state[ta_key] = texto_md or borrador_ia
+        if ct is not None:
+            _ETIQUETAS = {
+                "pendiente": "⚪ Sin borrador",
+                "generado": "🤖 Borrador generado por IA",
+                "editado": "✏️ Editado por el profesor",
+                "aprobado": "✅ Aprobado",
+            }
+            etiqueta = _ETIQUETAS.get(estado, estado)
+            if estado == "aprobado":
+                nota = ct.get("puntuacion_profesor")
+                mod = _cnt_etiqueta_modificacion(ct)
+                etiqueta = f"✅ Aprobado — {nota}/10 — {mod}" if nota else f"✅ Aprobado — {mod}"
 
-        if estado == "aprobado":
-            st.text_area(
-                "Markdown del bloque (solo lectura):",
-                value=st.session_state[ta_key],
-                height=450,
-                disabled=True,
-                key=f"cnt_view_{tema_id}",
-                label_visibility="collapsed",
-            )
-        else:
-            st.text_area(
-                "Markdown del bloque:",
-                key=ta_key,
-                height=450,
-                label_visibility="collapsed",
-            )
-            texto_actual = st.session_state.get(ta_key, texto_md)
+            ta_key = f"cnt_md_{tema_id}"
+            if ta_key not in st.session_state:
+                st.session_state[ta_key] = texto_md or borrador_ia
+            texto_actual = st.session_state.get(ta_key, texto_md or "")
+
             ratio_prev = difflib.SequenceMatcher(
-                None, borrador_ia, texto_actual.strip()
+                None, borrador_ia, (texto_actual or "").strip()
             ).ratio()
             pct_prev = round((1 - ratio_prev) * 100, 1)
-            if pct_prev > 0:
-                st.caption(f"📝 Modificado un {pct_prev}% respecto al borrador de la IA.")
-            else:
-                st.caption("📝 Sin modificaciones respecto al borrador de la IA.")
 
-            col_guardar, col_confirmar = st.columns(2)
-            with col_guardar:
-                if st.button(
-                    "💾 Guardar edición",
-                    key=f"cnt_btn_guardar_{tema_id}",
-                    type="secondary",
-                    use_container_width=True,
-                ):
-                    db.guardar_contenido_tema_edicion(
-                        tema_id, texto_actual.strip(), pct_prev, RUTA_DB
+            tab_hdr_l, tab_hdr_r = st.columns([3, 1])
+            with tab_hdr_r:
+                if pct_prev > 0:
+                    st.markdown(
+                        f'<span class="sd-mod-badge">● Modificado {pct_prev}% vs. borrador IA</span>',
+                        unsafe_allow_html=True,
                     )
-                    _cnt_exportar_markdown_disco(
-                        slug, tema.get("bloque", ""), texto_actual.strip()
-                    )
-                    st.rerun()
-            with col_confirmar:
-                puntuacion = st.select_slider(
-                    "Valoración del bloque (1-10):",
-                    options=list(range(1, 11)),
-                    value=7,
-                    key=f"cnt_valoracion_{tema_id}",
-                )
-                if st.button(
-                    "✅ Confirmar y valorar bloque",
-                    key=f"cnt_btn_aprobar_{tema_id}",
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    if texto_actual.strip():
-                        db.aprobar_contenido_tema(
-                            tema_id,
-                            texto_actual.strip(),
-                            pct_prev,
-                            puntuacion,
-                            RUTA_DB,
+
+            with st.container(gap=None, key="sd_card_editor"):
+                tab_div, tab_prev, tab_md = st.tabs(["Dividido", "Vista previa", "Markdown"])
+                with tab_div:
+                    c_src, c_render = st.columns(2)
+                    with c_src:
+                        if estado == "aprobado":
+                            st.text_area(
+                                "Fuente",
+                                value=texto_actual,
+                                height=400,
+                                disabled=True,
+                                key=f"cnt_view_src_{tema_id}",
+                                label_visibility="collapsed",
+                            )
+                        else:
+                            st.text_area(
+                                "Fuente",
+                                key=ta_key,
+                                height=400,
+                                label_visibility="collapsed",
+                            )
+                            texto_actual = st.session_state.get(ta_key, texto_md)
+                    with c_render:
+                        with st.container(gap=None, key=f"sd_render_box_{tema_id}"):
+                            st.markdown(texto_actual or "_Sin contenido_")
+                with tab_prev:
+                    st.markdown(st.session_state.get(ta_key, texto_actual) or "_Sin contenido_")
+                with tab_md:
+                    if estado == "aprobado":
+                        st.text_area(
+                            "Markdown",
+                            value=texto_actual,
+                            height=450,
+                            disabled=True,
+                            key=f"cnt_view_{tema_id}",
+                            label_visibility="collapsed",
                         )
-                        _cnt_exportar_markdown_disco(
-                            slug, tema.get("bloque", ""), texto_actual.strip()
+                    else:
+                        st.code(
+                            st.session_state.get(ta_key, texto_actual) or "",
+                            language="markdown",
                         )
-                        st.rerun()
+                        texto_actual = st.session_state.get(ta_key, texto_md)
+
+                if estado == "aprobado":
+                    nota = ct.get("puntuacion_profesor") or "—"
+                    with st.container(gap=None, key=f"sd_btn_aprobar_{tema_id}"):
+                        st.button(
+                            f"✓ Aprobado {nota}/10",
+                            disabled=True,
+                            use_container_width=True,
+                            type="secondary",
+                            key=f"cnt_aprobado_{tema_id}",
+                        )
+                else:
+                    f_val, f_btn = st.columns([1.2, 1])
+                    with f_val:
+                        puntuacion = st.slider(
+                            "Valoración",
+                            min_value=1,
+                            max_value=10,
+                            value=7,
+                            key=f"cnt_valoracion_{tema_id}",
+                        )
+                        st.markdown(
+                            f'<span style="font-size:14px;font-weight:700;color:#0C447C;">'
+                            f'{puntuacion}/10</span>',
+                            unsafe_allow_html=True,
+                        )
+                    with f_btn:
+                        b1, b2, b3 = st.columns([1, 1, 1])
+                        with b1:
+                            if st.button(
+                                "Guardar edición",
+                                key=f"cnt_btn_guardar_{tema_id}",
+                                type="secondary",
+                                use_container_width=True,
+                            ):
+                                db.guardar_contenido_tema_edicion(
+                                    tema_id, texto_actual.strip(), pct_prev, RUTA_DB
+                                )
+                                _cnt_exportar_markdown_disco(
+                                    slug, tema.get("bloque", ""), texto_actual.strip()
+                                )
+                                st.rerun()
+                        with b2:
+                            if st.button(
+                                "Regenerar con IA",
+                                key=f"cnt_btn_regenerar_{tema_id}",
+                                type="secondary",
+                                use_container_width=True,
+                                disabled=not material_sel,
+                            ):
+                                if material_sel:
+                                    _cnt_generar_bloque_desde_material(
+                                        asignatura_id,
+                                        tema_id,
+                                        tema_nombre,
+                                        material_sel,
+                                        slug,
+                                        tema.get("bloque", ""),
+                                        regenerar=True,
+                                    )
+                        with b3:
+                            with st.container(gap=None, key=f"sd_btn_aprobar_{tema_id}"):
+                                if st.button(
+                                    "Aprobar contenido",
+                                    key=f"cnt_btn_aprobar_{tema_id}",
+                                    type="primary",
+                                    use_container_width=True,
+                                ):
+                                    if texto_actual.strip():
+                                        db.aprobar_contenido_tema(
+                                            tema_id,
+                                            texto_actual.strip(),
+                                            pct_prev,
+                                            puntuacion,
+                                            RUTA_DB,
+                                        )
+                                        _cnt_exportar_markdown_disco(
+                                            slug, tema.get("bloque", ""), texto_actual.strip()
+                                        )
+                                        st.rerun()
+
+            if material_sel:
+                with st.expander("Material de teoría"):
+                    st.caption(f"**{material_sel['nombre_fichero']}**")
 
 
 # =============================================================================
@@ -1524,12 +1568,12 @@ def _prs_extraer_texto_material(rutas: list[str]) -> tuple[str, list[str]]:
         if not os.path.exists(ruta):
             fallos.append(os.path.basename(ruta))
             continue
-        try:
-            partes.append(_cnt_extractor.extract_text(ruta))
-        except Exception as exc:
-            _log.warning("Extracción taller fallida para %s: %s", ruta, exc)
+        texto = _cnt_leer_material(ruta)
+        if texto:
+            partes.append(texto)
+        else:
             fallos.append(os.path.basename(ruta))
-    texto = "\n\n".join(p.strip() for p in partes if p and p.strip())
+    texto = "\n\n".join(partes)
     return texto[:8000], fallos
 
 
@@ -1591,12 +1635,11 @@ def _vista_presentacion() -> None:
         return
 
     tema_labels = [f"{t['bloque']} — {t['nombre']} ({t['horas']}h)" for t in temas]
-    tema_idx = st.selectbox(
-        "Bloque temático:",
-        options=range(len(temas)),
-        format_func=lambda i: tema_labels[i],
-        key="prs_tema_idx",
-    )
+    if "prs_tema_idx" not in st.session_state:
+        st.session_state["prs_tema_idx"] = 0
+    estados_map = _estados_bloques_asignatura(asignatura_id)
+    tema_idx = render_bloque_chips(temas, st.session_state["prs_tema_idx"], estados_map, "prs")
+    st.session_state["prs_tema_idx"] = tema_idx
     tema = temas[tema_idx]
     tema_id: int = tema["id"]
     tema_nombre: str = tema["nombre"]
@@ -1626,239 +1669,277 @@ def _vista_presentacion() -> None:
     figuras_ancla = _cnt_extraer_figuras(md_bloque)
 
     aprobadas = db.listar_visualizaciones_aprobadas(tema_id, RUTA_DB)
-    _paso = 2 if aprobadas else 1
-    _render_stepper(["Contenido", "Taller visual", "Exportar"], _paso)
 
-    st.divider()
+    if st.session_state.pop("topbar_nav_export", None):
+        st.info(
+            "La exportación es **por bloque**. Usa los controles del panel derecho "
+            "o la sección inferior para generar PDF o presentación HTML."
+        )
 
-    # ── Visualizaciones aprobadas ───────────────────────────────────────────
-    st.markdown("**Visualizaciones aprobadas**")
-    if aprobadas:
-        for v in aprobadas:
-            ancla = v.get("seccion_ancla") or "(final del bloque)"
-            st.caption(f"✅ **{v['titulo']}** — ancla: {ancla}")
-    else:
-        st.caption("Ninguna todavía — crea y aprueba al menos una en el taller.")
+    col_main, col_rail = st.columns([2.5, 1])
 
-    st.divider()
+    with col_main:
+        _prs_init_taller(tema_id)
+        taller = st.session_state[_prs_taller_key(tema_id)]
 
-    # ── Taller: prompt → preview → iterar → aprobar ─────────────────────────
-    st.markdown("**Taller de visualizaciones**")
-    _prs_init_taller(tema_id)
-    taller = st.session_state[_prs_taller_key(tema_id)]
-
-    col_nueva, col_reset = st.columns([3, 1])
-    with col_reset:
-        if st.button("Nueva visualización", use_container_width=True, key=f"prs_nueva_{tema_id}"):
+        if st.button("Nueva visualización", key=f"prs_nueva_{tema_id}", type="secondary"):
             st.session_state[_prs_taller_key(tema_id)] = {
                 "viz_id": None, "html": "", "slug": "", "titulo": "", "historial": [],
             }
             st.rerun()
 
-    viz_id = taller.get("viz_id")
-    if viz_id:
-        row = db.get_visualizacion(viz_id, RUTA_DB)
-        if row and row.get("estado") == "borrador":
-            taller["html"] = row.get("html_fragment") or taller.get("html", "")
-            taller["titulo"] = row.get("titulo") or taller.get("titulo", "")
+        viz_id = taller.get("viz_id")
+        if viz_id:
+            row = db.get_visualizacion(viz_id, RUTA_DB)
+            if row and row.get("estado") == "borrador":
+                taller["html"] = row.get("html_fragment") or taller.get("html", "")
+                taller["titulo"] = row.get("titulo") or taller.get("titulo", "")
 
-    prompt_key = f"prs_prompt_{tema_id}"
-    if prompt_key not in st.session_state:
-        st.session_state[prompt_key] = ""
-
-    instruccion = st.text_area(
-        "Describe la visualización interactiva que quieres:",
-        key=prompt_key,
-        height=120,
-        placeholder=(
-            "Ej.: Gráfico del ensayo de tracción con dos sliders, uno para la fuerza "
-            "y otro para la elongación."
-        ),
-    )
-
-    col_gen, col_ref = st.columns(2)
-    with col_gen:
-        generar = st.button(
-            "Generar preview",
-            type="primary",
-            use_container_width=True,
-            key=f"prs_gen_preview_{tema_id}",
-        )
-    with col_ref:
-        refinar = st.button(
-            "Refinar preview actual",
-            use_container_width=True,
-            key=f"prs_ref_preview_{tema_id}",
-            disabled=not taller.get("html"),
-        )
-
-    if generar and instruccion.strip():
-        with st.status("Generando visualización…", expanded=True) as status:
-            try:
-                titulo_viz = instruccion.strip()[:80]
-                slug, html = _prs_workshop.generar_desde_instruccion(
-                    instruccion.strip(),
-                    md_bloque,
-                    titulo=titulo_viz,
-                    texto_original=texto_original,
+        html_preview = taller.get("html") or ""
+        if html_preview:
+            with st.container(gap=None, key="sd_card_preview"):
+                st.markdown(
+                    '<div class="sd-preview-bar">'
+                    '<span class="sd-preview-dot r"></span>'
+                    '<span class="sd-preview-dot a"></span>'
+                    '<span class="sd-preview-dot v"></span>'
+                    '<span style="font-size:11px;color:#6B7A8D;margin-left:6px;">'
+                    'preview · visualización interactiva</span>'
+                    '<span style="margin-left:auto;font-size:10px;color:#8693A3;">'
+                    'Chart.js + MathJax</span></div>',
+                    unsafe_allow_html=True,
                 )
-                import json
-                historial = [{"rol": "profesor", "texto": instruccion.strip()}]
-                if taller.get("viz_id"):
-                    db.actualizar_visualizacion_borrador(
-                        taller["viz_id"], html, json.dumps(historial), titulo_viz, RUTA_DB
+                preview_page = _prs_generador_html.envolver_preview_taller(html_preview)
+                st.components.v1.html(preview_page, height=420, scrolling=True)
+
+        with st.container(gap=None, key="sd_card_composer"):
+            prompt_key = f"prs_prompt_{tema_id}"
+            if prompt_key not in st.session_state:
+                st.session_state[prompt_key] = ""
+
+            with st.container(gap=None, key=f"sd_composer_row_{tema_id}"):
+                c_prompt, c_actions = st.columns([4.2, 1])
+                with c_prompt:
+                    instruccion = st.text_area(
+                        "Describe la visualización:",
+                        key=prompt_key,
+                        height=64,
+                        placeholder="Describe un ajuste a la visualización…",
+                        label_visibility="collapsed",
                     )
-                    vid = taller["viz_id"]
-                else:
-                    vid = db.insertar_visualizacion_borrador(
-                        tema_id, titulo_viz, instruccion.strip(),
-                        json.dumps(historial), html, RUTA_DB,
+                with c_actions:
+                    refinar = st.button(
+                        "Refinar →",
+                        use_container_width=True,
+                        key=f"prs_ref_preview_{tema_id}",
+                        disabled=not taller.get("html"),
+                        type="secondary",
                     )
-                st.session_state[_prs_taller_key(tema_id)] = {
-                    "viz_id": vid, "html": html, "slug": slug,
-                    "titulo": titulo_viz, "historial": historial,
-                }
-                status.update(label="Preview generado", state="complete")
-            except Exception as err:
-                status.update(label="Error", state="error")
-                st.error(str(err))
-        st.rerun()
-
-    if refinar and instruccion.strip() and taller.get("html"):
-        with st.status("Refinando visualización…", expanded=True) as status:
-            try:
-                import json
-                slug = taller.get("slug") or "viz"
-                html = _prs_workshop.refinar_html(
-                    taller["html"], instruccion.strip(), slug
-                )
-                historial = list(taller.get("historial") or [])
-                historial.append({"rol": "profesor", "texto": instruccion.strip()})
-                vid = taller["viz_id"]
-                if vid:
-                    db.actualizar_visualizacion_borrador(
-                        vid, html, json.dumps(historial), None, RUTA_DB
-                    )
-                st.session_state[_prs_taller_key(tema_id)] = {
-                    **taller, "html": html, "historial": historial,
-                }
-                status.update(label="Preview actualizado", state="complete")
-            except Exception as err:
-                status.update(label="Error", state="error")
-                st.error(str(err))
-        st.rerun()
-
-    html_preview = taller.get("html") or ""
-    if html_preview:
-        st.markdown("**Vista previa**")
-        preview_page = _prs_generador_html.envolver_preview_taller(html_preview)
-        st.components.v1.html(preview_page, height=480, scrolling=True)
-
-        opciones_ancla = headings + figuras_ancla if (headings or figuras_ancla) else []
-        if "(final del bloque)" not in opciones_ancla:
-            opciones_ancla = opciones_ancla + ["(final del bloque)"]
-        sugerida = _prs_workshop.sugerir_seccion_ancla(
-            taller.get("titulo") or instruccion, opciones_ancla
-        )
-        idx_sug = opciones_ancla.index(sugerida) if sugerida in opciones_ancla else len(opciones_ancla) - 1
-
-        ancla = st.selectbox(
-            "Insertar en sección del markdown:",
-            options=opciones_ancla,
-            index=idx_sug,
-            key=f"prs_ancla_{tema_id}",
-        )
-        ancla_val = "" if ancla == "(final del bloque)" else ancla
-
-        if st.button(
-            "✅ Aprobar esta visualización",
-            type="primary",
-            key=f"prs_aprobar_viz_{tema_id}",
-            use_container_width=True,
-        ):
-            vid = taller.get("viz_id")
-            if vid:
-                db.aprobar_visualizacion(vid, ancla_val, RUTA_DB)
-            st.session_state[_prs_taller_key(tema_id)] = {
-                "viz_id": None, "html": "", "slug": "", "titulo": "", "historial": [],
-            }
-            st.session_state[prompt_key] = ""
-            st.success("Visualización aprobada. Puedes crear otra o exportar el bloque.")
-            st.rerun()
-
-    st.divider()
-    st.markdown("### Exportar bloque completo")
-
-    _col_pdf, _col_pres = st.columns(2)
-
-    with _col_pdf:
-        if st.button(
-            "Generar PDF del bloque",
-            key=f"prs_pdf_{tema_id}",
-            use_container_width=True,
-        ):
-            with st.status("Generando PDF…", expanded=True) as _st_pdf:
-                try:
-                    _pdf_bytes = _prs_generador_pdf.generar_pdf(md_bloque, titulo=tema_nombre)
-                    st.session_state[f"prs_pdf_bytes_{tema_id}"] = _pdf_bytes
-                    _st_pdf.update(label="PDF generado", state="complete")
-                except Exception as _e:
-                    _st_pdf.update(label="Error al generar el PDF", state="error")
-                    st.error(str(_e))
-            st.rerun()
-
-        if st.session_state.get(f"prs_pdf_bytes_{tema_id}"):
-            st.download_button(
-                "Descargar PDF",
-                data=st.session_state[f"prs_pdf_bytes_{tema_id}"],
-                file_name=f"{_slugify(tema_nombre)}_bloque.pdf",
-                mime="application/pdf",
-                key=f"prs_dl_pdf_{tema_id}",
-                use_container_width=True,
-            )
-
-    with _col_pres:
-        n_aprobadas = len(db.listar_visualizaciones_aprobadas(tema_id, RUTA_DB))
-        if st.button(
-            "Generar presentación completa",
-            key=f"prs_presentacion_{tema_id}",
-            use_container_width=True,
-        ):
-            with st.status("Generando presentación…", expanded=True) as _st_pres:
-                try:
-                    fragmentos = db.listar_visualizaciones_aprobadas(tema_id, RUTA_DB)
-                    if fragmentos:
-                        st.write(
-                            f"Integrando {len(fragmentos)} visualización(es) aprobada(s)…"
-                        )
-                        _html_pres = (
-                            _prs_generador_presentacion.generar_presentacion_con_fragmentos(
-                                md_bloque, fragmentos, tema_nombre
-                            )
+                    if not taller.get("html"):
+                        generar = st.button(
+                            "Generar preview",
+                            type="primary",
+                            use_container_width=True,
+                            key=f"prs_gen_preview_{tema_id}",
                         )
                     else:
-                        st.write("Sin visualizaciones — solo contenido teórico…")
-                        _html_pres = _prs_generador_presentacion.generar_presentacion(
-                            md_bloque, [], tema_nombre, verbose=False
-                        )
-                    st.session_state[f"prs_html_pres_{tema_id}"] = _html_pres.encode("utf-8")
-                    _st_pres.update(label="Presentación generada", state="complete")
-                except Exception as _e:
-                    _st_pres.update(label="Error al generar la presentación", state="error")
-                    st.error(str(_e))
-            st.rerun()
+                        generar = False
 
-        if n_aprobadas == 0:
-            st.caption("Puedes exportar solo teoría o aprobar visualizaciones antes.")
-        if st.session_state.get(f"prs_html_pres_{tema_id}"):
-            st.download_button(
-                "Descargar presentación completa",
-                data=st.session_state[f"prs_html_pres_{tema_id}"],
-                file_name=f"{_slugify(tema_nombre)}_presentacion_completa.html",
-                mime="text/html",
-                key=f"prs_dl_pres_{tema_id}",
-                use_container_width=True,
+            if generar and instruccion.strip():
+                with st.status("Generando visualización…", expanded=True) as status:
+                    try:
+                        titulo_viz = instruccion.strip()[:80]
+                        slug, html_frag = _prs_workshop.generar_desde_instruccion(
+                            instruccion.strip(),
+                            md_bloque,
+                            titulo=titulo_viz,
+                            texto_original=texto_original,
+                        )
+                        import json
+                        historial = [{"rol": "profesor", "texto": instruccion.strip()}]
+                        if taller.get("viz_id"):
+                            db.actualizar_visualizacion_borrador(
+                                taller["viz_id"], html_frag, json.dumps(historial), titulo_viz, RUTA_DB
+                            )
+                            vid = taller["viz_id"]
+                        else:
+                            vid = db.insertar_visualizacion_borrador(
+                                tema_id, titulo_viz, instruccion.strip(),
+                                json.dumps(historial), html_frag, RUTA_DB,
+                            )
+                        st.session_state[_prs_taller_key(tema_id)] = {
+                            "viz_id": vid, "html": html_frag, "slug": slug,
+                            "titulo": titulo_viz, "historial": historial,
+                        }
+                        status.update(label="Preview generado", state="complete")
+                    except Exception as err:
+                        status.update(label="Error", state="error")
+                        st.error(str(err))
+                st.rerun()
+
+            if refinar and instruccion.strip() and taller.get("html"):
+                with st.status("Refinando visualización…", expanded=True) as status:
+                    try:
+                        import json
+                        slug = taller.get("slug") or "viz"
+                        html_frag = _prs_workshop.refinar_html(
+                            taller["html"], instruccion.strip(), slug
+                        )
+                        historial = list(taller.get("historial") or [])
+                        historial.append({"rol": "profesor", "texto": instruccion.strip()})
+                        vid = taller["viz_id"]
+                        if vid:
+                            db.actualizar_visualizacion_borrador(
+                                vid, html_frag, json.dumps(historial), None, RUTA_DB
+                            )
+                        st.session_state[_prs_taller_key(tema_id)] = {
+                            **taller, "html": html_frag, "historial": historial,
+                        }
+                        status.update(label="Preview actualizado", state="complete")
+                    except Exception as err:
+                        status.update(label="Error", state="error")
+                        st.error(str(err))
+                st.rerun()
+
+            if html_preview:
+                opciones_ancla = headings + figuras_ancla if (headings or figuras_ancla) else []
+                if "(final del bloque)" not in opciones_ancla:
+                    opciones_ancla = opciones_ancla + ["(final del bloque)"]
+                sugerida = _prs_workshop.sugerir_seccion_ancla(
+                    taller.get("titulo") or instruccion, opciones_ancla
+                )
+                idx_sug = (
+                    opciones_ancla.index(sugerida)
+                    if sugerida in opciones_ancla
+                    else len(opciones_ancla) - 1
+                )
+                ancla = st.selectbox(
+                    "Ancla:",
+                    options=opciones_ancla,
+                    index=idx_sug,
+                    key=f"prs_ancla_{tema_id}",
+                )
+                ancla_val = "" if ancla == "(final del bloque)" else ancla
+                if st.button(
+                    "Aprobar y anclar",
+                    type="primary",
+                    key=f"prs_aprobar_viz_{tema_id}",
+                    use_container_width=True,
+                ):
+                    vid = taller.get("viz_id")
+                    if vid:
+                        db.aprobar_visualizacion(vid, ancla_val, RUTA_DB)
+                    st.session_state[_prs_taller_key(tema_id)] = {
+                        "viz_id": None, "html": "", "slug": "", "titulo": "", "historial": [],
+                    }
+                    st.session_state[prompt_key] = ""
+                    st.success("Visualización aprobada.")
+                    st.rerun()
+
+    with col_rail:
+        with st.container(gap=None, key="sd_card_rail_viz"):
+            st.markdown(
+                '<div style="font-size:13px;font-weight:600;margin-bottom:12px;">'
+                "Visualizaciones ancladas</div>",
+                unsafe_allow_html=True,
             )
+            if aprobadas:
+                for v in aprobadas:
+                    ancla = v.get("seccion_ancla") or "(final del bloque)"
+                    st.markdown(
+                        f'<div class="sd-rail-item"><div class="tit">{html.escape(v["titulo"])}</div>'
+                        f'<div class="ancla">↳ {html.escape(ancla)}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("Ninguna todavía.")
+
+        historial = st.session_state.get(_prs_taller_key(tema_id), {}).get("historial") or []
+        if historial:
+            with st.container(gap=None, key="sd_card_rail_iter"):
+                st.markdown(
+                    '<div style="font-size:13px;font-weight:600;margin-bottom:10px;">Iteraciones</div>',
+                    unsafe_allow_html=True,
+                )
+                for i, h in enumerate(historial, 1):
+                    activa = i == len(historial)
+                    clase = "sd-iter activa" if activa else "sd-iter"
+                    texto_h = (h.get("texto") or "")[:60]
+                    st.markdown(
+                        f'<div class="{clase}">{i}. {html.escape(texto_h)}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        with st.container(gap=None, key="sd_card_rail_export"):
+            st.markdown("**Exportar presentación del bloque**")
+            if st.button(
+                "Generar PDF del bloque",
+                key=f"prs_pdf_{tema_id}",
+                use_container_width=True,
+                type="secondary",
+            ):
+                with st.status("Generando PDF…", expanded=True) as _st_pdf:
+                    try:
+                        _pdf_bytes = _prs_generador_pdf.generar_pdf(md_bloque, titulo=tema_nombre)
+                        st.session_state[f"prs_pdf_bytes_{tema_id}"] = _pdf_bytes
+                        _st_pdf.update(label="PDF generado", state="complete")
+                    except Exception as _e:
+                        _st_pdf.update(label="Error al generar el PDF", state="error")
+                        st.error(str(_e))
+                st.rerun()
+
+            if st.session_state.get(f"prs_pdf_bytes_{tema_id}"):
+                st.download_button(
+                    "Descargar PDF",
+                    data=st.session_state[f"prs_pdf_bytes_{tema_id}"],
+                    file_name=f"{_slugify(tema_nombre)}_bloque.pdf",
+                    mime="application/pdf",
+                    key=f"prs_dl_pdf_{tema_id}",
+                    use_container_width=True,
+                )
+
+            n_aprobadas = len(aprobadas)
+            if st.button(
+                "Generar presentación completa",
+                key=f"prs_presentacion_{tema_id}",
+                use_container_width=True,
+                type="secondary",
+            ):
+                with st.status("Generando presentación…", expanded=True) as _st_pres:
+                    try:
+                        fragmentos = db.listar_visualizaciones_aprobadas(tema_id, RUTA_DB)
+                        if fragmentos:
+                            st.write(
+                                f"Integrando {len(fragmentos)} visualización(es) aprobada(s)…"
+                            )
+                            _html_pres = (
+                                _prs_generador_presentacion.generar_presentacion_con_fragmentos(
+                                    md_bloque, fragmentos, tema_nombre
+                                )
+                            )
+                        else:
+                            st.write("Sin visualizaciones — solo contenido teórico…")
+                            _html_pres = _prs_generador_presentacion.generar_presentacion(
+                                md_bloque, [], tema_nombre, verbose=False
+                            )
+                        st.session_state[f"prs_html_pres_{tema_id}"] = _html_pres.encode("utf-8")
+                        _st_pres.update(label="Presentación generada", state="complete")
+                    except Exception as _e:
+                        _st_pres.update(label="Error al generar la presentación", state="error")
+                        st.error(str(_e))
+                st.rerun()
+
+            if n_aprobadas == 0:
+                st.caption("Puedes exportar solo teoría o aprobar visualizaciones antes.")
+            if st.session_state.get(f"prs_html_pres_{tema_id}"):
+                st.download_button(
+                    "Descargar presentación completa",
+                    data=st.session_state[f"prs_html_pres_{tema_id}"],
+                    file_name=f"{_slugify(tema_nombre)}_bloque_presentacion.html",
+                    mime="text/html",
+                    key=f"prs_dl_pres_{tema_id}",
+                    use_container_width=True,
+                )
 
 # =============================================================================
 # Stepper contextual — flujos multi-paso
@@ -2033,6 +2114,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                         "✕",
                         key=f"org_del_bloque_{idx_b}_{iter_key}",
                         help="Eliminar bloque",
+                        type="secondary",
                     ):
                         _org_sync_widgets_a_bloques(iter_key)
                         st.session_state["org_organizacion_bloques"].pop(idx_b)
@@ -2108,6 +2190,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                             "✕",
                             key=f"org_del_sub_{idx_b}_{idx_s}_{iter_key}_{sub_rev}",
                             help="Eliminar subtema",
+                            type="secondary",
                         ):
                             _org_sync_widgets_a_bloques(iter_key)
                             st.session_state["org_organizacion_bloques"][idx_b]["subtemas"].pop(idx_s)
@@ -2126,7 +2209,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                         placeholder="+ Añadir subbloque…",
                     )
                 with a2:
-                    if st.button("+ Añadir", key=f"org_btn_ns_{idx_b}_{ctr_s}"):
+                    if st.button("+ Añadir", key=f"org_btn_ns_{idx_b}_{ctr_s}", type="secondary"):
                         _org_sync_widgets_a_bloques(iter_key)
                         nombre_ns = st.session_state.get(f"org_ns_nombre_{idx_b}_{ctr_s}", "").strip()
                         if nombre_ns:
@@ -2173,7 +2256,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                 )
         with nb3:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("+ Añadir bloque", key=f"org_btn_nb_{ctr_b}"):
+            if st.button("+ Añadir bloque", key=f"org_btn_nb_{ctr_b}", type="secondary"):
                 _org_sync_widgets_a_bloques(iter_key)
                 nombre_nb = st.session_state.get(f"org_nb_nombre_{ctr_b}", "").strip()
                 if nombre_nb:
@@ -2253,6 +2336,13 @@ def _vista_organizador() -> None:
         st.session_state["org_asignatura"] = asignatura
 
     _org_init_state()
+
+    st.markdown(
+        '<p class="sd-vista-titulo">Distribución temática extraída</p>'
+        '<p class="sd-vista-desc">Revisa, edita y aprueba cada subtema. '
+        'Confirma para poblar la base de datos curricular.</p>',
+        unsafe_allow_html=True,
+    )
 
     if st.session_state.get("org_ultimo_output"):
         _paso_org = 1
@@ -2555,10 +2645,99 @@ def _db_resumen_avisos(asignatura_id: int) -> list[dict]:
         conn.close()
 
 
+def _db_resumen_kpis(asignatura_id: int) -> dict:
+    """KPIs del dashboard Resumen según handoff."""
+    conn = db.get_connection(RUTA_DB)
+    try:
+        n_bloques = conn.execute(
+            "SELECT COUNT(*) FROM temas WHERE asignatura_id = ?", (asignatura_id,)
+        ).fetchone()[0]
+        horas = conn.execute(
+            "SELECT COALESCE(SUM(horas), 0) FROM temas WHERE asignatura_id = ?",
+            (asignatura_id,),
+        ).fetchone()[0]
+        n_viz = conn.execute(
+            """
+            SELECT COUNT(*) FROM visualizacion_interactiva vi
+            JOIN temas t ON t.id = vi.tema_id
+            WHERE t.asignatura_id = ? AND vi.estado = 'aprobado'
+            """,
+            (asignatura_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    prog = db.get_progreso_asignatura(asignatura_id, RUTA_DB)
+    return {
+        "bloques": n_bloques,
+        "aprobados": prog["aprobados"],
+        "total": prog["total"],
+        "horas": horas,
+        "visualizaciones": n_viz,
+    }
+
+
+def _db_mapa_curricular(asignatura_id: int) -> list[dict]:
+    """Filas del mapa curricular para la vista Resumen."""
+    conn = db.get_connection(RUTA_DB)
+    try:
+        temas = conn.execute(
+            "SELECT id, nombre, horas, bloque, orden FROM temas "
+            "WHERE asignatura_id = ? ORDER BY orden",
+            (asignatura_id,),
+        ).fetchall()
+        resultado: list[dict] = []
+        for i, t in enumerate(temas):
+            n_sub = conn.execute(
+                "SELECT COUNT(*) FROM subbloques WHERE tema_id = ?", (t["id"],)
+            ).fetchone()[0]
+            ct = conn.execute(
+                "SELECT estado FROM contenido_tema WHERE tema_id = ?", (t["id"],)
+            ).fetchone()
+            estado = ct["estado"] if ct else "pendiente"
+            n_viz = conn.execute(
+                "SELECT COUNT(*) FROM visualizacion_interactiva "
+                "WHERE tema_id = ? AND estado = 'aprobado'",
+                (t["id"],),
+            ).fetchone()[0]
+            bloque_lbl = t["bloque"] or f"B{i + 1}"
+            resultado.append({
+                "tema_id": t["id"],
+                "idx": i,
+                "bloque": bloque_lbl,
+                "nombre": t["nombre"],
+                "horas": t["horas"],
+                "n_subtemas": n_sub,
+                "estado_contenido": estado,
+                "n_viz": n_viz,
+                "org_confirmado": True,
+            })
+        return resultado
+    finally:
+        conn.close()
+
+
+def _estados_bloques_asignatura(asignatura_id: int) -> dict[int, str]:
+    conn = db.get_connection(RUTA_DB)
+    try:
+        filas = conn.execute(
+            """
+            SELECT t.id, COALESCE(ct.estado, 'pendiente') AS estado
+            FROM temas t
+            LEFT JOIN contenido_tema ct ON ct.tema_id = t.id
+            WHERE t.asignatura_id = ?
+            ORDER BY t.orden
+            """,
+            (asignatura_id,),
+        ).fetchall()
+        return {r["id"]: r["estado"] for r in filas}
+    finally:
+        conn.close()
+
+
 def _vista_resumen() -> None:
     asignatura = st.session_state.get("asignatura_actual")
     if not asignatura:
-        st.warning("Selecciona una asignatura en el portfolio para comenzar.")
+        st.warning("Selecciona una asignatura en la barra lateral.")
         return
 
     asignatura_id = _get_asignatura_id(asignatura)
@@ -2566,118 +2745,97 @@ def _vista_resumen() -> None:
         st.error("Asignatura no encontrada en la base de datos.")
         return
 
-    m = _db_resumen_metricas(asignatura_id)
-
-    fidelidad_txt = (
-        f"{m['fidelidad_media']:.3f}" if m["fidelidad_media"] is not None else "—"
-    )
-    if m["ultima_ejecucion"]:
-        ultima_txt, _relativo = formatear_fecha_relativa(m["ultima_ejecucion"])
-    else:
-        ultima_txt = "—"
-        _relativo = None
-
-    # ── Progreso global de la asignatura ──────────────────────────────────────
-    prog = db.get_progreso_asignatura(asignatura_id, RUTA_DB)
-    _pct = prog["porcentaje"]
-    if prog["total"] > 0:
-        st.progress(
-            _pct / 100,
-            text=(
-                f"Progreso de contenido: **{prog['aprobados']}/{prog['total']}** "
-                f"bloques aprobados ({_pct}%)"
-            ),
-        )
-    else:
-        st.info("Confirma la organización en el Agente Organizador para ver el progreso.")
-
-    st.divider()
+    kpis = _db_resumen_kpis(asignatura_id)
+    mapa = _db_mapa_curricular(asignatura_id)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(
-        "Fidelidad media",
-        fidelidad_txt,
-        help=(
-            "Media de los scores de fidelidad léxica guardados "
-            f"({m['n_fidelidad']} bloque(s) con fidelidad por debajo de 0.85). "
-            "Si no hay ninguno marcado, no hay scores que promediar."
-        ),
-    )
-    c2.metric(
-        "Outputs generados",
-        m["n_outputs"],
-        help=f"organizador_outputs ({m['n_org']}) + presentacion_outputs ({m['n_prs']}).",
-    )
-    c3.metric(
-        "Avisos de validación",
-        m["n_avisos"],
-        help="Filas en `validaciones` ligadas a ejecuciones de esta asignatura.",
-    )
-    c4.metric("Última ejecución", ultima_txt)
-    if _relativo:
-        c4.caption(_relativo)
+    with c1:
+        st.markdown(
+            kpi_card("Bloques temáticos", str(kpis["bloques"]), unidad="totales"),
+            unsafe_allow_html=True,
+        )
+    with c2:
+        if kpis["total"]:
+            apr_val = str(kpis["aprobados"])
+            apr_unit = f"de {kpis['total']}"
+        else:
+            apr_val, apr_unit = "0", "de 0"
+        st.markdown(
+            kpi_card("Aprobados", apr_val, color="#2E815A", unidad=apr_unit),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        h = kpis["horas"]
+        h_fmt = str(int(h)) if h == int(h) else f"{h:.1f}"
+        st.markdown(kpi_card("Horas lectivas", h_fmt, unidad="h"), unsafe_allow_html=True)
+    with c4:
+        st.markdown(
+            kpi_card(
+                "Visualizaciones",
+                str(kpis["visualizaciones"]),
+                color="#185FA5",
+                unidad="ancladas",
+            ),
+            unsafe_allow_html=True,
+        )
 
-    # ── Progreso desglosado por bloque ────────────────────────────────────────
-    desglose = db.get_desglose_progreso_asignatura(asignatura_id, RUTA_DB)
-    if desglose:
-        st.divider()
-        st.markdown("**Progreso por bloque temático**")
-        for bloque in desglose:
-            _bp = bloque["porcentaje"]
-            _label = (
-                f"{bloque['nombre']} — "
-                f"{'aprobado' if bloque['aprobados'] else 'pendiente'} ({_bp}%)"
-            )
-            st.progress(_bp / 100, text=_label)
+    st.markdown(
+        f"""
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin:22px 0 12px;">
+          <h2 style="margin:0;font-size:15px;font-weight:600;">Mapa curricular</h2>
+          <span style="font-size:12px;color:#6B7A8D;">{len(mapa)} bloques · estado por agente</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.divider()
-
-    avisos = _db_resumen_avisos(asignatura_id)
-    st.markdown(f"**Avisos de validación registrados** ({len(avisos)})")
-    if not avisos:
-        st.caption("Sin avisos de validación para esta asignatura todavía.")
+    if not mapa:
+        st.info(
+            "Aún no hay bloques temáticos. Ejecuta el **Organizador** y confirma la estructura."
+        )
         return
 
-    _ICONO_TIPO = {"cobertura_incompleta": "🧩", "fidelidad_baja": "📉"}
-    for a in avisos:
-        icono = _ICONO_TIPO.get(a["tipo"], "⚠️")
-        valor = a["valor_afectado"]
-        valor_txt = f" · valor: {valor}" if valor is not None else ""
-        bloq_txt = " · 🔴 bloqueante" if a["bloqueante"] else ""
-        with st.expander(
-            f"{icono} `{a['tipo']}` — {a['agente']}{valor_txt}{bloq_txt}",
-            expanded=False,
-        ):
-            st.markdown(a["descripcion"])
-            st.caption(f"Registrado: {a['created_at']}")
+    with st.container(gap=None, key="sd_tabla_mapa"):
+        st.markdown(
+            '<div class="sd-tabla-header">'
+            "<span>Bloque temático</span><span>Horas</span>"
+            "<span>Organizador</span><span>Contenido</span>"
+            "<span>Presentación</span>"
+            '<span style="text-align:right;">Estado</span></div>',
+            unsafe_allow_html=True,
+        )
+        for fila in mapa:
+            col_fila, col_ir = st.columns([24, 1])
+            with col_fila:
+                st.markdown(mapa_fila_html(fila), unsafe_allow_html=True)
+            with col_ir:
+                if st.button(
+                    "→",
+                    key=f"mapa_btn_{fila['tema_id']}",
+                    help="Abrir en Contenido",
+                    type="secondary",
+                ):
+                    st.session_state["vista_actual"] = "Contenido"
+                    st.session_state["cnt_tema_idx"] = fila["idx"]
+                    st.rerun()
+
+    avisos = _db_resumen_avisos(asignatura_id)
+    if avisos:
+        with st.expander(f"Avisos de validación ({len(avisos)})", expanded=False):
+            _ICONO_TIPO = {"cobertura_incompleta": "🧩", "fidelidad_baja": "📉"}
+            for a in avisos:
+                icono = _ICONO_TIPO.get(a["tipo"], "⚠️")
+                st.caption(f"{icono} `{a['tipo']}` — {a['agente']}: {a['descripcion']}")
 
 
 # =============================================================================
 # Vista Inputs — archivos registrados de la asignatura activa
 # =============================================================================
 
-def _render_tabla_inputs(filas: list[dict], vacio: str) -> None:
-    if not filas:
-        st.caption(vacio)
-        return
-    h1, h2, h3 = st.columns([2.2, 1.2, 1])
-    h1.markdown('<div class="inputs-tabla-header">Archivo</div>', unsafe_allow_html=True)
-    h2.markdown('<div class="inputs-tabla-header">Subido</div>', unsafe_allow_html=True)
-    h3.markdown('<div class="inputs-tabla-header">En disco</div>', unsafe_allow_html=True)
-    for fila in filas:
-        c1, c2, c3 = st.columns([2.2, 1.2, 1])
-        c1.markdown(f'<span class="file-chip">{html.escape(fila["nombre_fichero"])}</span>', unsafe_allow_html=True)
-        c2.caption(fila.get("fecha_subida") or "—")
-        if fichero_existe(fila.get("ruta_disco") or ""):
-            c3.caption("✅ Disponible")
-        else:
-            c3.caption("⚠️ No encontrado")
-
-
 def _vista_inputs() -> None:
     asignatura = st.session_state.get("asignatura_actual")
     if not asignatura:
-        st.warning("Selecciona una asignatura en el portfolio para comenzar.")
+        st.warning("Selecciona una asignatura en la barra lateral.")
         return
 
     asignatura_id = _get_asignatura_id(asignatura)
@@ -2685,18 +2843,61 @@ def _vista_inputs() -> None:
         st.error("Asignatura no encontrada en la base de datos.")
         return
 
+    st.markdown(
+        '<p class="sd-vista-titulo">Materiales de la asignatura</p>'
+        '<p class="sd-vista-desc">Documentos de origen que alimentan a los tres agentes.</p>',
+        unsafe_allow_html=True,
+    )
+
     inputs = db.listar_inputs_asignatura(asignatura_id, RUTA_DB)
     guias = [i for i in inputs if i["tipo"] == "guia_docente"]
     materiales = [i for i in inputs if i["tipo"] == "material_teoria"]
+    grupos = [
+        ("Guía docente", guias),
+        ("Materiales de teoría", materiales),
+    ]
 
-    st.markdown('<div class="inputs-seccion-titulo">Guía docente</div>', unsafe_allow_html=True)
-    _render_tabla_inputs(guias, "No hay guía docente registrada todavía.")
-
-    st.markdown('<div class="inputs-seccion-titulo">Materiales de teoría</div>', unsafe_allow_html=True)
-    _render_tabla_inputs(materiales, "No hay materiales de teoría registrados todavía.")
-
-    st.divider()
-    st.caption("Para subir o actualizar archivos, ve al **Agente Organizador**.")
+    col_a, col_b = st.columns(2)
+    for idx, (col, (titulo, filas)) in enumerate(zip((col_a, col_b), grupos)):
+        with col:
+            with st.container(gap=None, key=f"sd_card_inputs_{idx}"):
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'margin-bottom:14px;"><span style="font-size:13px;font-weight:600;">'
+                    f'{html.escape(titulo)}</span>'
+                    f'<span style="font-size:11px;color:#8693A3;">{len(filas)} archivo'
+                    f'{"s" if len(filas) != 1 else ""}</span></div>',
+                    unsafe_allow_html=True,
+                )
+                if not filas:
+                    st.caption("Sin archivos registrados.")
+                for fila in filas:
+                    meta = file_meta(fila.get("ruta_disco"), fila["nombre_fichero"])
+                    fecha = fila.get("fecha_subida") or ""
+                    if fecha:
+                        meta = f"{meta} · {fecha}" if meta != "—" else fecha
+                    disp = "✓ en disco" if fichero_existe(fila.get("ruta_disco") or "") else "⚠ no encontrado"
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;gap:11px;padding:9px 0;'
+                        f'border-top:1px solid #F0F3F7;">'
+                        f'{file_tag_html(fila["nombre_fichero"])}'
+                        f'<span style="flex:1;min-width:0;">'
+                        f'<span style="display:block;font-size:12.5px;font-weight:500;color:#16202E;">'
+                        f'{html.escape(fila["nombre_fichero"])}</span>'
+                        f'<span style="font-size:11px;color:#6B7A8D;">{html.escape(meta)} · {disp}</span>'
+                        f'</span></div>',
+                        unsafe_allow_html=True,
+                    )
+            with st.container(gap=None, key=f"sd_input_dashed_{idx}"):
+                if st.button(
+                    "+ Añadir documento",
+                    key=f"inputs_add_{titulo}",
+                    use_container_width=True,
+                    type="secondary",
+                    help="La subida de archivos se realiza en el Agente Organizador.",
+                ):
+                    st.session_state["vista_actual"] = "Organizador"
+                    st.rerun()
 
 
 # =============================================================================
@@ -2779,10 +2980,89 @@ def _vista_base_datos() -> None:
 
 
 # =============================================================================
+# Vista de inicio (sin asignatura activa) — elegir proyecto
+# =============================================================================
+
+def _vista_landing() -> None:
+    st.markdown(
+        """
+        <div class="sd-landing-wrap">
+          <span class="sd-landing-badge">🎓 Universidad de Oviedo</span>
+          <div class="sd-landing-title">Suite Docente IA</div>
+          <p class="sd-landing-sub">Orquestación docente inteligente</p>
+          <p class="sd-landing-escuela">Escuela Politécnica de Ingeniería de Gijón</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    modo = st.session_state.get("landing_modo")
+    _, col_c, _ = st.columns([1, 3, 1])
+    with col_c:
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            if st.button(
+                "🌱\n\nComenzar nuevo proyecto\n\nCarga la guía docente y materiales "
+                "didácticos para estructurar un nuevo mapa curricular.",
+                key="landing_btn_nuevo",
+                use_container_width=True,
+                type="secondary",
+            ):
+                st.session_state["landing_modo"] = "nuevo"
+                st.rerun()
+        with c2:
+            if st.button(
+                "📁\n\nCargar proyecto existente\n\nSelecciona una asignatura de la "
+                "base de datos local para continuar editándola.",
+                key="landing_btn_cargar",
+                use_container_width=True,
+                type="secondary",
+            ):
+                st.session_state["landing_modo"] = "cargar"
+                st.rerun()
+
+        if modo == "nuevo":
+            st.divider()
+            st.markdown("**Nueva asignatura**")
+            nombre = st.text_input(
+                "Nombre",
+                key="landing_nueva_asignatura_nombre",
+                placeholder="Ej. Mecánica de Fluidos",
+                label_visibility="collapsed",
+            )
+            if st.button("Crear asignatura", type="primary", key="landing_btn_crear_asignatura"):
+                nombre_limpio = (nombre or "").strip()
+                if not nombre_limpio:
+                    st.error("Introduce un nombre.")
+                else:
+                    try:
+                        db.crear_asignatura(nombre_limpio, RUTA_DB)
+                        slug = slugify(nombre_limpio)
+                        preparar_carpetas_asignatura(RAIZ_MONOREPO, slug)
+                        st.session_state["asignatura_actual"] = nombre_limpio
+                        st.session_state["vista_actual"] = "Organizador"
+                        st.session_state.pop("landing_modo", None)
+                        st.session_state.pop("landing_nueva_asignatura_nombre", None)
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+        elif modo == "cargar":
+            st.divider()
+            st.markdown("**Selecciona una asignatura**")
+            render_lista_asignaturas(RUTA_DB)
+
+    st.markdown(
+        '<p class="sd-landing-footer">Suite Docente IA · Universidad de Oviedo · '
+        "EPI Gijón</p>",
+        unsafe_allow_html=True,
+    )
+
+
+# =============================================================================
 # Configuración de página + inicialización
 # =============================================================================
 
-st.set_page_config(layout="wide", page_title="Pipeline TFG")
+st.set_page_config(layout="wide", page_title="Suite Docente IA", page_icon="📘")
 
 
 @st.cache_resource
@@ -2799,37 +3079,35 @@ _preparar_bd()
 # CSS — identidad visual compartida
 # =============================================================================
 
-inject_theme(ACENTO, ACENTO_OSCURO)
+_asignatura_activa = st.session_state.get("asignatura_actual")
+_vista_actual = st.session_state.get("vista_actual", VISTAS_NAV[0])
+
+# CSS base al inicio; fix de botones al final (después de widgets).
+inject_theme(ACENTO, ACENTO_OSCURO, mostrar_sidebar=bool(_asignatura_activa))
 
 
 # =============================================================================
 # Barra lateral + área principal
 # =============================================================================
 
-_asignatura_activa = st.session_state.get("asignatura_actual")
-
 with st.sidebar:
-    render_marca()
-    st.divider()
-    if _asignatura_activa:
-        render_sidebar_workspace(VISTAS_NAV, ICONOS_VISTA, _asignatura_activa)
-    else:
-        render_sidebar_portfolio(RUTA_DB, RAIZ_MONOREPO)
+    render_sidebar(
+        RUTA_DB,
+        _asignatura_activa,
+        _vista_actual,
+        vistas_debug=[VISTA_BASE_DATOS],
+    )
 
 if not _asignatura_activa:
-    st.markdown(
-        '<div class="seccion"><div class="barra"></div>'
-        '<div class="titulo">Asignaturas</div></div>',
-        unsafe_allow_html=True,
-    )
-    render_portfolio(RUTA_DB)
+    _vista_landing()
 else:
-    vista = st.session_state["vista_actual"]
-    st.markdown(
-        f'<div class="seccion"><div class="barra"></div>'
-        f'<div class="titulo">{TITULOS_SECCION[vista]}</div></div>',
-        unsafe_allow_html=True,
-    )
+    asignatura_id = _get_asignatura_id(_asignatura_activa)
+    if asignatura_id is not None:
+        render_topbar(_asignatura_activa, asignatura_id, RUTA_DB)
+        subs = pipeline_subtitulos(asignatura_id, RUTA_DB)
+        render_pipeline_banner(_vista_actual, subs)
+
+    vista = st.session_state.get("vista_actual", VISTAS_NAV[0])
     if vista == "Resumen":
         _vista_resumen()
     elif vista == "Inputs":
@@ -2843,4 +3121,6 @@ else:
     elif vista == "Base de datos":
         _vista_base_datos()
     else:
-        st.info("Vista en construcción — se integra en el siguiente paso.")
+        st.info("Vista no reconocida.")
+
+inject_button_fix(ACENTO, ACENTO_OSCURO)

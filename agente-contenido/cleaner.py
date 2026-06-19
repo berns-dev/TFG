@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -14,16 +15,17 @@ _LOGGER = logging.getLogger(__name__)
 
 def _ensure_cleaner_audit_handler() -> None:
     """
-    Un handler explícito a stderr: en Streamlit el root logger suele quedar en WARNING
-    y los mensajes INFO no serían visibles para auditar el cleaner sin tocar config global.
-    Idempotente para no duplicar handlers en recargas del mismo proceso.
+    Auditoría opcional vía ``TFG_LOG_EXTRACT=1`` (p. ej. validate_pdf.py).
+    Por defecto WARNING para no inundar la consola de Streamlit en cada extracción.
     """
     if _LOGGER.handlers:
         return
-    _LOGGER.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    _LOGGER.addHandler(handler)
+    audit = os.environ.get("TFG_LOG_EXTRACT", "").strip().lower() in ("1", "true", "yes")
+    _LOGGER.setLevel(logging.INFO if audit else logging.WARNING)
+    if audit:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        _LOGGER.addHandler(handler)
     _LOGGER.propagate = False
 
 
