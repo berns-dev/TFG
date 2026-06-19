@@ -87,6 +87,21 @@ def extraer_texto(archivo_bytes, nombre_archivo) -> str:
 # ---------------------------------------------------------------------------
 
 _SUBTEMA_NUM_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
+# Bloques de guía UniOvi: «1.- Cálculo…», «4.-Tornillos…» (guión tras el punto).
+_SUBTEMA_GUION_RE = re.compile(r"^\d+\.-\s*\S")
+_BULLET_PREFIX_RE = re.compile(r"^[\u2022\u25aa\u25cf\-\–\*\u00b7]\s*")
+_VISUAL_RUIDO_EXACTO = {
+    "contexto", "temario", "indice", "index", "outline", "tipos", "types",
+    "ejemplos de aplicaciones", "liquidos", "newtonianos",
+}
+_PROSA_INICIO_RE = re.compile(
+    r"^(permiten|tienen|los |las |el |la |se |son |esta|este|como |para |ejemplo)",
+    re.I,
+)
+# Prefijos de bloque-nivel (temario del curso completo, no subtemas de un bloque).
+_BLOQUE_NIVEL_RE = re.compile(
+    r"^(tema|bloque|unidad|chapter|topic|module)\s+\d+"
+)
 _PAGINA_FOOTER_RE = re.compile(r"^\d+\s+de\s+\d+$", re.I)
 # Etiquetas que encabezan títulos de figura, tabla o nota — no son secciones.
 # Usada en Strategy 1 para descartar "Figura 4.5 …", "NOTA: …", etc.
@@ -132,6 +147,46 @@ def _format_evidencia_visual(
     if sz_pt is not None and sz_pt > 0:
         return f"{prefijo}: «{titulo_corto}» (p. {npag}, {sz_pt}pt)"
     return f"{prefijo}: «{titulo_corto}» (p. {npag})"
+
+
+def _linea_es_subtema_numerado(linea: str) -> bool:
+    """True si la línea empieza por numeración de bloque (N.-) o sección (N.N)."""
+    return bool(_SUBTEMA_GUION_RE.match(linea) or _SUBTEMA_NUM_RE.match(linea))
+
+
+def _nombre_desde_linea_subtema(linea: str) -> str:
+    """Quita el prefijo numérico de una línea de subtema."""
+    if _SUBTEMA_GUION_RE.match(linea):
+        return re.sub(r"^\d+\.-\s*", "", linea).strip()
+    return re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", linea).strip()
+
+
+def _limpiar_viñeta_texto(texto: str) -> str:
+    return _BULLET_PREFIX_RE.sub("", (texto or "").strip()).strip()
+
+
+def _es_ruido_visual_titulo(texto: str) -> bool:
+    """Descarta portadas, temario de curso, viñetas y prosa promovida a título."""
+    limpio = _limpiar_viñeta_texto(texto)
+    norm = normalizar_subtema(limpio).strip().rstrip(":")
+    if not norm or len(norm) < 3:
+        return True
+    if norm in _VISUAL_RUIDO_EXACTO or norm.startswith("contexto"):
+        return True
+    if _BLOQUE_NIVEL_RE.match(norm):
+        return True
+    if _PROSA_INICIO_RE.match(norm):
+        return True
+    if limpio.endswith(":") and len(norm) < 45:
+        return True
+    tokens = limpio.split()
+    if tokens and tokens[0] and tokens[0][0].islower():
+        return True
+    if len(tokens) > 12:
+        return True
+    if len(tokens) == 1 and len(tokens[0]) <= 2:
+        return True
+    return False
 
 
 def normalizar_subtema(texto: str) -> str:
@@ -219,10 +274,15 @@ def es_subtema_valido(nombre: str) -> bool:
       3. Filas de datos numéricos (p. ej. filas de tablas de horas).
       4. Fragmentos cortos y truncados que terminan en palabra-función.
     """
+    nombre = _limpiar_viñeta_texto(nombre)
     norm = normalizar_subtema(nombre)
     if not norm:
         return False
     if _es_seccion_administrativa(norm):
+        return False
+    if _BLOQUE_NIVEL_RE.match(norm):
+        return False
+    if norm in _VISUAL_RUIDO_EXACTO or norm.startswith("contexto"):
         return False
     if any(norm == c or norm.startswith(c + " ") for c in _CONECTORES_PROSA):
         return False
@@ -263,9 +323,9 @@ def extraer_subtemas_candidatos(texto: str) -> list[str]:
         linea = linea.strip()
         if _PAGINA_FOOTER_RE.match(linea):
             continue
-        if not _SUBTEMA_NUM_RE.match(linea):
+        if not _linea_es_subtema_numerado(linea):
             continue
-        nombre = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", linea).strip()
+        nombre = _nombre_desde_linea_subtema(linea)
         if not nombre or not es_subtema_valido(nombre):
             continue
         clave = normalizar_subtema(nombre)
@@ -307,9 +367,9 @@ def extraer_subtemas_guia(texto: str) -> list[str]:
     for ln in lineas[inicio + 1:]:
         if _PAGINA_FOOTER_RE.match(ln):
             continue
-        if not _SUBTEMA_NUM_RE.match(ln):
+        if not _linea_es_subtema_numerado(ln):
             continue
-        nombre = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", ln).strip()
+        nombre = _nombre_desde_linea_subtema(ln)
         norm = normalizar_subtema(nombre)
         if not norm:
             continue
@@ -407,15 +467,6 @@ _INDICE_KEYWORDS_RE = re.compile(
     r"|tabla\s+de\s+contenidos?|table\s+of\s+contents?)$"
 )
 
-# Prefijos de bloque-nivel que indican un temario del curso completo, no
-# subtemas de un bloque concreto. Si la mayoría de ítems del índice tienen
-# este patrón, el documento es un programa de asignatura, no un bloque temático,
-# y no debemos usarlo como fuente de subtemas.
-_BLOQUE_NIVEL_RE = re.compile(
-    r"^(tema|bloque|unidad|chapter|topic|module)\s+\d+"
-)
-
-
 def _es_linea_titulo(
     palabras_linea: list[dict],
     cuerpo_fn: str,
@@ -512,6 +563,7 @@ def _buscar_candidatos_indice(
         candidatos: list[dict] = []
         vistos: set[str] = set()
         for _, texto, palabras_raw_ord in lineas_pag[idx_primera + 1:]:
+            texto = _limpiar_viñeta_texto(texto)
             palabras_raw = texto.split()
             # Artefacto de carácter suelto (bullet/inicial fusionado por pdfplumber)
             if palabras_raw and len(palabras_raw[0]) == 1 and palabras_raw[0].isalpha():
@@ -634,9 +686,13 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
                 texto = " ".join(
                     w["text"] for w in palabras_linea if w.get("text")
                 ).strip()
+                texto = _limpiar_viñeta_texto(texto)
 
                 # Descartar líneas demasiado largas para ser un título
                 if not texto or len(texto) > 120 or len(texto.split()) > 15:
+                    continue
+
+                if _es_ruido_visual_titulo(texto):
                     continue
 
                 # Artefacto de layout: primera "palabra" es un carácter suelto.
@@ -744,7 +800,22 @@ def _extraer_candidatos_numeracion(texto: str) -> list[dict]:
         evidencia = f"Sección {prefijo}" if prefijo else "Sección numerada"
         candidatos.append({"nombre": nombre, "evidencia": evidencia, "fuente": "numeracion"})
         vistos.add(clave)
-    return candidatos
+    return _deduplicar_candidatos_numeracion(candidatos)
+
+
+def _deduplicar_candidatos_numeracion(candidatos: list[dict]) -> list[dict]:
+    """Si una sección aparece duplicada (título partido en PDF), conserva el más largo."""
+    por_prefijo: dict[str, dict] = {}
+    orden: list[str] = []
+    for c in candidatos:
+        m = re.search(r"Secci[oó]n\s+([\d.]+)", c.get("evidencia", ""), re.I)
+        clave = m.group(1) if m else normalizar_subtema(c["nombre"])
+        if clave not in por_prefijo:
+            orden.append(clave)
+            por_prefijo[clave] = c
+        elif len(c["nombre"]) > len(por_prefijo[clave]["nombre"]):
+            por_prefijo[clave] = c
+    return [por_prefijo[k] for k in orden]
 
 
 def extraer_candidatos_con_evidencia(
@@ -790,6 +861,8 @@ def extraer_candidatos_con_evidencia(
 
     if ext == ".pdf" and archivo_bytes is not None:
         for item in extraer_titulos_visuales_pdf(archivo_bytes):
+            if not es_subtema_valido(item["titulo"]):
+                continue
             clave = normalizar_subtema(item["titulo"])
             if not clave or clave in vistos:
                 continue

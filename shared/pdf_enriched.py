@@ -25,6 +25,19 @@ import pdfplumber
 _LOGGER = logging.getLogger(__name__)
 
 _NUMBERED_HEADER_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
+_BLOQUE_NIVEL_RE = re.compile(
+    r"^(tema|bloque|unidad|chapter|topic|module)\s+\d+",
+    re.IGNORECASE,
+)
+_URL_RE = re.compile(r"https?://", re.IGNORECASE)
+_PROSA_VERB_RE = re.compile(
+    r"\b(muestra|recu[eé]rd|observe|figura|tabla|recoge)\b",
+    re.IGNORECASE,
+)
+_HEADING_RUIDO_EXACTO = {
+    "contexto", "temario", "indice", "index", "outline", "types", "tipos",
+    "automation", "unlimited", "variety", "pneumatic", "technologies",
+}
 _MATH_FONT_SUBSTR = ("math", "symbol", "dingbat", "ding", "mtmi", "cmmi", "cmsy", "msam", "msbm")
 _MIN_WORDS_DOCUMENT = 20
 _MIN_WORDS_PAGE = 3
@@ -42,6 +55,63 @@ _MATH_UNICODE_VALID = [
     (0x2A00, 0x2AFF),   # Operadores matemáticos suplementarios
     (0x1D400, 0x1D7FF), # Mathematical Alphanumeric Symbols (𝑎, 𝛼…)
 ]
+
+
+def _normalize_heading_text(text: str) -> str:
+    import unicodedata
+
+    s = (text or "").lower()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-z0-9 ]", " ", s).strip()
+
+
+def _is_valid_markdown_heading(text: str, *, slide_mode: bool = False) -> bool:
+    """Filtra falsos positivos antes de promover una línea a heading Markdown."""
+    t = (text or "").strip()
+    if not t or t == "[ECUACION]" or t.startswith("[TEXTO_ILEGIBLE]"):
+        return False
+    if _URL_RE.search(t):
+        return False
+    if len(t) > 110 or len(t.split()) > 16:
+        return False
+
+    norm = _normalize_heading_text(t)
+    if norm in _HEADING_RUIDO_EXACTO or norm.startswith("contexto"):
+        return False
+    if _BLOQUE_NIVEL_RE.match(norm):
+        return False
+
+    if _NUMBERED_HEADER_RE.match(t):
+        rest = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", t).strip()
+        if not rest or rest[0].islower():
+            return False
+        if re.fullmatch(r"[\d\s]+", rest):
+            return False
+        if _PROSA_VERB_RE.search(rest):
+            return False
+        if re.match(r"^\d", rest) and len(rest.split()) <= 5:
+            if re.search(r"\b(J|MPa|kJ|kN|bar|mm|°C|Pa)\b", rest, re.I):
+                return False
+        return len(rest) <= 95 and len(rest.split()) <= 14
+
+    tokens = t.split()
+    if tokens and tokens[0] and tokens[0][0].islower():
+        return False
+    if slide_mode and len(tokens) < 2:
+        return False
+    if len(tokens) == 1 and len(tokens[0]) <= 3:
+        return False
+    return bool(re.search(r"[a-zA-Z]{2,}", t))
+
+
+def _detect_slide_pdf(line_texts: list[str]) -> bool:
+    """PDF exportado de diapositivas: muchas líneas muy cortas."""
+    valid = [ln.strip() for ln in line_texts if ln.strip()]
+    if len(valid) < 35:
+        return False
+    short = sum(1 for ln in valid if len(ln.split()) <= 3)
+    return short / len(valid) >= 0.32
 
 
 def _round_sz(size: float | int | None) -> float:
@@ -93,6 +163,8 @@ def markdown_prefix_for_line(
     palabras_linea: list[dict],
     cuerpo_fn: str,
     cuerpo_sz: float,
+    *,
+    slide_mode: bool = False,
 ) -> str:
     """Prefijo Markdown (# / ## / ###) para una línea, o '' si es cuerpo."""
     t = (texto or "").strip()
@@ -100,12 +172,17 @@ def markdown_prefix_for_line(
         return ""
 
     if _NUMBERED_HEADER_RE.match(t):
+        if not _is_valid_markdown_heading(t, slide_mode=slide_mode):
+            return ""
         return "### "
 
     if len(t) > 120 or len(t.split()) > 18:
         return ""
 
     if not is_visual_title_line(palabras_linea, cuerpo_fn, cuerpo_sz):
+        return ""
+
+    if not _is_valid_markdown_heading(t, slide_mode=slide_mode):
         return ""
 
     dom = _dominant_line_style(palabras_linea)
@@ -156,13 +233,17 @@ def _page_to_markdown_lines(
     altura_pag: float,
     cuerpo_fn: str,
     cuerpo_sz: float,
+    *,
+    slide_mode: bool = False,
 ) -> list[str]:
     margen = altura_pag * _MARGIN_FRAC
     out: list[str] = []
     for y_bucket, texto, pals_ord in _group_words_into_lines(palabras_pagina):
         if y_bucket < margen or y_bucket > altura_pag - margen:
             continue
-        prefix = markdown_prefix_for_line(texto, pals_ord, cuerpo_fn, cuerpo_sz)
+        prefix = markdown_prefix_for_line(
+            texto, pals_ord, cuerpo_fn, cuerpo_sz, slide_mode=slide_mode
+        )
         out.append(f"{prefix}{texto}" if prefix else texto)
     return out
 
@@ -208,6 +289,13 @@ def build_pdf_markdown(source: bytes | Path | str | BinaryIO) -> str | None:
                 return None
             cuerpo_fn, cuerpo_sz = cuerpo
 
+            lineas_doc: list[str] = []
+            for _npag, palabras, _altura in paginas_palabras:
+                for _y, texto, _p in _group_words_into_lines(palabras):
+                    if texto:
+                        lineas_doc.append(texto)
+            slide_mode = _detect_slide_pdf(lineas_doc)
+
             parts: list[str] = []
             for npag, palabras, altura in paginas_palabras:
                 header = f"[PAGINA {npag}]"
@@ -218,7 +306,9 @@ def build_pdf_markdown(source: bytes | Path | str | BinaryIO) -> str | None:
                         plain = ""
                     body = plain.strip()
                 else:
-                    lines = _page_to_markdown_lines(palabras, altura, cuerpo_fn, cuerpo_sz)
+                    lines = _page_to_markdown_lines(
+                        palabras, altura, cuerpo_fn, cuerpo_sz, slide_mode=slide_mode
+                    )
                     body = "\n".join(lines).strip()
                     if not body:
                         try:
@@ -266,14 +356,20 @@ def _prefix_from_span_styles(
     styles: list[tuple[str, float, int]],
     cuerpo_fn: str,
     cuerpo_sz: float,
+    *,
+    slide_mode: bool = False,
 ) -> str:
     """Prefijo Markdown (# / ## / ###) a partir de estilos fitz (fontname, size, flags)."""
     t = (text or "").strip()
     if not t:
         return ""
     if _NUMBERED_HEADER_RE.match(t):
+        if not _is_valid_markdown_heading(t, slide_mode=slide_mode):
+            return ""
         return "### "
     if len(t) > 120 or len(t.split()) > 18:
+        return ""
+    if not _is_valid_markdown_heading(t, slide_mode=slide_mode):
         return ""
     if not styles:
         return ""
@@ -379,6 +475,25 @@ def build_pdf_markdown_pymupdf(source: bytes | Path | str | BinaryIO) -> str | N
 
         (cuerpo_fn, cuerpo_sz), _ = font_counter.most_common(1)[0]
 
+        lineas_doc: list[str] = []
+        for page in doc:
+            try:
+                blocks = page.get_text("dict")["blocks"]
+            except Exception:
+                continue
+            for block in blocks:
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    parts_ln = [
+                        span.get("text", "").strip()
+                        for span in line.get("spans", [])
+                        if span.get("text", "").strip()
+                    ]
+                    if parts_ln:
+                        lineas_doc.append(" ".join(parts_ln))
+        slide_mode = _detect_slide_pdf(lineas_doc)
+
         # Segunda pasada: construir markdown página a página
         parts: list[str] = []
 
@@ -447,7 +562,9 @@ def build_pdf_markdown_pymupdf(source: bytes | Path | str | BinaryIO) -> str | N
                     if not line_text:
                         continue
 
-                    prefix = _prefix_from_span_styles(line_text, styles_line, cuerpo_fn, cuerpo_sz)
+                    prefix = _prefix_from_span_styles(
+                        line_text, styles_line, cuerpo_fn, cuerpo_sz, slide_mode=slide_mode
+                    )
                     lines_out.append(f"{prefix}{line_text}" if prefix else line_text)
 
             body = "\n".join(lines_out).strip()
