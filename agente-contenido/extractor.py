@@ -266,8 +266,8 @@ def _pptx_collect_shape_blocks(shape: object, title_shape: object | None) -> lis
                     subtitle_types.add(PP_PLACEHOLDER.VERTICAL_SUBTITLE)
                 if ph_type in subtitle_types:
                     prefix = "## "
-        except (ValueError, AttributeError):
-            pass
+        except (ValueError, AttributeError) as exc:
+            _LOGGER.debug("PPTX placeholder no legible en slide: %s", exc)
         blocks.append(prefix + raw)
         return blocks
 

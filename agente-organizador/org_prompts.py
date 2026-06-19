@@ -35,7 +35,7 @@ def construir_prompt(
     texto_guia: str,
     textos_teoria: list[str],
     textos_contexto: list[str],
-    horas_totales: int = None,
+    horas_totales: int | None = None,
     horas_laboratorio: int = 0,
     subtemas_por_material: list[list[dict]] | None = None,
 ) -> tuple[str, str]:
@@ -188,8 +188,10 @@ def construir_prompt(
             "- La columna \"Evidencia\" debe ser la referencia estructural verificable que "
             "justifica el subtema: número de sección (e.g. 'Sección 3.2'), título de "
             "diapositiva (e.g. 'Slide 5'), o 'Sin señal verificable' si no hay señal clara.\n"
-            "- NUNCA uses como evidencia conteos de páginas/slides ni inferencias temáticas "
-            "propias (p. ej. 'este subtema cubre los fundamentos').\n"
+            "- Si no hay señal clara en el material, escribe \"Sin señal verificable\". "
+            "El sistema puede completar evidencia determinista al confirmar la organización.\n"
+            "- NUNCA infieras subtemas solo por similitud temática ni uses conteos de "
+            "páginas/slides como única justificación en esta columna.\n"
             "- NO incluyas columna de horas por subtema. Las horas se asignan SOLO en el "
             "encabezado del bloque (## Bloque N — Nombre · Xh).\n"
             "- Estas reglas aplican igual en la primera generación y en todos los refinamientos."

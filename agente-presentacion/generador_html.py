@@ -95,36 +95,7 @@ def _cargar_logo_base64() -> str | None:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Helper: slug
-# ---------------------------------------------------------------------------
-
-def _slug(nombre: str) -> str:
-    """Convert a display name to a URL/HTML-ID-safe lowercase slug.
-
-    Removes diacritics, lowercases, replaces any run of non-alphanumeric
-    characters with a single hyphen, and strips leading/trailing hyphens.
-
-    Args:
-        nombre: Display name (e.g. "Ley de Hooke").
-
-    Returns:
-        Slug string (e.g. "ley-de-hooke"). Falls back to "elemento" if
-        the result would otherwise be empty.
-
-    Examples:
-        >>> _slug("Ecuación de Bernoulli")
-        'ecuacion-de-bernoulli'
-        >>> _slug("E = mc²")
-        'e-mc-'
-    """
-    normalized = unicodedata.normalize("NFD", nombre)
-    without_accents = "".join(
-        c for c in normalized if unicodedata.category(c) != "Mn"
-    )
-    slug = re.sub(r"[^a-z0-9]+", "-", without_accents.lower()).strip("-")
-    return slug or "elemento"
-
+from shared.text_utils import slugify as _slug
 
 # ---------------------------------------------------------------------------
 # HTML container template
@@ -1298,7 +1269,7 @@ _PREVIEW_TALLER_TEMPLATE = """\
 """
 
 
-def _envolver_preview_taller(html_fragment: str) -> str:
+def envolver_preview_taller(html_fragment: str) -> str:
     """Envoltorio mínimo para la vista previa del taller (sin formato institucional)."""
     return _PREVIEW_TALLER_TEMPLATE.replace("<!--FRAGMENT-->", html_fragment)
 

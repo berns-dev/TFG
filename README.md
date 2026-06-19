@@ -42,10 +42,10 @@ A suite of three AI agents that transforms university teaching materials into st
 ## Installation & run
 
 ```bash
-pip install -r agente-organizador/requirements.txt
-pip install -r agente-contenido/requirements.txt
-pip install -r agente-presentacion/requirements.txt
+pip install -r requirements.txt
 cp agente-contenido/.env.example agente-contenido/.env   # ANTHROPIC_API_KEY
+cp agente-organizador/.env.example agente-organizador/.env
+cp agente-presentacion/.env.example agente-presentacion/.env
 streamlit run app-unificada/app.py
 ```
 
@@ -57,7 +57,7 @@ streamlit run app-unificada/app.py
 |----------|---------|
 | [`CLAUDE.md`](CLAUDE.md) | Architecture, contracts, development rules |
 | [`agente-*/CLAUDE.md`](agente-organizador/) | Per-agent technical detail |
-| [`database/CLAUDE.md`](database/CLAUDE.md) | SQLite schema v7 |
+| [`database/CLAUDE.md`](database/CLAUDE.md) | SQLite schema v8 |
 | [`app-unificada/README.md`](app-unificada/README.md) | Unified Streamlit app |
 
 ---

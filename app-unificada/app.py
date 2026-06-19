@@ -11,11 +11,14 @@ import difflib
 from datetime import datetime
 import html
 import importlib.util as _importlib_util
+import logging
 import os
 import re
 import sys
 import unicodedata
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 import streamlit as st
 
@@ -40,7 +43,7 @@ from ui.sidebar import (  # noqa: E402
     render_sidebar_workspace,
 )
 from ui.theme import inject_theme  # noqa: E402
-from utils import fichero_existe  # noqa: E402
+from utils import fichero_existe, formatear_fecha_relativa, slugify  # noqa: E402
 
 RUTA_DB = os.path.join(RAIZ_MONOREPO, "data", "tfg.db")
 
@@ -51,7 +54,7 @@ RUTA_DB = os.path.join(RAIZ_MONOREPO, "data", "tfg.db")
 ACENTO = "#185FA5"
 ACENTO_OSCURO = "#0C447C"
 
-VISTAS_NAV = ["Resumen", "Inputs", "Organizador", "Contenido", "Presentación"]
+VISTAS_NAV = ["Resumen", "Inputs", "Organizador", "Contenido", "Presentación", "Base de datos"]
 # Vista de depuración (no aparece en la navegación lateral).
 VISTA_BASE_DATOS = "Base de datos"
 VISTAS = VISTAS_NAV
@@ -139,7 +142,7 @@ def _cargar_modulos_agente(raiz: str, prefijo: str, nombres: list[str]) -> dict:
 # ── Agente Organizador (sin imports cruzados entre los módulos cargados) ──────
 try:
     _org_mods = _cargar_modulos_agente(
-        RAIZ_ORGANIZADOR, "organizador", ["agente", "parser", "org_prompts"]
+        RAIZ_ORGANIZADOR, "organizador", ["org_config", "agente", "parser", "org_prompts"]
     )
     _org_agente = _org_mods["agente"]
     _org_parser = _org_mods["parser"]
@@ -181,18 +184,17 @@ except Exception as _ce:
 try:
     _prs_mods = _cargar_modulos_agente(
         RAIZ_PRESENTACION, "presentacion",
-        ["prs_config", "prs_prompts", "generador_html", "workshop", "detector", "generador_pdf", "generador_presentacion"],
+        ["prs_config", "prs_prompts", "generador_html", "workshop", "generador_pdf", "generador_presentacion"],
     )
     _prs_config = _prs_mods["prs_config"]
     _prs_prompts = _prs_mods["prs_prompts"]
     _prs_generador_html = _prs_mods["generador_html"]
     _prs_workshop = _prs_mods["workshop"]
-    _prs_detector = _prs_mods["detector"]
     _prs_generador_pdf = _prs_mods["generador_pdf"]
     _prs_generador_presentacion = _prs_mods["generador_presentacion"]
     _PRS_ERROR: str | None = None
 except Exception as _pe:
-    _prs_config = _prs_prompts = _prs_generador_html = _prs_workshop = _prs_detector = None
+    _prs_config = _prs_prompts = _prs_generador_html = _prs_workshop = None
     _prs_generador_pdf = _prs_generador_presentacion = None
     _PRS_ERROR = str(_pe)
 
@@ -214,11 +216,8 @@ except Exception as _pe:
 # =============================================================================
 
 def _slugify(nombre: str) -> str:
-    """Convierte un nombre de asignatura a slug para nombres de carpeta."""
-    s = unicodedata.normalize("NFD", nombre)
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    s = s.lower()
-    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    """Alias local — delega en utils.slugify."""
+    return slugify(nombre)
 
 
 def _get_asignatura_id(nombre: str) -> int | None:
@@ -326,7 +325,7 @@ def _db_guardar_organizador_output(
 def _db_confirmar_organizacion(asignatura_id: int, output_id: int, bloques: list[dict]) -> None:
     """Borra temas/subbloques anteriores e inserta los de la versión confirmada.
 
-    Cada subtema puede incluir horas, evidencia, origen y es_fallback cuando
+    Cada subtema puede incluir horas, evidencia, origen, fuente y es_fallback cuando
     procede del nuevo formato del Agente Organizador (v2+).
     Cada bloque puede incluir ``archivo_origen`` para vincular su PDF (``input_id``).
     """
@@ -367,8 +366,8 @@ def _db_confirmar_organizacion(asignatura_id: int, output_id: int, bloques: list
             for subtema in bloque["subtemas"]:
                 conn.execute(
                     """INSERT INTO subbloques
-                       (tema_id, nombre, orden, horas, evidencia, origen, es_fallback)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (tema_id, nombre, orden, horas, evidencia, origen, es_fallback, fuente)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         tema_id,
                         subtema["nombre"],
@@ -377,6 +376,7 @@ def _db_confirmar_organizacion(asignatura_id: int, output_id: int, bloques: list
                         subtema.get("evidencia", ""),
                         subtema.get("origen", "Detectado"),
                         subtema.get("es_fallback", 0),
+                        subtema.get("fuente", ""),
                     ),
                 )
 
@@ -413,6 +413,7 @@ _ORG_KEYS: dict[str, object] = {
     "org_contador_add_subtema": lambda: {},
     "org_contador_add_bloque": 0,
     "org_subtemas_detectados": lambda: [],
+    "org_modo_prompt_libre": False,
     "org_sub_widget_rev": lambda: {},
 }
 
@@ -452,8 +453,8 @@ def _org_registrar_archivos(
             f.write(archivo.getvalue())
         try:
             _db_registrar_input(asignatura_id, tipo, archivo.name, ruta)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.warning("BD: no se pudo registrar %s (%s)", archivo.name, exc)
         st.session_state["org_inputs_registrados"].add(clave)
 
     if guia_docente is not None:
@@ -560,13 +561,22 @@ def _org_validar_y_persistir(
     st.session_state["org_output_id"] = output_id
     st.session_state["org_version_actual"] = version
 
-    # Estado estructurado para la edición manual (mismo helper que el standalone).
-    # Reutiliza parsear_bloques_desde_markdown del Organizador: deriva la lista
-    # de bloques/subtemas editables del Markdown recién generado.
-    st.session_state["org_organizacion_bloques"] = _org_parser.parsear_bloques_desde_markdown(resultado)
+    # Estado estructurado para la edición manual.
+    bloques = _org_parser.parsear_bloques_desde_markdown(resultado)
     archivos = st.session_state.get("org_ultimos_archivos_teoria", [])
-    for i, bloque in enumerate(st.session_state["org_organizacion_bloques"]):
-        bloque["archivo_origen"] = _org_resolver_archivo_bloque(bloque["nombre"], archivos, i)
+    candidatos = st.session_state.get("org_subtemas_detectados", [])
+    if archivos:
+        if not candidatos:
+            _, candidatos = _org_cargar_candidatos_material_desde_disco(asignatura_id)
+        bloques = _org_parser.enriquecer_bloques_con_evidencia_detectada(
+            bloques, candidatos, archivos
+        )
+    for i, bloque in enumerate(bloques):
+        if not bloque.get("archivo_origen"):
+            bloque["archivo_origen"] = _org_resolver_archivo_bloque(
+                bloque["nombre"], archivos, i
+            )
+    st.session_state["org_organizacion_bloques"] = bloques
     st.session_state["org_contador_add_subtema"] = {}
     st.session_state["org_contador_add_bloque"] = 0
 
@@ -614,10 +624,15 @@ def _org_build_subtemas_confirmados(
     textos_teoria: list[str],
     archivos_teoria: list[str],
     archivos_bytes: list[bytes],
+    candidatos_precalculados: list[list[dict]] | None = None,
 ) -> list[list[dict]] | None:
     """Guía docente primero (modo libre); lista cerrada del material solo sin guía."""
     return _org_parser.construir_subtemas_confirmados(
-        texto_guia, textos_teoria, archivos_teoria, archivos_bytes
+        texto_guia,
+        textos_teoria,
+        archivos_teoria,
+        archivos_bytes,
+        candidatos_precalculados=candidatos_precalculados,
     )
 
 
@@ -659,10 +674,20 @@ def _org_cargar_candidatos_material_desde_disco(
             with open(ruta, "rb") as fh:
                 archivo_bytes = fh.read()
             texto = _org_parser.extraer_texto(archivo_bytes, nombre)
-            cands = _org_parser.extraer_candidatos_con_evidencia(
+            cands_raw = _org_parser.extraer_candidatos_con_evidencia(
                 texto, nombre, archivo_bytes
             )
-        except Exception:
+            cands = [
+                {
+                    "nombre": c["nombre"],
+                    "evidencia": c["evidencia"],
+                    "origen": "Detectado",
+                    "fuente": c.get("fuente", ""),
+                }
+                for c in cands_raw
+            ]
+        except Exception as exc:
+            _log.warning("Extracción candidatos fallida para %s: %s", nombre, exc)
             cands = []
         archivos.append(nombre)
         candidatos.append(cands)
@@ -701,6 +726,47 @@ def _org_format_evidencia(sub: dict, archivo_bloque: str) -> str:
     if archivo_bloque:
         return f"Sin señal estructural — extraído de {archivo_bloque}"
     return "Sin señal estructural"
+
+
+def _org_etiqueta_fuente(sub: dict) -> str:
+    """Etiqueta legible de la estrategia de detección de un subtema."""
+    if sub.get("manual"):
+        return _org_parser.etiqueta_fuente("manual")
+    if sub.get("es_fallback"):
+        return _org_parser.etiqueta_fuente("fallback")
+    fuente = (sub.get("fuente") or "").strip()
+    if fuente:
+        return _org_parser.etiqueta_fuente(fuente)
+    origen = (sub.get("origen") or "").strip()
+    if origen and origen.lower() not in {"detectado", "detectado (aprox.)"}:
+        return origen
+    return _org_parser.etiqueta_fuente("modelo")
+
+
+def _org_render_panel_deteccion() -> None:
+    """Muestra las señales deterministas detectadas en cada material."""
+    archivos = st.session_state.get("org_ultimos_archivos_teoria", [])
+    candidatos = st.session_state.get("org_subtemas_detectados", [])
+    modo_libre = st.session_state.get("org_modo_prompt_libre", False)
+    with st.expander("🔬 Señales de detección estructural", expanded=False):
+        if modo_libre:
+            st.caption(
+                "Modo libre (guía docente con bloques): el modelo estructura subtemas, "
+                "pero la detección determinista se ejecutó para enriquecer evidencia al confirmar."
+            )
+        if not archivos:
+            st.caption("Aún no hay materiales de teoría procesados en esta sesión.")
+            return
+        for idx, nombre_arch in enumerate(archivos):
+            lista = candidatos[idx] if idx < len(candidatos) else []
+            st.markdown(f"**{nombre_arch}** — {len(lista)} candidato(s)")
+            if not lista:
+                st.caption("Sin señales estructurales detectadas en este material.")
+                continue
+            for cand in lista:
+                fuente = _org_parser.etiqueta_fuente(cand.get("fuente", ""))
+                ev = cand.get("evidencia", "—")
+                st.text(f"• {cand.get('nombre', '')}  [{fuente}]  {ev}")
 
 
 def _org_generar_organizacion(
@@ -816,11 +882,20 @@ def _org_generar_organizacion(
 
             if subtemas_confirmados is None:
                 st.write("🔍 Detectando subtemas (guía docente + señales del material)…")
-                subtemas_confirmados = _org_build_subtemas_confirmados(
-                    texto_guia,
+                candidatos_detectados = _org_parser.detectar_candidatos_por_material(
                     textos_teoria, archivos_teoria, archivos_teoria_bytes
                 )
-            st.session_state["org_subtemas_detectados"] = subtemas_confirmados or []
+                st.session_state["org_subtemas_detectados"] = candidatos_detectados
+                st.session_state["org_modo_prompt_libre"] = _org_parser.modo_prompt_libre(
+                    texto_guia
+                )
+                subtemas_confirmados = _org_build_subtemas_confirmados(
+                    texto_guia,
+                    textos_teoria,
+                    archivos_teoria,
+                    archivos_teoria_bytes,
+                    candidatos_precalculados=candidatos_detectados,
+                )
             st.session_state["org_candidatos_guia"] = _org_parser.extraer_subtemas_guia(
                 texto_guia
             )
@@ -906,7 +981,7 @@ def _db_cnt_get_subbloques(tema_id: int) -> list[dict]:
         return [
             dict(r)
             for r in conn.execute(
-                "SELECT id, nombre, orden, horas, evidencia, origen, es_fallback "
+                "SELECT id, nombre, orden, horas, evidencia, origen, es_fallback, fuente "
                 "FROM subbloques WHERE tema_id = ? ORDER BY orden",
                 (tema_id,),
             ).fetchall()
@@ -959,7 +1034,8 @@ def _cnt_extraer_texto_bloque(rutas_material: list[str]) -> str:
             continue
         try:
             texto = _cnt_extractor.extract_text(ruta)
-        except Exception:
+        except Exception as exc:
+            _log.warning("Extracción texto fallida para %s: %s", ruta, exc)
             continue
         if (texto or "").strip():
             partes.append(texto.strip())
@@ -1440,18 +1516,21 @@ def _db_cnt_get_rutas_material(tema_id: int) -> list[str]:
     return [ruta] if os.path.exists(ruta) else []
 
 
-def _prs_extraer_texto_material(rutas: list[str]) -> str:
+def _prs_extraer_texto_material(rutas: list[str]) -> tuple[str, list[str]]:
     """Texto del material original para contexto del taller (truncado)."""
     partes: list[str] = []
+    fallos: list[str] = []
     for ruta in rutas:
         if not os.path.exists(ruta):
+            fallos.append(os.path.basename(ruta))
             continue
         try:
             partes.append(_cnt_extractor.extract_text(ruta))
-        except Exception:
-            continue
+        except Exception as exc:
+            _log.warning("Extracción taller fallida para %s: %s", ruta, exc)
+            fallos.append(os.path.basename(ruta))
     texto = "\n\n".join(p.strip() for p in partes if p and p.strip())
-    return texto[:8000]
+    return texto[:8000], fallos
 
 
 def _prs_taller_key(tema_id: int) -> str:
@@ -1533,7 +1612,16 @@ def _vista_presentacion() -> None:
         return
 
     rutas = _db_cnt_get_rutas_material(tema_id)
-    texto_original = _prs_extraer_texto_material(rutas) if rutas else None
+    texto_original = None
+    fallos_material: list[str] = []
+    if rutas:
+        texto_original, fallos_material = _prs_extraer_texto_material(rutas)
+        if fallos_material:
+            st.warning(
+                "No se pudo extraer texto de: "
+                + ", ".join(f"**{f}**" for f in fallos_material)
+                + ". El taller usará solo el markdown curado."
+            )
     headings = _cnt_extraer_headings(md_bloque)
     figuras_ancla = _cnt_extraer_figuras(md_bloque)
 
@@ -1663,7 +1751,7 @@ def _vista_presentacion() -> None:
     html_preview = taller.get("html") or ""
     if html_preview:
         st.markdown("**Vista previa**")
-        preview_page = _prs_generador_html._envolver_preview_taller(html_preview)
+        preview_page = _prs_generador_html.envolver_preview_taller(html_preview)
         st.components.v1.html(preview_page, height=480, scrolling=True)
 
         opciones_ancla = headings + figuras_ancla if (headings or figuras_ancla) else []
@@ -1842,6 +1930,7 @@ def _org_sync_widgets_a_bloques(iter_key: int) -> bool:
                 if v and v != sub["nombre"]:
                     sub["nombre"] = v
                     sub["manual"] = True
+                    sub["fuente"] = "manual"
                     changed = True
     if changed:
         st.session_state["org_organizacion_bloques"] = bloques
@@ -1959,16 +2048,18 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
             elif archivo_bloque:
                 st.caption(f"Origen: {archivo_bloque}")
 
-            h1, h2, h3, h4 = st.columns([3.5, 2.8, 0.55, 0.55])
+            h1, h2, h3, h4, h5 = st.columns([3, 2.2, 1.1, 0.55, 0.55])
             h1.markdown("**Subtema**")
             h2.markdown("**Evidencia**")
+            h3.markdown("**Estrategia**")
             if editable:
-                h3.markdown("**✓**")
-                h4.markdown("")
+                h4.markdown("**✓**")
+                h5.markdown("")
 
             for idx_s, sub in enumerate(bloque.get("subtemas", [])):
-                r1, r2, r3, r4 = st.columns([3.5, 2.8, 0.55, 0.55])
+                r1, r2, r3, r4, r5 = st.columns([3, 2.2, 1.1, 0.55, 0.55])
                 evidencia = _org_format_evidencia(sub, archivo_bloque)
+                estrategia = _org_etiqueta_fuente(sub)
                 sub_rev = sub_revs.get(idx_b, 0)
                 with r1:
                     if editable:
@@ -1980,11 +2071,26 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                         )
                     else:
                         marca = " ✓" if sub.get("aprobado") else ""
-                        st.markdown(f"{sub['nombre']}{marca}")
+                        extra = ""
+                        if sub.get("es_fallback"):
+                            extra = " _(fallback)_"
+                        elif sub.get("origen") == "Detectado (aprox.)":
+                            extra = " _(aprox.)_"
+                        st.markdown(f"{sub['nombre']}{marca}{extra}")
                 with r2:
                     st.caption(evidencia)
+                with r3:
+                    fuente_raw = (sub.get("fuente") or "").strip()
+                    if fuente_raw == "titulo_visual":
+                        st.caption(f"🟠 {estrategia}")
+                    elif fuente_raw in {"numeracion", "titulo_slide"}:
+                        st.caption(f"🟢 {estrategia}")
+                    elif fuente_raw in {"fallback", ""} and sub.get("es_fallback"):
+                        st.caption(f"🔴 {estrategia}")
+                    else:
+                        st.caption(estrategia)
                 if editable:
-                    with r3:
+                    with r4:
                         aprobado = sub.get("aprobado", False)
                         if st.button(
                             "✓",
@@ -1997,7 +2103,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                                 "aprobado"
                             ] = not aprobado
                             st.rerun()
-                    with r4:
+                    with r5:
                         if st.button(
                             "✕",
                             key=f"org_del_sub_{idx_b}_{idx_s}_{iter_key}_{sub_rev}",
@@ -2028,6 +2134,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                                 "nombre": nombre_ns,
                                 "evidencia": "Manual (profesor)",
                                 "origen": "Manual",
+                                "fuente": "manual",
                                 "manual": True,
                                 "aprobado": False,
                             })
@@ -2229,6 +2336,8 @@ def _vista_organizador() -> None:
 
     # ── Output generado ────────────────────────────────────────────────────────
     if st.session_state.get("org_ultimo_output"):
+        _org_render_panel_deteccion()
+
         w = st.session_state.get("org_warning_cardinalidad")
         if w:
             st.warning(_texto_warning_cobertura(w["esperados"], w["generados"]))
@@ -2463,22 +2572,7 @@ def _vista_resumen() -> None:
         f"{m['fidelidad_media']:.3f}" if m["fidelidad_media"] is not None else "—"
     )
     if m["ultima_ejecucion"]:
-        try:
-            _dt = datetime.strptime(m["ultima_ejecucion"], "%Y-%m-%d %H:%M:%S")
-            ultima_txt = f"{_dt.day} {_dt.strftime('%b, %H:%M')}"
-            _delta_s = int((datetime.now() - _dt).total_seconds())
-            if _delta_s < 60:
-                _relativo = "ahora mismo"
-            elif _delta_s < 3600:
-                _relativo = f"hace {_delta_s // 60} min"
-            elif _delta_s < 86400:
-                _relativo = f"hace {_delta_s // 3600}h"
-            else:
-                _d = _delta_s // 86400
-                _relativo = f"hace {_d} día{'s' if _d != 1 else ''}"
-        except ValueError:
-            ultima_txt = m["ultima_ejecucion"]
-            _relativo = None
+        ultima_txt, _relativo = formatear_fecha_relativa(m["ultima_ejecucion"])
     else:
         ultima_txt = "—"
         _relativo = None
@@ -2718,8 +2812,6 @@ with st.sidebar:
     render_marca()
     st.divider()
     if _asignatura_activa:
-        if st.session_state.get("vista_actual") == VISTA_BASE_DATOS:
-            st.session_state["vista_actual"] = VISTAS_NAV[0]
         render_sidebar_workspace(VISTAS_NAV, ICONOS_VISTA, _asignatura_activa)
     else:
         render_sidebar_portfolio(RUTA_DB, RAIZ_MONOREPO)
@@ -2748,5 +2840,7 @@ else:
         _vista_contenido()
     elif vista == "Presentación":
         _vista_presentacion()
+    elif vista == "Base de datos":
+        _vista_base_datos()
     else:
         st.info("Vista en construcción — se integra en el siguiente paso.")

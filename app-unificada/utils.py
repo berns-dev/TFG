@@ -1,17 +1,9 @@
 """Utilidades compartidas de la app unificada (sin dependencia de Streamlit)."""
 
 import os
-import re
-import unicodedata
 from pathlib import Path
 
-
-def slugify(nombre: str) -> str:
-    """Convierte un nombre de asignatura a slug para nombres de carpeta."""
-    s = unicodedata.normalize("NFD", nombre)
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    s = s.lower()
-    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+from shared.text_utils import slugify
 
 
 def preparar_carpetas_asignatura(raiz_monorepo: str, slug: str) -> None:

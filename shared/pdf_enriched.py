@@ -14,12 +14,15 @@ Usado por el Agente Contenido; el Organizador puede reutilizar este módulo en e
 from __future__ import annotations
 
 import io
+import logging
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import BinaryIO
 
 import pdfplumber
+
+_LOGGER = logging.getLogger(__name__)
 
 _NUMBERED_HEADER_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
 _MATH_FONT_SUBSTR = ("math", "symbol", "dingbat", "ding", "mtmi", "cmmi", "cmsy", "msam", "msbm")
@@ -188,7 +191,10 @@ def build_pdf_markdown(source: bytes | Path | str | BinaryIO) -> str | None:
             for npag, pagina in enumerate(pdf.pages, start=1):
                 try:
                     palabras = pagina.extract_words(extra_attrs=["fontname", "size"]) or []
-                except Exception:
+                except Exception as exc:
+                    _LOGGER.warning(
+                        "build_pdf_markdown: página %s sin metadatos (%s)", npag, exc
+                    )
                     palabras = []
                 altura = float(pagina.height or 800.0)
                 paginas_palabras.append((npag, palabras, altura))
@@ -348,7 +354,10 @@ def build_pdf_markdown_pymupdf(source: bytes | Path | str | BinaryIO) -> str | N
         for page in doc:
             try:
                 blocks = page.get_text("dict")["blocks"]
-            except Exception:
+            except Exception as exc:
+                _LOGGER.warning(
+                    "build_pdf_markdown_pymupdf: pasada 1 página sin texto dict (%s)", exc
+                )
                 continue
             for block in blocks:
                 if block.get("type") != 0:

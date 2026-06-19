@@ -1,7 +1,6 @@
 """Pipeline puro: chunk → classify (parallel) → assemble → validate.
 
-Fuente única de la lógica de orquestación compartida entre
-agente-contenido/app.py (standalone) y app-unificada/app.py.
+Lógica de orquestación del Agente Contenido, importada por app-unificada/app.py.
 """
 from __future__ import annotations
 
@@ -47,7 +46,11 @@ def procesar_segmento(
 
     chunks = split_into_chunks(seg_text)
     if not chunks:
-        return [], "", {"ok": True, "errores": [], "fidelity": []}
+        return [], "", {
+            "ok": False,
+            "errores": ["No se generaron fragmentos a partir del texto extraído."],
+            "fidelity": [],
+        }
 
     chunks_to_classify = [contexto_prefix + c for c in chunks] if contexto_prefix else chunks
 
@@ -68,7 +71,11 @@ def procesar_segmento(
             chunks_raw.append(chunk_raw)
 
     if not items:
-        return [], "", {"ok": True, "errores": [], "fidelity": []}
+        return [], "", {
+            "ok": False,
+            "errores": ["Ningún fragmento se clasificó correctamente."],
+            "fidelity": [],
+        }
 
     markdown_body = assemble_subbloque_body(
         items, nombre_subbloque=nombre_subbloque, nombre_del_archivo=nombre_archivo
@@ -93,7 +100,11 @@ def procesar_bloque(
 
     chunks = split_into_chunks(texto)
     if not chunks:
-        return [], "", {"ok": True, "errores": [], "fidelity": []}
+        return [], "", {
+            "ok": False,
+            "errores": ["No se generaron fragmentos a partir del texto extraído."],
+            "fidelity": [],
+        }
 
     ordered: list[dict[str, Any] | None] = [None] * len(chunks)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -112,7 +123,11 @@ def procesar_bloque(
             chunks_raw.append(chunk_raw)
 
     if not items:
-        return [], "", {"ok": True, "errores": [], "fidelity": []}
+        return [], "", {
+            "ok": False,
+            "errores": ["Ningún fragmento se clasificó correctamente."],
+            "fidelity": [],
+        }
 
     markdown = assemble_markdown(items, nombre_del_archivo=nombre_archivo)
     if nombre_bloque and "tema_detectado: No detectado" in markdown:

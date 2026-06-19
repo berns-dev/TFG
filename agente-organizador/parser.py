@@ -1,9 +1,12 @@
 import difflib
 import io
+import logging
 import re
 import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 import pdfplumber
 from pptx import Presentation
@@ -93,6 +96,42 @@ _ETIQUETA_LABEL_RE = re.compile(
     r"|nota|note|remark|aviso)\b",
     re.IGNORECASE,
 )
+
+# Mínimo de líneas numeradas para confiar en la estrategia 1 sin recurrir a visual/PPTX.
+_MIN_CANDIDATOS_NUMERACION = 2
+
+# Etiquetas legibles de la estrategia de detección (UI y logs).
+FUENTE_ETIQUETAS: dict[str, str] = {
+    "numeracion": "Numeración",
+    "titulo_slide": "Diapositiva",
+    "titulo_visual": "Visual",
+    "manual": "Manual",
+    "fallback": "Fallback",
+    "modelo": "Modelo",
+}
+
+
+def etiqueta_fuente(fuente: str) -> str:
+    """Nombre legible de la estrategia de detección."""
+    clave = (fuente or "").strip().lower()
+    return FUENTE_ETIQUETAS.get(clave, fuente or "—")
+
+
+def _format_evidencia_visual(
+    texto: str,
+    npag: int,
+    *,
+    indice: bool = False,
+    sz_pt: float | None = None,
+) -> str:
+    """Evidencia verificable para títulos detectados por estilo visual."""
+    titulo_corto = texto.strip()
+    if len(titulo_corto) > 60:
+        titulo_corto = titulo_corto[:57] + "…"
+    prefijo = "Índice" if indice else "Visual"
+    if sz_pt is not None and sz_pt > 0:
+        return f"{prefijo}: «{titulo_corto}» (p. {npag}, {sz_pt}pt)"
+    return f"{prefijo}: «{titulo_corto}» (p. {npag})"
 
 
 def normalizar_subtema(texto: str) -> str:
@@ -489,9 +528,20 @@ def _buscar_candidatos_indice(
             if not clave or clave in vistos:
                 continue
             vistos.add(clave)
-            candidatos.append({"titulo": texto, "referencia": f"Índice (p. {npag})"})
+            candidatos.append({
+                "titulo": texto,
+                "referencia": _format_evidencia_visual(texto, npag, indice=True),
+            })
 
         if len(candidatos) >= 2:
+            bloque_nivel = sum(
+                1
+                for c in candidatos
+                if _BLOQUE_NIVEL_RE.match(normalizar_subtema(c["titulo"]))
+            )
+            # Índice del curso completo (Tema 1, Bloque 2…) — no subtemas de un bloque.
+            if bloque_nivel / len(candidatos) >= 0.5:
+                return []
             return candidatos
 
     return []
@@ -529,7 +579,12 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
             for npag, pagina in enumerate(pdf.pages, start=1):
                 try:
                     palabras = pagina.extract_words(extra_attrs=["fontname", "size"]) or []
-                except Exception:
+                except Exception as exc:
+                    _log.warning(
+                        "extraer_titulos_visuales_pdf: página %s sin metadatos (%s)",
+                        npag,
+                        exc,
+                    )
                     palabras = []
                 alturas_pagina[npag] = float(pagina.height or 800)
                 for p in palabras:
@@ -646,42 +701,24 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
                     continue
 
                 vistos_norm.add(clave)
-                resultados.append({"titulo": texto, "referencia": f"p. {npag}"})
+                resultados.append({
+                    "titulo": texto,
+                    "referencia": _format_evidencia_visual(
+                        texto, npag, sz_pt=sz_dom
+                    ),
+                })
 
-    except Exception:
+    except Exception as exc:
+        _log.warning("extraer_titulos_visuales_pdf: fallo en extracción visual (%s)", exc)
         return []
 
     return resultados
 
 
-def extraer_candidatos_con_evidencia(
-    texto: str,
-    nombre_archivo: str = "",
-    archivo_bytes: bytes | None = None,
-) -> list[dict]:
-    """Detecta subbloques con referencia estructural verificable.
-
-    Prioridad de fuentes (estricta — si la primera produce resultados, no se
-    consulta la siguiente):
-
-    1. Secciones numeradas en el texto extraído (e.g. '3.2. Título').
-       Aplica a PDF y PPTX. Evidencia: 'Sección 3.2'.
-    2. Títulos de diapositiva en PPTX (placeholder idx=0 o heurística).
-       Solo si no se encontraron secciones numeradas. Evidencia: 'Slide N'.
-    3. Títulos visuales por tamaño/estilo de fuente en PDF (heurística de
-       frecuencia). Solo para PDF sin secciones numeradas. Evidencia: 'p. N'.
-
-    Retorna [] si ninguna fuente ofrece señales verificables — el bloque debe
-    tratarse como un único subbloque (fallback); el caller es responsable de
-    marcarlo en la interfaz.
-
-    Cada ítem: {nombre: str, evidencia: str, fuente: str}
-      - fuente: 'numeracion' | 'titulo_slide' | 'titulo_visual'
-    """
+def _extraer_candidatos_numeracion(texto: str) -> list[dict]:
+    """Estrategia 1 — secciones numeradas en texto plano."""
     candidatos: list[dict] = []
     vistos: set[str] = set()
-
-    # Estrategia 1 — secciones numeradas
     for linea in (texto or "").splitlines():
         linea = linea.strip()
         if _PAGINA_FOOTER_RE.match(linea):
@@ -690,18 +727,13 @@ def extraer_candidatos_con_evidencia(
             continue
         m_pref = re.match(r"^(\d+(?:\.\d+)*)\.?\s*", linea)
         prefijo = m_pref.group(1) if m_pref else ""
-        # Regla A: prefijos que empiezan por 0 (e.g. "0.8") nunca son secciones reales.
         if prefijo.split(".")[0] == "0":
             continue
-        # Regla C: prefijo sin punto → número suelto (ítem de lista, ecuación,
-        # pie de figura). Secciones docentes reales siempre tienen forma X.Y o X.Y.Z.
         if "." not in prefijo:
             continue
         nombre = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", linea).strip()
-        # Regla B: título en minúscula → prosa partida en líneas, no sección.
         if nombre and nombre[0].islower():
             continue
-        # Regla D: etiqueta de figura/tabla/nota → no es título de sección.
         if _ETIQUETA_LABEL_RE.match(nombre):
             continue
         if not nombre or not es_subtema_valido(nombre):
@@ -712,13 +744,36 @@ def extraer_candidatos_con_evidencia(
         evidencia = f"Sección {prefijo}" if prefijo else "Sección numerada"
         candidatos.append({"nombre": nombre, "evidencia": evidencia, "fuente": "numeracion"})
         vistos.add(clave)
+    return candidatos
 
-    if candidatos:
-        return candidatos
+
+def extraer_candidatos_con_evidencia(
+    texto: str,
+    nombre_archivo: str = "",
+    archivo_bytes: bytes | None = None,
+) -> list[dict]:
+    """Detecta subbloques con referencia estructural verificable.
+
+    Estrategias (por prioridad al fusionar duplicados por nombre):
+      1. Secciones numeradas — evidencia «Sección X.Y»
+      2. Títulos de diapositiva PPTX — evidencia «Slide N»
+      3. Títulos visuales PDF — evidencia con texto y página
+
+    La numeración solo corta la cascada si hay >= ``_MIN_CANDIDATOS_NUMERACION``
+    candidatos; con una sola línea dudosa se complementa con PPTX/visual.
+
+    Cada ítem: {nombre, evidencia, fuente}
+      - fuente: 'numeracion' | 'titulo_slide' | 'titulo_visual'
+    """
+    candidatos_num = _extraer_candidatos_numeracion(texto)
+    if len(candidatos_num) >= _MIN_CANDIDATOS_NUMERACION:
+        return candidatos_num
+
+    candidatos: list[dict] = list(candidatos_num)
+    vistos: set[str] = {normalizar_subtema(c["nombre"]) for c in candidatos}
 
     ext = Path(nombre_archivo).suffix.lower() if nombre_archivo else ""
 
-    # Estrategia 2 — títulos de diapositiva PPTX
     if ext == ".pptx" and archivo_bytes is not None:
         for item in extraer_titulos_slides_pptx(archivo_bytes):
             if not es_subtema_valido(item["titulo"]):
@@ -733,10 +788,6 @@ def extraer_candidatos_con_evidencia(
             })
             vistos.add(clave)
 
-    if candidatos:
-        return candidatos
-
-    # Estrategia 3 — títulos visuales por tamaño/estilo de fuente (PDF sin numeración)
     if ext == ".pdf" and archivo_bytes is not None:
         for item in extraer_titulos_visuales_pdf(archivo_bytes):
             clave = normalizar_subtema(item["titulo"])
@@ -749,7 +800,7 @@ def extraer_candidatos_con_evidencia(
             })
             vistos.add(clave)
 
-    return candidatos  # lista vacía → fallback obligatorio
+    return candidatos
 
 
 _EVIDENCIA_VACIA = frozenset({
@@ -783,28 +834,53 @@ def _mapa_evidencia_candidatos(candidatos: list[dict]) -> dict[str, str]:
     return mapa
 
 
+def _mapa_fuentes_candidatos(candidatos: list[dict]) -> dict[str, str]:
+    """Índice nombre_normalizado → fuente de detección."""
+    mapa: dict[str, str] = {}
+    for cand in candidatos:
+        clave = normalizar_subtema(cand.get("nombre", ""))
+        fuente = (cand.get("fuente") or "").strip()
+        if clave and fuente:
+            mapa[clave] = fuente
+    return mapa
+
+
+def _resolver_metadatos_subtema(
+    nombre: str,
+    mapa_ev: dict[str, str],
+    mapa_fuente: dict[str, str],
+    *,
+    umbral_fuzzy: float = 0.85,
+) -> tuple[str, str, bool]:
+    """Resuelve evidencia y fuente por nombre (exacto o aproximado)."""
+    clave = normalizar_subtema(nombre)
+    if not clave:
+        return "", "", False
+    if clave in mapa_ev:
+        return mapa_ev[clave], mapa_fuente.get(clave, ""), False
+    mejor_ev, mejor_fuente, mejor_ratio = "", "", 0.0
+    for clave_cand, ev in mapa_ev.items():
+        ratio = difflib.SequenceMatcher(None, clave, clave_cand).ratio()
+        if ratio > mejor_ratio:
+            mejor_ratio = ratio
+            mejor_ev = ev
+            mejor_fuente = mapa_fuente.get(clave_cand, "")
+    if mejor_ratio >= umbral_fuzzy:
+        return mejor_ev, mejor_fuente, True
+    return "", "", False
+
+
 # ---------------------------------------------------------------------------
 # Subtemas confirmados para el prompt (app-unificada / standalone)
 # ---------------------------------------------------------------------------
 
 
-def construir_subtemas_confirmados(
-    texto_guia: str,
+def detectar_candidatos_por_material(
     textos_teoria: list[str],
     archivos_teoria: list[str],
     archivos_bytes: list[bytes],
-) -> list[list[dict]] | None:
-    """Lista cerrada de subtemas por material para el prompt del Organizador.
-
-    Si la guía docente aporta bloques temáticos (sección Contenidos), devuelve
-    ``None`` para que el LLM estructure subtemas libremente desde guía + material
-    (comportamiento del standalone validado). Solo impone lista cerrada cuando
-    no hay guía y el material tiene señales estructurales fiables.
-    """
-    candidatos_guia = extraer_subtemas_guia(texto_guia)
-    if len(candidatos_guia) >= 2:
-        return None
-
+) -> list[list[dict]]:
+    """Ejecuta la detección determinista en cada material (siempre)."""
     resultado: list[list[dict]] = []
     for texto_mat, nombre_arch, bytes_arch in zip(
         textos_teoria, archivos_teoria, archivos_bytes
@@ -818,13 +894,42 @@ def construir_subtemas_confirmados(
                     "nombre": c["nombre"],
                     "evidencia": c["evidencia"],
                     "origen": "Detectado",
+                    "fuente": c.get("fuente", ""),
                 }
                 for c in cands_mat
             ])
         else:
             resultado.append([])
-
     return resultado
+
+
+def modo_prompt_libre(texto_guia: str) -> bool:
+    """True si la guía aporta bloques temáticos y el LLM estructura subtemas libremente."""
+    return len(extraer_subtemas_guia(texto_guia)) >= 2
+
+
+def construir_subtemas_confirmados(
+    texto_guia: str,
+    textos_teoria: list[str],
+    archivos_teoria: list[str],
+    archivos_bytes: list[bytes],
+    candidatos_precalculados: list[list[dict]] | None = None,
+) -> list[list[dict]] | None:
+    """Lista cerrada de subtemas por material para el prompt del Organizador.
+
+    Si la guía docente aporta bloques temáticos (sección Contenidos), devuelve
+    ``None`` para modo libre. La detección determinista se ejecuta aparte vía
+    ``detectar_candidatos_por_material()`` — no se omite por tener guía.
+    """
+    if modo_prompt_libre(texto_guia):
+        return None
+
+    if candidatos_precalculados is not None:
+        return candidatos_precalculados
+
+    return detectar_candidatos_por_material(
+        textos_teoria, archivos_teoria, archivos_bytes
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -871,8 +976,14 @@ def enriquecer_bloques_con_evidencia_detectada(
     if not bloques:
         return bloques
 
-    mapas_por_archivo = {
+    mapas_ev_por_archivo = {
         archivos_teoria[i]: _mapa_evidencia_candidatos(
+            candidatos_por_material[i] if i < len(candidatos_por_material) else []
+        )
+        for i in range(len(archivos_teoria))
+    }
+    mapas_fuente_por_archivo = {
+        archivos_teoria[i]: _mapa_fuentes_candidatos(
             candidatos_por_material[i] if i < len(candidatos_por_material) else []
         )
         for i in range(len(archivos_teoria))
@@ -885,15 +996,29 @@ def enriquecer_bloques_con_evidencia_detectada(
             bloque_out.get("nombre", ""), archivos_teoria, idx_bloque
         )
         bloque_out["archivo_origen"] = archivo
-        mapa = mapas_por_archivo.get(archivo, {})
+        mapa_ev = mapas_ev_por_archivo.get(archivo, {})
+        mapa_fuente = mapas_fuente_por_archivo.get(archivo, {})
 
         subtemas_out: list[dict] = []
         for sub in bloque_out.get("subtemas", []):
             sub_out = dict(sub)
-            if evidencia_es_vacia(sub_out.get("evidencia", "")):
-                ev = _buscar_evidencia_subtema(sub_out.get("nombre", ""), mapa)
-                if ev:
+            nombre_sub = sub_out.get("nombre", "")
+            if sub_out.get("manual"):
+                sub_out.setdefault("fuente", "manual")
+            elif sub_out.get("es_fallback"):
+                sub_out.setdefault("fuente", "fallback")
+            necesita_ev = evidencia_es_vacia(sub_out.get("evidencia", ""))
+            necesita_fuente = not (sub_out.get("fuente") or "").strip()
+            if necesita_ev or necesita_fuente:
+                ev, fuente, aprox = _resolver_metadatos_subtema(
+                    nombre_sub, mapa_ev, mapa_fuente
+                )
+                if ev and necesita_ev:
                     sub_out["evidencia"] = ev
+                if fuente and necesita_fuente:
+                    sub_out["fuente"] = fuente
+                if aprox and sub_out.get("origen", "Detectado") == "Detectado":
+                    sub_out["origen"] = "Detectado (aprox.)"
             subtemas_out.append(sub_out)
         bloque_out["subtemas"] = subtemas_out
         enriquecidos.append(bloque_out)
@@ -1484,10 +1609,7 @@ def parsear_bloques_organizador(markdown: str) -> list[dict]:
             if not col1:
                 continue
 
-            if len(celdas) >= 4 and _es_celda_horas(col2):
-                evidencia = celdas[2]
-                origen = celdas[3]
-            elif len(celdas) >= 4:
+            if len(celdas) >= 4:
                 evidencia = celdas[2]
                 origen = celdas[3]
             elif len(celdas) == 3 and _es_celda_horas(col2):
@@ -1515,6 +1637,7 @@ def parsear_bloques_organizador(markdown: str) -> list[dict]:
                 "evidencia": evidencia,
                 "origen": origen,
                 "es_fallback": es_fallback,
+                "fuente": "",
             })
 
         bloques.append({
