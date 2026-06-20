@@ -27,20 +27,26 @@ def contar_marcadores(markdown: str) -> dict:
     """Cuenta marcadores de extracción incompleta en el markdown curado.
 
     Returns:
-        Dict con claves ecuacion, ecuacion_parcial, texto_ilegible, figura,
-        total_problemas (suma de los tres primeros).
+        Dict con claves ecuacion, ecuacion_parcial, ecuacion_reconstruida,
+        texto_ilegible, figura, total_problemas (suma de los tres marcadores
+        sin resolver), requiere_revision (ecuaciones reconstruidas por el LLM
+        a partir de contexto, ver classifier.py SYSTEM_PROMPT regla 11 — no
+        son un problema de extracción, pero el profesor debe verificarlas).
     """
     texto = markdown or ""
     ecuacion = len(re.findall(r"\[ECUACION\]", texto))
     ecuacion_parcial = len(re.findall(r"\[ECUACION_PARCIAL:[^\]]+\]", texto))
+    ecuacion_reconstruida = len(re.findall(r"\[ECUACION_RECONSTRUIDA:[^\]]+\]", texto))
     texto_ilegible = len(re.findall(r"\[TEXTO_ILEGIBLE\]", texto))
     figura = len(re.findall(r"\[FIGURA:[^\]]+\]", texto))
     return {
         "ecuacion": ecuacion,
         "ecuacion_parcial": ecuacion_parcial,
+        "ecuacion_reconstruida": ecuacion_reconstruida,
         "texto_ilegible": texto_ilegible,
         "figura": figura,
         "total_problemas": ecuacion + ecuacion_parcial + texto_ilegible,
+        "requiere_revision": ecuacion_reconstruida,
     }
 
 

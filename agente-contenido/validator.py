@@ -42,8 +42,13 @@ _STOPWORDS = {
 # (cabeceras de página/diapositiva, figuras, texto ilegible). No deben contar
 # como "términos clave" perdidos: penalizaban la fidelidad sin reflejar pérdida
 # real de contenido del profesor.
+# Los marcadores de ecuación rota también se excluyen: si el clasificador los
+# sustituye legítimamente por [ECUACION_RECONSTRUIDA: ...] (ver SYSTEM_PROMPT,
+# regla 11), el literal "ecuacion_parcial"/"ecuacion_no_extraible" deja de estar
+# en el output a propósito, y no debe leerse como pérdida de contenido.
 _STRUCTURAL_MARKER_RE = re.compile(
-    r"\[(?:PAGINA|SLIDE)\s+\d+\]|\[TEXTO_ILEGIBLE\]|\[FIGURA[^\]]*\]",
+    r"\[(?:PAGINA|SLIDE)\s+\d+\]|\[TEXTO_ILEGIBLE\]|\[FIGURA[^\]]*\]"
+    r"|\[ECUACION_PARCIAL:[^\]]*\]|\[ECUACION_NO_EXTRAIBLE\]|\[ECUACION_RECONSTRUIDA:[^\]]*\]",
     re.IGNORECASE,
 )
 

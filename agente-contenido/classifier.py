@@ -34,6 +34,10 @@ REGLAS ABSOLUTAS:
 8. Las figuras o imagenes se marcan exactamente como: [FIGURA: descripcion si existe]
 9. Detecta el idioma del fragmento (espanol o ingles) y mantenlo en el output. Los marcadores tecnicos [FIGURA], [TEXTO_ILEGIBLE] son siempre en espanol.
 10. NO comentes sobre el fragmento en si: su completitud, su procedencia, su numero de pagina, ni el proceso de extraccion. NO crees secciones tipo "Contexto" / "Context" ni notas del estilo "el material aparece incompleto", "no esta especificado en el fragmento" o "al final del fragmento proporcionado". Si en el material hay una nota tecnica del autor (p. ej. "Nota: el valor 625 proviene de..."), transcribela tal cual; lo prohibido son tus observaciones propias sobre el texto recibido.
+11. EXCEPCION CONTROLADA (la unica a la regla 1) - ecuaciones rotas: si el fragmento contiene [ECUACION_PARCIAL: ...] o [ECUACION_NO_EXTRAIBLE] y el propio fragmento aporta evidencia textual suficiente para reconstruir la ecuacion sin ambiguedad (variables o unidades definidas cerca, enunciado del ejemplo, o nombre explicito de una formula conocida), puedes sustituir el marcador por la formula reconstruida en LaTeX, precedida exactamente por [ECUACION_RECONSTRUIDA: justificacion breve de la reconstruccion]. Condiciones estrictas:
+    - La evidencia debe estar en este mismo fragmento, nunca en conocimiento general aislado sin anclaje textual.
+    - Si hay cualquier duda razonable sobre la forma exacta, notacion, signos o constantes, NO reconstruyas: deja el marcador original [ECUACION_PARCIAL]/[ECUACION_NO_EXTRAIBLE] sin modificar.
+    - Nunca elimines el marcador sin sustituirlo por [ECUACION_RECONSTRUIDA: ...]; debe quedar siempre localizable para que el profesor lo revise.
 
 FORMATO DE SECCIONES EN EL OUTPUT:
 El campo "contenido_markdown" debe usar estos nombres de seccion fijos segun el idioma detectado.
