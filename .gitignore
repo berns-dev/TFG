@@ -28,3 +28,8 @@ datos-prueba/
 docs/
 CLAUDE.md
 **/CLAUDE.md
+
+# Herramientas internas y material de proceso — no forman parte del sistema
+/tools/
+.claude/
+design_handoff_suite_docente/
