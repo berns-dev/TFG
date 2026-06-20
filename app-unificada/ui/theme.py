@@ -75,6 +75,75 @@ def inject_theme(
         }}
         [data-baseweb="menu"] li {{ color: {TEXTO} !important; }}
 
+        /* ── Captions — vence el leak de "dark mode" del navegador/SO en
+           texto secundario (evidencia, estrategia, metadatos) ── */
+        .stCaption, [data-testid="stCaptionContainer"],
+        [data-testid="stCaptionContainer"] p,
+        [data-testid="stCaptionContainer"] span,
+        [data-testid="stCaptionContainer"] small {{
+            color: {TEXTO_ATENUADO} !important;
+            opacity: 1 !important;
+        }}
+
+        /* ── st.status — mismo leak en el label/icono de la cabecera ── */
+        [data-testid="stStatusWidget"] {{
+            background-color: #fff !important;
+            border-color: {BORDE} !important;
+        }}
+        [data-testid="stStatusWidget"] summary,
+        [data-testid="stStatusWidget"] p,
+        [data-testid="stStatusWidget"] span,
+        [data-testid="stStatusWidget"] label {{
+            color: {TEXTO} !important;
+        }}
+
+        /* ── File uploader — dropzone, nombre de fichero, botón "Browse files" ── */
+        [data-testid="stFileUploaderDropzone"] {{
+            background-color: #F8FAFC !important;
+            border-color: {BORDE} !important;
+        }}
+        [data-testid="stFileUploaderDropzoneInstructions"],
+        [data-testid="stFileUploaderDropzoneInstructions"] span,
+        [data-testid="stFileUploaderDropzoneInstructions"] small {{
+            color: {TEXTO_SEC} !important;
+        }}
+        [data-testid="stFileUploaderDropzoneInstructions"] svg {{
+            fill: {TEXTO_SEC} !important;
+        }}
+        [data-testid="stFileUploaderDropzone"] button {{
+            background-color: #fff !important;
+            color: {TEXTO} !important;
+            border: 1px solid #D7DEE7 !important;
+            box-shadow: none !important;
+        }}
+        [data-testid="stFileUploaderFile"] {{
+            background-color: transparent !important;
+        }}
+        [data-testid="stFileUploaderFileName"],
+        [data-testid="stFileUploaderFileData"],
+        [data-testid="stFileUploaderFileData"] span {{
+            color: {TEXTO} !important;
+        }}
+        [data-testid="stFileUploaderFileData"] small {{
+            color: {TEXTO_ATENUADO} !important;
+        }}
+        [data-testid="stFileUploaderDeleteBtn"] button {{
+            background-color: transparent !important;
+            color: {TEXTO_SEC} !important;
+        }}
+        [data-testid="stFileUploaderDeleteBtn"] button svg {{
+            fill: {TEXTO_SEC} !important;
+        }}
+
+        /* ── Logo institucional en chip blanco (sidebar navy) ── */
+        .sd-brand .logo.logo-img {{
+            width: auto; height: 96px; background: #fff;
+            border-radius: 12px; padding: 12px 20px;
+        }}
+        .sd-brand .logo.logo-img img {{
+            height: 100%; width: auto; display: block;
+        }}
+
         /* Default global de botones "primary" — solo área principal */
         [data-testid="stAppViewContainer"] .main .stButton > button[kind="primary"] {{
             background: {acento} !important; border-color: {acento_oscuro} !important;
@@ -201,8 +270,15 @@ def inject_theme(
         div[class*="st-key-sd_asig_item_"] [data-testid="stProgress"] {{
             margin-top: 0 !important;
         }}
-        div[class*="st-key-sd_asig_item_"] [data-testid="stProgress"] > div > div {{
-            background: {acento} !important;
+        /* ── st.progress nativo: estructura real es
+           stProgress > [data-baseweb="progress-bar"] > div(BarContainer) > div(Bar=track) > div(BarProgress=fill)
+           El track por defecto puede salir oscuro si el navegador fuerza su
+           propio tema sobre Streamlit; lo forzamos siempre claro. ── */
+        [data-testid="stProgress"] [data-baseweb="progress-bar"] > div > div {{
+            background-color: #E0E6EE !important;
+        }}
+        [data-testid="stProgress"] [data-baseweb="progress-bar"] > div > div > div {{
+            background-color: {acento} !important;
         }}
 
         /* ── Flujo pipeline: 3 tarjetas separadas + flechas ── */
@@ -253,6 +329,9 @@ def inject_theme(
         .st-key-sd_tabla_mapa [data-testid="stHorizontalBlock"] {{
             align-items: center !important;
             gap: 6px !important;
+        }}
+        .st-key-sd_tabla_mapa [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child {{
+            padding-right: 18px !important;
         }}
         .st-key-sd_tabla_mapa div[class*="st-key-mapa_btn_"] .stButton > button {{
             min-height: 36px !important;
@@ -421,8 +500,8 @@ def inject_theme(
         }}
 
         .sd-brand {{
-            display: flex; align-items: center; gap: 11px;
-            padding: 20px 8px 16px; margin-bottom: 4px;
+            display: flex; flex-direction: column; align-items: center; gap: 10px;
+            padding: 22px 12px 18px; margin-bottom: 4px; text-align: center;
             border-bottom: 1px solid rgba(255,255,255,.09);
         }}
         .sd-brand .logo {{
@@ -681,6 +760,32 @@ def inject_theme(
             background: #EAF2FA !important;
             border-color: {acento} !important;
             color: {acento_oscuro} !important;
+        }}
+
+        /* ── "Nueva visualización" y flecha del mapa curricular: mismo patrón
+           a prueba de bombas que la tarjeta de asignatura (fondo y color en
+           literal, color:inherit en cada hijo, sin depender del tema nativo). ── */
+        div[class*="st-key-prs_nueva_"] .stButton > button,
+        .st-key-sd_tabla_mapa div[class*="st-key-mapa_btn_"] .stButton > button {{
+            background-color: #fff !important;
+            border: 1px solid #D7DEE7 !important;
+            color: {TEXTO_SEC} !important;
+            box-shadow: none !important;
+        }}
+        div[class*="st-key-prs_nueva_"] .stButton > button:hover,
+        .st-key-sd_tabla_mapa div[class*="st-key-mapa_btn_"] .stButton > button:hover {{
+            background-color: #F8FAFC !important;
+            border-color: {acento} !important;
+            color: {acento_oscuro} !important;
+        }}
+        div[class*="st-key-prs_nueva_"] .stButton > button p,
+        div[class*="st-key-prs_nueva_"] .stButton > button span,
+        div[class*="st-key-prs_nueva_"] .stButton > button div,
+        .st-key-sd_tabla_mapa div[class*="st-key-mapa_btn_"] .stButton > button p,
+        .st-key-sd_tabla_mapa div[class*="st-key-mapa_btn_"] .stButton > button span,
+        .st-key-sd_tabla_mapa div[class*="st-key-mapa_btn_"] .stButton > button div {{
+            color: inherit !important;
+            background-color: transparent !important;
         }}
 
         div[class*="st-key-sd_composer_row_"] [data-testid="stVerticalBlock"] textarea {{
@@ -1143,6 +1248,21 @@ def inject_button_fix(
             background: transparent !important;
         }}
 
+        /* ── File uploader: botón "Browse files" y botón de borrar fichero ── */
+        .stApp [data-testid="stFileUploaderDropzone"] button[class*="st-emotion-cache"] {{
+            background-color: #FFFFFF !important;
+            background: #FFFFFF !important;
+            color: #334155 !important;
+            border: 1px solid #D7DEE7 !important;
+            box-shadow: none !important;
+        }}
+        .stApp [data-testid="stFileUploaderDeleteBtn"] button[class*="st-emotion-cache"] {{
+            background-color: transparent !important;
+            background: transparent !important;
+            color: #475667 !important;
+            border: none !important;
+        }}
+
         /* Excepciones por componente */
         div[class*="st-key-landing_btn_nuevo"] .stButton > button {{
             background: #F3FAF6 !important; border-color: #CFE9DA !important; color: #1F7A4D !important;
@@ -1159,6 +1279,15 @@ def inject_button_fix(
         }}
         .st-key-sd_tabla_mapa div[class*="st-key-mapa_btn_"] .stButton > button {{
             background: #fff !important; border: 1px solid #D7DEE7 !important; color: {acento} !important;
+        }}
+        div[class*="st-key-prs_nueva_"] .stButton > button {{
+            background-color: #fff !important; border: 1px solid #D7DEE7 !important; color: {texto} !important;
+        }}
+        [data-testid="stProgress"] [data-baseweb="progress-bar"] > div > div {{
+            background-color: #E0E6EE !important;
+        }}
+        [data-testid="stProgress"] [data-baseweb="progress-bar"] > div > div > div {{
+            background-color: {acento} !important;
         }}
         div[class*="st-key-sd_input_dashed_"] .stButton > button {{
             background: #F8FAFC !important; border: 1.5px dashed #C3D0DF !important;

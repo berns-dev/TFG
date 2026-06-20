@@ -55,6 +55,7 @@ from ui.shell import (  # noqa: E402
 from ui.sidebar import render_lista_asignaturas, render_sidebar  # noqa: E402
 from ui.theme import inject_theme, inject_button_fix  # noqa: E402
 from utils import (  # noqa: E402
+    cargar_logo_base64,
     fichero_existe,
     formatear_fecha_relativa,
     preparar_carpetas_asignatura,
@@ -71,8 +72,6 @@ ACENTO = "#185FA5"
 ACENTO_OSCURO = "#0C447C"
 
 VISTAS_NAV = ["Resumen", "Inputs", "Organizador", "Contenido", "Presentación", "Base de datos"]
-# Vista de depuración (no aparece en la navegación lateral).
-VISTA_BASE_DATOS = "Base de datos"
 VISTAS = VISTAS_NAV
 
 TITULOS_SECCION = {
@@ -1434,7 +1433,8 @@ def _vista_contenido() -> None:
                         with st.container(gap=None, key=f"sd_render_box_{tema_id}"):
                             st.markdown(texto_actual or "_Sin contenido_")
                 with tab_prev:
-                    st.markdown(st.session_state.get(ta_key, texto_actual) or "_Sin contenido_")
+                    with st.container(gap=None, key=f"sd_render_box_prev_{tema_id}"):
+                        st.markdown(st.session_state.get(ta_key, texto_actual) or "_Sin contenido_")
                 with tab_md:
                     if estado == "aprobado":
                         st.text_area(
@@ -1446,10 +1446,11 @@ def _vista_contenido() -> None:
                             label_visibility="collapsed",
                         )
                     else:
-                        st.code(
-                            st.session_state.get(ta_key, texto_actual) or "",
-                            language="markdown",
-                        )
+                        with st.container(gap=None, key=f"sd_render_box_md_{tema_id}"):
+                            st.code(
+                                st.session_state.get(ta_key, texto_actual) or "",
+                                language="markdown",
+                            )
                         texto_actual = st.session_state.get(ta_key, texto_md)
 
                 if estado == "aprobado":
@@ -1682,7 +1683,12 @@ def _vista_presentacion() -> None:
         _prs_init_taller(tema_id)
         taller = st.session_state[_prs_taller_key(tema_id)]
 
-        if st.button("Nueva visualización", key=f"prs_nueva_{tema_id}", type="secondary"):
+        if st.button(
+            "Nueva visualización",
+            key=f"prs_nueva_{tema_id}",
+            type="secondary",
+            use_container_width=True,
+        ):
             st.session_state[_prs_taller_key(tema_id)] = {
                 "viz_id": None, "html": "", "slug": "", "titulo": "", "historial": [],
             }
@@ -2115,6 +2121,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                         key=f"org_del_bloque_{idx_b}_{iter_key}",
                         help="Eliminar bloque",
                         type="secondary",
+                        use_container_width=True,
                     ):
                         _org_sync_widgets_a_bloques(iter_key)
                         st.session_state["org_organizacion_bloques"].pop(idx_b)
@@ -2179,6 +2186,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                             key=f"org_ok_{idx_b}_{idx_s}_{iter_key}_{sub_rev}",
                             help="Aprobar subbloque",
                             type="primary" if aprobado else "secondary",
+                            use_container_width=True,
                         ):
                             _org_sync_widgets_a_bloques(iter_key)
                             st.session_state["org_organizacion_bloques"][idx_b]["subtemas"][idx_s][
@@ -2191,6 +2199,7 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                             key=f"org_del_sub_{idx_b}_{idx_s}_{iter_key}_{sub_rev}",
                             help="Eliminar subtema",
                             type="secondary",
+                            use_container_width=True,
                         ):
                             _org_sync_widgets_a_bloques(iter_key)
                             st.session_state["org_organizacion_bloques"][idx_b]["subtemas"].pop(idx_s)
@@ -2209,7 +2218,12 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                         placeholder="+ Añadir subbloque…",
                     )
                 with a2:
-                    if st.button("+ Añadir", key=f"org_btn_ns_{idx_b}_{ctr_s}", type="secondary"):
+                    if st.button(
+                        "+ Añadir",
+                        key=f"org_btn_ns_{idx_b}_{ctr_s}",
+                        type="secondary",
+                        use_container_width=True,
+                    ):
                         _org_sync_widgets_a_bloques(iter_key)
                         nombre_ns = st.session_state.get(f"org_ns_nombre_{idx_b}_{ctr_s}", "").strip()
                         if nombre_ns:
@@ -2256,7 +2270,12 @@ def _org_render_vista_organizacion(slug: str, *, editable: bool) -> None:
                 )
         with nb3:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("+ Añadir bloque", key=f"org_btn_nb_{ctr_b}", type="secondary"):
+            if st.button(
+                "+ Añadir bloque",
+                key=f"org_btn_nb_{ctr_b}",
+                type="secondary",
+                use_container_width=True,
+            ):
                 _org_sync_widgets_a_bloques(iter_key)
                 nombre_nb = st.session_state.get(f"org_nb_nombre_{ctr_b}", "").strip()
                 if nombre_nb:
@@ -2304,6 +2323,7 @@ def _render_valoracion_profesor(
         "Guardar valoración",
         key=f"{key_prefix}_btn_{asignatura_id}",
         type="secondary",
+        use_container_width=True,
     ):
         try:
             db.upsert_valoracion_profesor(asignatura_id, agente, puntuacion, RUTA_DB)
@@ -2547,7 +2567,12 @@ def _vista_organizador() -> None:
             col_regen, col_info = st.columns([1, 4])
             with col_regen:
                 regenerar = (
-                    st.button("🔄 Regenerar", type="secondary", key="org_btn_regen")
+                    st.button(
+                        "🔄 Regenerar",
+                        type="secondary",
+                        key="org_btn_regen",
+                        use_container_width=True,
+                    )
                     if st.session_state["org_iteracion"] < 5
                     else False
                 )
@@ -2814,6 +2839,7 @@ def _vista_resumen() -> None:
                     key=f"mapa_btn_{fila['tema_id']}",
                     help="Abrir en Contenido",
                     type="secondary",
+                    use_container_width=True,
                 ):
                     st.session_state["vista_actual"] = "Contenido"
                     st.session_state["cnt_tema_idx"] = fila["idx"]
@@ -3030,7 +3056,12 @@ def _vista_landing() -> None:
                 placeholder="Ej. Mecánica de Fluidos",
                 label_visibility="collapsed",
             )
-            if st.button("Crear asignatura", type="primary", key="landing_btn_crear_asignatura"):
+            if st.button(
+                "Crear asignatura",
+                type="primary",
+                key="landing_btn_crear_asignatura",
+                use_container_width=True,
+            ):
                 nombre_limpio = (nombre or "").strip()
                 if not nombre_limpio:
                     st.error("Introduce un nombre.")
@@ -3095,7 +3126,7 @@ with st.sidebar:
         RUTA_DB,
         _asignatura_activa,
         _vista_actual,
-        vistas_debug=[VISTA_BASE_DATOS],
+        logo_b64=cargar_logo_base64(RAIZ_APP),
     )
 
 if not _asignatura_activa:

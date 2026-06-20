@@ -1,5 +1,6 @@
 """Utilidades compartidas de la app unificada (sin dependencia de Streamlit)."""
 
+import base64
 import os
 from pathlib import Path
 
@@ -15,6 +16,15 @@ def preparar_carpetas_asignatura(raiz_monorepo: str, slug: str) -> None:
 
 def fichero_existe(ruta_disco: str) -> bool:
     return bool(ruta_disco) and os.path.isfile(ruta_disco)
+
+
+def cargar_logo_base64(raiz_app: str) -> str | None:
+    """Logo institucional (Universidad de Oviedo) en base64 para incrustar en HTML."""
+    ruta = os.path.join(raiz_app, "assets", "logo_uniovi.png")
+    if not os.path.isfile(ruta):
+        return None
+    with open(ruta, "rb") as f:
+        return base64.b64encode(f.read()).decode("ascii")
 
 
 def formatear_fecha_relativa(fecha_iso: str | None) -> tuple[str, str | None]:

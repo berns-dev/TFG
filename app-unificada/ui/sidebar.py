@@ -13,11 +13,19 @@ from ui.shell import PIPELINE_VISTAS
 NAV_VISTAS = ["Resumen", "Inputs"]
 
 
-def _render_brand() -> None:
+def _render_brand(logo_b64: str | None = None) -> None:
+    if logo_b64:
+        logo_html = (
+            '<div class="logo logo-img">'
+            f'<img src="data:image/png;base64,{logo_b64}" alt="Universidad de Oviedo">'
+            "</div>"
+        )
+    else:
+        logo_html = '<div class="logo">SD</div>'
     st.markdown(
-        """
+        f"""
         <div class="sd-brand">
-          <div class="logo">SD</div>
+          {logo_html}
           <div>
             <div class="titulo">Suite Docente IA</div>
             <div class="sub">U. de Oviedo · EPI Gijón</div>
@@ -118,10 +126,11 @@ def render_sidebar(
     asignatura_activa: str | None,
     vista_actual: str,
     vistas_debug: list[str] | None = None,
+    logo_b64: str | None = None,
 ) -> None:
     """Sidebar unificada — sin asignatura activa queda solo la marca (la
     elección de proyecto vive en la pantalla de inicio del área principal)."""
-    _render_brand()
+    _render_brand(logo_b64)
 
     if not asignatura_activa:
         return
