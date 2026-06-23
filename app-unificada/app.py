@@ -1671,12 +1671,6 @@ def _vista_presentacion() -> None:
 
     aprobadas = db.listar_visualizaciones_aprobadas(tema_id, RUTA_DB)
 
-    if st.session_state.pop("topbar_nav_export", None):
-        st.info(
-            "La exportación es **por bloque**. Usa los controles del panel derecho "
-            "o la sección inferior para generar PDF o presentación HTML."
-        )
-
     col_main, col_rail = st.columns([2.5, 1])
 
     with col_main:
@@ -1720,7 +1714,10 @@ def _vista_presentacion() -> None:
 
         with st.container(gap=None, key="sd_card_composer"):
             prompt_key = f"prs_prompt_{tema_id}"
-            if prompt_key not in st.session_state:
+            prompt_clear_key = f"prs_prompt_clear_{tema_id}"
+            if st.session_state.pop(prompt_clear_key, False):
+                st.session_state[prompt_key] = ""
+            elif prompt_key not in st.session_state:
                 st.session_state[prompt_key] = ""
 
             with st.container(gap=None, key=f"sd_composer_row_{tema_id}"):
@@ -1838,7 +1835,7 @@ def _vista_presentacion() -> None:
                     st.session_state[_prs_taller_key(tema_id)] = {
                         "viz_id": None, "html": "", "slug": "", "titulo": "", "historial": [],
                     }
-                    st.session_state[prompt_key] = ""
+                    st.session_state[prompt_clear_key] = True
                     st.success("Visualización aprobada.")
                     st.rerun()
 

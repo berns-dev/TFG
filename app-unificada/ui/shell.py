@@ -12,12 +12,6 @@ from ui.components import estado_contenido
 PIPELINE_VISTAS = ["Organizador", "Contenido", "Presentación"]
 
 
-def export_ready(asignatura_id: int, ruta_db: str) -> tuple[bool, dict]:
-    prog = db.get_progreso_asignatura(asignatura_id, ruta_db)
-    listo = prog["total"] > 0 and prog["aprobados"] == prog["total"]
-    return listo, prog
-
-
 def pipeline_subtitulos(asignatura_id: int, ruta_db: str) -> dict[str, str]:
     """Subtítulos del pipeline en sidebar/banner."""
     conn = db.get_connection(ruta_db)
@@ -52,22 +46,18 @@ def pipeline_subtitulos(asignatura_id: int, ruta_db: str) -> dict[str, str]:
 
 
 def render_topbar(asignatura: str, asignatura_id: int, ruta_db: str) -> None:
-    listo, prog = export_ready(asignatura_id, ruta_db)
+    prog = db.get_progreso_asignatura(asignatura_id, ruta_db)
     pct = int(prog["porcentaje"]) if prog["total"] > 0 else 0
     bar_w = f"{pct}%"
     nombre_esc = html.escape(asignatura)
 
-    if listo:
-        hint = "Listo para exportar"
-        hint_color = "#2E815A"
-    else:
-        total = prog["total"]
-        apr = prog["aprobados"]
-        hint = f"{apr}/{total} aprobados" if total > 0 else "Sin bloques"
-        hint_color = "#9AA7B6"
+    total = prog["total"]
+    apr = prog["aprobados"]
+    hint = f"{apr}/{total} aprobados" if total > 0 else "Sin bloques"
+    hint_color = "#9AA7B6"
 
     with st.container(gap=None, key="sd_topbar_wrap"):
-        t1, t2, t3 = st.columns([2.4, 1.0, 1.6])
+        t1, t2 = st.columns([2.4, 1.0])
         with t1:
             st.markdown(
                 f'<div class="asig-titulo">{nombre_esc}</div>',
@@ -87,31 +77,6 @@ def render_topbar(asignatura: str, asignatura_id: int, ruta_db: str) -> None:
                 """,
                 unsafe_allow_html=True,
             )
-        with t3:
-            with st.container(gap=None, key="sd_topbar_actions"):
-                b1, b2 = st.columns(2)
-                with b1:
-                    if st.button(
-                        "Presentación HTML",
-                        key="topbar_export_html",
-                        disabled=not listo,
-                        use_container_width=True,
-                        type="secondary",
-                    ):
-                        st.session_state["vista_actual"] = "Presentación"
-                        st.session_state["topbar_nav_export"] = "html"
-                        st.rerun()
-                with b2:
-                    if st.button(
-                        "Descargar PDF",
-                        key="topbar_export_pdf",
-                        disabled=not listo,
-                        type="primary",
-                        use_container_width=True,
-                    ):
-                        st.session_state["vista_actual"] = "Presentación"
-                        st.session_state["topbar_nav_export"] = "pdf"
-                        st.rerun()
 
 
 def render_pipeline_banner(vista_actual: str, subs: dict[str, str]) -> None:

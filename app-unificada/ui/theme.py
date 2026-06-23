@@ -45,11 +45,11 @@ def inject_theme(
            widgets nativos (text_area, code, selectbox, expander) usen
            variantes oscuras que no cubren nuestros overrides puntuales. */
         html {{ color-scheme: light !important; }}
-        .stApp, [data-testid="stAppViewContainer"], .main {{
+        .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
             color-scheme: light !important;
         }}
         /* Variables de tema Streamlit — evita botones oscuros por defecto */
-        .stApp, [data-testid="stAppViewContainer"], section.main {{
+        .stApp, [data-testid="stAppViewContainer"], section[data-testid="stMain"] {{
             --primary-color: {acento} !important;
             --background-color: {FONDO_APP} !important;
             --secondary-background-color: #FFFFFF !important;
@@ -145,11 +145,11 @@ def inject_theme(
         }}
 
         /* Default global de botones "primary" — solo área principal */
-        [data-testid="stAppViewContainer"] .main .stButton > button[kind="primary"] {{
+        [data-testid="stAppViewContainer"] [data-testid="stMain"] .stButton > button[kind="primary"] {{
             background: {acento} !important; border-color: {acento_oscuro} !important;
             color: #fff !important;
         }}
-        [data-testid="stAppViewContainer"] .main .stButton > button[kind="primary"]:hover {{
+        [data-testid="stAppViewContainer"] [data-testid="stMain"] .stButton > button[kind="primary"]:hover {{
             background: {acento_oscuro} !important; border-color: {acento_oscuro} !important;
         }}
         .stButton > button:disabled {{
@@ -168,25 +168,25 @@ def inject_theme(
         }}
 
         /* Botones secondary solo en área principal (no sidebar) */
-        [data-testid="stAppViewContainer"] .main .stButton > button[kind="secondary"] {{
+        [data-testid="stAppViewContainer"] [data-testid="stMain"] .stButton > button[kind="secondary"] {{
             background: #fff !important;
             border: 1px solid #D7DEE7 !important;
             color: #475667 !important;
         }}
-        [data-testid="stAppViewContainer"] .main .stButton > button[kind="secondary"]:hover {{
+        [data-testid="stAppViewContainer"] [data-testid="stMain"] .stButton > button[kind="secondary"]:hover {{
             background: #F8FAFC !important;
             border-color: {acento} !important;
             color: {acento_oscuro} !important;
         }}
         /* Botones sin type explícito en main (evita cuadros oscuros por defecto) */
-        [data-testid="stAppViewContainer"] .main .stButton > button:not([kind="primary"]) {{
+        [data-testid="stAppViewContainer"] [data-testid="stMain"] .stButton > button:not([kind="primary"]) {{
             background: #fff !important;
             border: 1px solid #D7DEE7 !important;
             color: #475667 !important;
         }}
-        [data-testid="stAppViewContainer"] .main .stButton > button:not([kind="primary"]) p,
-        [data-testid="stAppViewContainer"] .main .stButton > button:not([kind="primary"]) span,
-        [data-testid="stAppViewContainer"] .main .stButton > button:not([kind="primary"]) div {{
+        [data-testid="stAppViewContainer"] [data-testid="stMain"] .stButton > button:not([kind="primary"]) p,
+        [data-testid="stAppViewContainer"] [data-testid="stMain"] .stButton > button:not([kind="primary"]) span,
+        [data-testid="stAppViewContainer"] [data-testid="stMain"] .stButton > button:not([kind="primary"]) div {{
             color: inherit !important;
         }}
 
@@ -391,7 +391,7 @@ def inject_theme(
             padding-left: 2.25rem !important;
             padding-right: 2.25rem !important;
         }}
-        [data-testid="stAppViewContainer"] > .main {{
+        [data-testid="stAppViewContainer"] > [data-testid="stMain"] {{
             background: {FONDO_APP} !important;
         }}
 
@@ -1196,9 +1196,9 @@ def inject_button_fix(
         f"""
         <style id="sd-button-fix">
         /* Vence clases Emotion dinámicas en el propio <button> */
-        .stApp [data-testid="stAppViewContainer"] section.main button[class*="st-emotion-cache"][kind="secondary"],
-        .stApp [data-testid="stAppViewContainer"] section.main button[class*="st-emotion-cache"][data-testid="baseButton-secondary"],
-        .stApp [data-testid="stAppViewContainer"] section.main button[class*="st-emotion-cache"][data-testid="stBaseButton-secondary"] {{
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[class*="st-emotion-cache"][kind="secondary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[class*="st-emotion-cache"][data-testid="baseButton-secondary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[class*="st-emotion-cache"][data-testid="stBaseButton-secondary"] {{
             background-color: #FFFFFF !important;
             background-image: none !important;
             background: #FFFFFF !important;
@@ -1207,13 +1207,13 @@ def inject_button_fix(
             box-shadow: none !important;
         }}
         /* ── FIX GLOBAL botones negros (vence estilos Emotion de Streamlit) ── */
-        .stApp [data-testid="stAppViewContainer"] section.main button[kind="secondary"],
-        .stApp [data-testid="stAppViewContainer"] section.main button[data-testid="baseButton-secondary"],
-        .stApp [data-testid="stAppViewContainer"] section.main button[data-testid="stBaseButton-secondary"],
-        .stApp [data-testid="stAppViewContainer"] section.main .stButton button[kind="secondary"],
-        .stApp [data-testid="stAppViewContainer"] section.main .stButton button[data-testid="baseButton-secondary"],
-        .stApp [data-testid="stAppViewContainer"] section.main div[data-testid="stButton"] button[kind="secondary"],
-        .stApp [data-testid="stAppViewContainer"] section.main div[data-testid="stButton"] button[data-testid="baseButton-secondary"] {{
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[kind="secondary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[data-testid="baseButton-secondary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] .stButton button[kind="secondary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] .stButton button[data-testid="baseButton-secondary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] div[data-testid="stButton"] button[kind="secondary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"] {{
             background-color: #FFFFFF !important;
             background-image: none !important;
             background: #FFFFFF !important;
@@ -1221,29 +1221,29 @@ def inject_button_fix(
             border: 1px solid #D7DEE7 !important;
             box-shadow: none !important;
         }}
-        .stApp [data-testid="stAppViewContainer"] section.main button[kind="secondary"] p,
-        .stApp [data-testid="stAppViewContainer"] section.main button[kind="secondary"] span,
-        .stApp [data-testid="stAppViewContainer"] section.main button[kind="secondary"] div,
-        .stApp [data-testid="stAppViewContainer"] section.main button[data-testid="baseButton-secondary"] p,
-        .stApp [data-testid="stAppViewContainer"] section.main button[data-testid="baseButton-secondary"] span,
-        .stApp [data-testid="stAppViewContainer"] section.main .stButton button p,
-        .stApp [data-testid="stAppViewContainer"] section.main .stButton button span {{
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[kind="secondary"] p,
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[kind="secondary"] span,
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[kind="secondary"] div,
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[data-testid="baseButton-secondary"] p,
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[data-testid="baseButton-secondary"] span,
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] .stButton button p,
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] .stButton button span {{
             color: inherit !important;
             background: transparent !important;
             background-color: transparent !important;
         }}
-        .stApp [data-testid="stAppViewContainer"] section.main button[kind="primary"],
-        .stApp [data-testid="stAppViewContainer"] section.main button[data-testid="baseButton-primary"],
-        .stApp [data-testid="stAppViewContainer"] section.main button[data-testid="stBaseButton-primary"] {{
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[kind="primary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[data-testid="baseButton-primary"],
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[data-testid="stBaseButton-primary"] {{
             background-color: {acento} !important;
             background: {acento} !important;
             color: #FFFFFF !important;
             border-color: {acento_oscuro} !important;
         }}
-        .stApp [data-testid="stAppViewContainer"] section.main button[kind="primary"] p,
-        .stApp [data-testid="stAppViewContainer"] section.main button[kind="primary"] span,
-        .stApp [data-testid="stAppViewContainer"] section.main button[data-testid="baseButton-primary"] p,
-        .stApp [data-testid="stAppViewContainer"] section.main button[data-testid="baseButton-primary"] span {{
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[kind="primary"] p,
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[kind="primary"] span,
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[data-testid="baseButton-primary"] p,
+        .stApp [data-testid="stAppViewContainer"] section[data-testid="stMain"] button[data-testid="baseButton-primary"] span {{
             color: #FFFFFF !important;
             background: transparent !important;
         }}
