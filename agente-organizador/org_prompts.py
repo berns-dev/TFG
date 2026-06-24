@@ -267,6 +267,156 @@ Estas horas NO se incluyen en la distribución temática de bloques y subtemas.
     return prompt, idioma
 
 
+def construir_prompt_guia_first(
+    texto_guia: str,
+    estructura_guia: list[dict],
+    textos_teoria: list[str],
+    textos_contexto: list[str] | None = None,
+    horas_totales: int | None = None,
+    horas_laboratorio: int = 0,
+) -> tuple[str, str]:
+    """Prompt con la estructura de bloques+subtemas TOMADA DE LA GUÍA DOCENTE.
+
+    A diferencia de ``construir_prompt`` (donde el nº de bloques se anclaba al nº
+    de archivos de teoría y el LLM estructuraba los subtemas a partir del
+    material), aquí la guía docente es la fuente autoritativa de la estructura:
+    número de bloques, orden, numeración y subtemas vienen de ``estructura_guia``
+    (extraída de forma determinista por ``parser.extraer_estructura_guia`` +
+    fallback por material para los bloques que la guía no subdivide).
+
+    El LLM solo: (1) reparte las horas por bloque de forma proporcional al
+    volumen de material, y (2) escribe el Markdown con el formato canónico,
+    copiando la estructura y la evidencia que se le entrega. No infiere ni añade
+    bloques ni subtemas.
+
+    ``estructura_guia`` es una lista de dicts ``{numero, nombre, subtemas}`` donde
+    cada subtema es ``{nombre, evidencia, origen}``.
+    """
+    textos_contexto = textos_contexto or []
+    idioma = detectar_idioma(textos_teoria or [texto_guia])
+    if idioma == "english":
+        instruccion_idioma = (
+            "LANGUAGE INSTRUCTION: Write your entire response in English "
+            "(headers, labels, justifications). Keep block and subtopic names "
+            "exactly as given below."
+        )
+    else:
+        instruccion_idioma = (
+            "INSTRUCCIÓN DE IDIOMA: Escribe toda tu respuesta en español. "
+            "Conserva los nombres de bloque y subtema exactamente como se dan abajo."
+        )
+
+    n_bloques = len(estructura_guia)
+
+    # Estructura autoritativa, bloque a bloque, con su lista cerrada de subtemas.
+    # Cada subtema se da como tres campos separados por « ‖ » para que el modelo
+    # los copie a las tres columnas SIN corchetes, comillas ni etiquetas.
+    lineas_estructura: list[str] = []
+    for b in estructura_guia:
+        num = b.get("numero")
+        encabezado = f"Bloque {num} — {b['nombre']}" if num is not None else f"Bloque — {b['nombre']}"
+        lineas_estructura.append(encabezado)
+        subtemas = b.get("subtemas") or []
+        if subtemas:
+            for s in subtemas:
+                ev = s.get("evidencia") or "Guía docente"
+                origen = s.get("origen") or "Guía docente"
+                lineas_estructura.append(
+                    f"    subtema={s['nombre']} ‖ evidencia={ev} ‖ origen={origen}"
+                )
+        else:
+            lineas_estructura.append(
+                "    [SIN SUBTEMAS EN LA GUÍA: crea UN único subtema cuyo nombre "
+                "es el nombre completo del bloque; evidencia=Sin señal verificable; "
+                "origen=Fallback]"
+            )
+    bloque_estructura = "\n".join(lineas_estructura)
+
+    if horas_totales is not None:
+        instruccion_horas = (
+            f"DISTRIBUCIÓN DE HORAS — RESTRICCIÓN ABSOLUTA:\n"
+            f"La guía docente indica {horas_totales}h lectivas (TE + PA) para repartir "
+            f"entre los {n_bloques} bloques. Repártelas de forma proporcional al volumen "
+            f"de material de cada bloque (páginas/slides). Mínimo 0.5h por bloque. "
+            f"La suma debe ser EXACTAMENTE {horas_totales}h; verifica internamente antes de responder."
+        )
+    else:
+        instruccion_horas = (
+            "DISTRIBUCIÓN DE HORAS: La guía no especifica las horas totales. "
+            "Reparte de forma proporcional al volumen de material de cada bloque."
+        )
+
+    materiales_teoria_formateados = [
+        f"=== TEORÍA {i} ===\n{t}" for i, t in enumerate(textos_teoria, start=1)
+    ]
+    bloque_teoria = "\n\n".join(materiales_teoria_formateados).strip() or "[VACÍO]"
+    materiales_contexto_formateados = [
+        f"=== CONTEXTO {i} ===\n{t}" for i, t in enumerate(textos_contexto, start=1)
+    ]
+    bloque_contexto = "\n\n".join(materiales_contexto_formateados).strip() or "[VACÍO]"
+
+    prompt = f"""
+{instruccion_idioma}
+
+CONTEXTO: La estructura temática (bloques y subtemas) ya está RESUELTA a partir de
+la guía docente. Tu tarea es reproducirla en el formato canónico y repartir las horas.
+
+ESTRUCTURA AUTORITATIVA DE LA GUÍA DOCENTE — REPRODÚCELA EXACTAMENTE:
+{bloque_estructura}
+
+RESTRICCIONES — PRIORIDAD MÁXIMA:
+1. Debes generar EXACTAMENTE {n_bloques} bloques, en este mismo orden y con esta
+   misma numeración. No añadas, elimines, fusiones ni reordenes bloques.
+2. Los subtemas de cada bloque son los listados arriba (lista cerrada). No añadas,
+   elimines ni renombres ninguno. Copia su Evidencia y su Origen tal cual.
+3. Para un bloque marcado «[SIN SUBTEMAS EN LA GUÍA]», crea UN único subtema con el
+   nombre completo del bloque, Evidencia "Sin señal verificable", Origen "Fallback".
+4. No puedes inventar contenido: todo bloque/subtema sale de la estructura de arriba.
+
+{instruccion_horas}
+
+Formato de salida:
+- Devuelve el resultado en Markdown siguiendo LITERALMENTE esta plantilla:
+  # DISTRIBUCIÓN TEMÁTICA — {{NOMBRE_ASIGNATURA}}
+
+  **Horas lectivas disponibles:** {{TOTAL}}h ({{TE}}h TE + {{PA}}h PA) | **Prácticas de laboratorio:** {{PL}}h *(informativo)*
+
+  ---
+
+  ## Bloque {{N}} — {{NOMBRE_BLOQUE}} · {{HORAS_BLOQUE}}h
+
+  | Subtema | Evidencia | Origen |
+  |---------|-----------|--------|
+  | {{subtema}} | {{evidencia}} | {{origen}} |
+
+  *(repetir para cada bloque)*
+
+  ---
+
+  > 🔬 Prácticas de laboratorio: {{PL}}h (sesiones prácticas, no incluidas en la distribución temática)
+- No añadas ninguna sección, análisis, conteo ni verificación fuera de esa plantilla.
+- Cada subtema de la estructura viene como «subtema=… ‖ evidencia=… ‖ origen=…».
+  Rellena la columna Subtema con el valor de «subtema=», la columna Evidencia con el
+  valor de «evidencia=» y la columna Origen con el valor de «origen=». Copia los valores
+  TAL CUAL, SIN las etiquetas «subtema=/evidencia=/origen=», SIN corchetes y SIN comillas.
+- Las horas usan punto decimal (.) y solo aparecen en el encabezado del bloque.
+
+El NOMBRE de la asignatura y las horas se toman de la guía docente:
+{texto_guia}
+
+## MATERIALES DE TEORÍA (solo para estimar el volumen/horas de cada bloque):
+{bloque_teoria}
+
+## MATERIALES DE CONTEXTO (orientativo):
+{bloque_contexto}
+
+NOTA INFORMATIVA (PL): La guía docente indica {horas_laboratorio}h de prácticas de laboratorio,
+no incluidas en la distribución temática.
+""".strip()
+
+    return prompt, idioma
+
+
 def construir_prompt_solo_guia(
     texto_guia: str,
     horas_totales: int | None = None,

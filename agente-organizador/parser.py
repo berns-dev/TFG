@@ -335,19 +335,74 @@ def extraer_subtemas_candidatos(texto: str) -> list[str]:
     return candidatos
 
 
-def extraer_subtemas_guia(texto: str) -> list[str]:
-    """Extrae los subtemas reales de la sección 'Contenidos' de una guía docente.
+# ---------------------------------------------------------------------------
+# Extracción bloque-consciente y multi-formato de la sección 'Contenidos'.
+#
+# Las guías docentes UniOvi presentan los contenidos en (al menos) cinco
+# formatos distintos, observados en datos-prueba:
+#   1. «Tema N. Nombre» + subtemas numerados «N.M. Subtema»     (Álgebra)
+#   2. «N.- Nombre», sin subtemas                                (Elementos)
+#   3. «N. Nombre» + subtemas en líneas SIN numerar debajo       (Fabricación)
+#   4. «N. Nombre» + subtemas sin numerar (con párrafo introductorio) (Oleo)
+#   5. «N. Nombre: sub. sub. sub.» — subtemas EN LÍNEA tras ':'  (Tec. materiales)
+#
+# El bloque temático SIEMPRE está en la guía; los subtemas están en 4 de 5
+# formatos (Elementos es la excepción). Esta función recupera la estructura
+# bloque→subtemas de forma determinista respetando los cinco formatos.
+# ---------------------------------------------------------------------------
 
-    Las guías UniOvi numeran TODAS sus secciones de primer nivel (1..8), de las
-    cuales solo 'Contenidos' contiene temario real; el resto es boilerplate
-    administrativo. Acotar la extracción a la sección 'Contenidos' excluye de
-    raíz cabeceras, filas de tablas de horas y prosa de metodología/evaluación.
+# Cabecera de bloque con etiqueta explícita: «Tema 1. …», «Unidad 3 —», …
+_BLOQUE_GUIA_ETIQUETA_RE = re.compile(
+    r"^(?:tema|unidad|bloque|cap[ií]tulo)\s+(\d+)\s*[.\-:)]*\s*(.+)$", re.I
+)
+# Cabecera de bloque con guión UniOvi: «4.-Tornillos…».
+_BLOQUE_GUIA_GUION_RE = re.compile(r"^(\d+)\s*\.\-\s*(.+)$")
+# Cabecera de bloque numérica de primer nivel: «1. Nombre» (el nombre NO empieza
+# por dígito, lo que excluye los subtemas jerárquicos «2.1. …»).
+_BLOQUE_GUIA_NUM_RE = re.compile(r"^(\d+)\.\s+(\D.*)$")
+# Subtema jerárquico «N.M[.K…] Nombre» (al menos dos niveles).
+_SUBTEMA_NM_RE = re.compile(r"^\d+\.\d")
+# Líneas de pie de página / cabecera de la propia guía a ignorar dentro de la sección.
+_GUIA_BOILERPLATE_RE = re.compile(
+    r"^(gu[ií]a docente\b|\d+\s+de\s+\d+\b|volumen total de trabajo)", re.I
+)
 
-    Estrategia: localizar la cabecera 'N. Contenidos' y recoger los subtemas
-    numerados hasta la siguiente cabecera de sección administrativa. Si no se
-    encuentra 'Contenidos' (guía con otro formato), se degrada a
-    extraer_subtemas_candidatos() sobre todo el texto. En ambos caminos se aplica
-    el filtro de calidad es_subtema_valido().
+
+def _match_bloque_guia(linea: str) -> tuple[int | None, str] | None:
+    """Si la línea es una cabecera de bloque temático, devuelve (numero, nombre)."""
+    m = _BLOQUE_GUIA_ETIQUETA_RE.match(linea)
+    if m:
+        return int(m.group(1)), m.group(2).strip()
+    m = _BLOQUE_GUIA_GUION_RE.match(linea)
+    if m:
+        return int(m.group(1)), m.group(2).strip()
+    m = _BLOQUE_GUIA_NUM_RE.match(linea)
+    if m:
+        return int(m.group(1)), m.group(2).strip()
+    return None
+
+
+def _split_subtemas_en_linea(cola: str) -> list[str]:
+    """Divide la lista de subtemas embebida tras ':' (formato Tec. materiales).
+
+    «Ensayos de tracción, compresión y flexión. Comportamiento de aleaciones…»
+    → ['Ensayos de tracción…', 'Comportamiento de aleaciones…', …]
+    """
+    partes = re.split(r"\.\s+", cola.strip())
+    return [p.strip().rstrip(".").strip() for p in partes if p.strip()]
+
+
+def extraer_estructura_guia(texto: str) -> list[dict]:
+    """Recupera la estructura bloque→subtemas de la sección 'Contenidos'.
+
+    Devuelve ``[{numero, nombre, subtemas:[str,…]}, …]`` en orden de aparición.
+    Soporta los cinco formatos documentados arriba. Los subtemas pasan el filtro
+    de calidad ``es_subtema_valido()`` y se deduplican dentro de cada bloque.
+    Un bloque sin subtemas en la guía (caso Elementos) devuelve ``subtemas: []``;
+    el llamador decide entonces recurrir a los materiales de teoría.
+
+    Si no se localiza la sección 'Contenidos' (guía con otro formato), devuelve
+    ``[]`` y el llamador debe degradar a la detección por materiales.
     """
     lineas = [l.strip() for l in (texto or "").splitlines()]
 
@@ -357,30 +412,106 @@ def extraer_subtemas_guia(texto: str) -> list[str]:
         if m and normalizar_subtema(m.group(1)).startswith("contenidos"):
             inicio = i
             break
-
     if inicio is None:
-        # Formato no reconocido: degradar a extracción genérica (ya filtrada).
-        return extraer_subtemas_candidatos(texto)
+        return []
 
-    candidatos: list[str] = []
-    vistos: set[str] = set()
+    bloques: list[dict] = []
+    actual: dict | None = None
+    # Cola cruda acumulada de subtemas en línea (formato Tec. materiales), para
+    # re-dividir tras unir las líneas continuadas por el ajuste de pdfplumber.
+    cola_inline = ""
+
+    def _cerrar_inline() -> None:
+        nonlocal cola_inline
+        if actual is not None and actual.get("_inline") and cola_inline:
+            for s in _split_subtemas_en_linea(cola_inline):
+                _añadir_subtema(actual, s)
+        cola_inline = ""
+
+    def _añadir_subtema(bloque: dict, nombre: str) -> None:
+        nombre = _limpiar_viñeta_texto(nombre)
+        if not nombre or not es_subtema_valido(nombre):
+            return
+        clave = normalizar_subtema(nombre)
+        vistos = bloque.setdefault("_vistos", set())
+        if clave and clave not in vistos:
+            bloque["subtemas"].append(nombre)
+            vistos.add(clave)
+
     for ln in lineas[inicio + 1:]:
-        if _PAGINA_FOOTER_RE.match(ln):
+        if not ln or _PAGINA_FOOTER_RE.match(ln) or _GUIA_BOILERPLATE_RE.match(ln):
             continue
-        if not _linea_es_subtema_numerado(ln):
+
+        cabecera = _match_bloque_guia(ln)
+        if cabecera is not None:
+            numero, nombre = cabecera
+            norm = normalizar_subtema(nombre)
+            # Fin de la sección 'Contenidos': la siguiente cabecera administrativa
+            # («6. Metodología y plan de trabajo», etc.).
+            if _es_seccion_administrativa(norm):
+                break
+            _cerrar_inline()
+            # Formato Tec. materiales: título y subtemas van EN LÍNEA, separados
+            # por ':' o por '. ' (punto + espacio). El primer separador parte el
+            # título del bloque del resto (lista de subtemas, posiblemente con
+            # ajuste de línea en las siguientes filas). Un punto final sin espacio
+            # («… y matrices.») no cuenta como separador → formato por líneas.
+            sep = re.search(r":\s*|\.\s+", nombre)
+            if sep is not None:
+                nombre_bloque = nombre[: sep.start()].strip()
+                actual = {"numero": numero, "nombre": nombre_bloque, "subtemas": []}
+                bloques.append(actual)
+                actual["_inline"] = True
+                cola_inline = nombre[sep.end():].strip()
+            else:
+                actual = {"numero": numero, "nombre": nombre, "subtemas": []}
+                bloques.append(actual)
             continue
-        nombre = _nombre_desde_linea_subtema(ln)
-        norm = normalizar_subtema(nombre)
-        if not norm:
+
+        if actual is None:
+            # Prosa introductoria antes del primer bloque: se ignora.
             continue
-        # Fin de la sección 'Contenidos': siguiente cabecera administrativa.
-        if _es_seccion_administrativa(norm):
-            break
-        if not es_subtema_valido(nombre) or norm in vistos:
+
+        if _SUBTEMA_NM_RE.match(ln):
+            _cerrar_inline()
+            _añadir_subtema(actual, _nombre_desde_linea_subtema(ln))
             continue
-        candidatos.append(nombre)
-        vistos.add(norm)
-    return candidatos
+
+        # Línea sin numerar bajo un bloque.
+        if actual.get("_inline"):
+            # Continuación (ajuste de línea) de la lista de subtemas en línea.
+            cola_inline += " " + ln
+        else:
+            # Formato Fabricación/Oleo: cada línea es un subtema independiente.
+            _añadir_subtema(actual, ln)
+
+    _cerrar_inline()
+
+    for b in bloques:
+        b.pop("_vistos", None)
+        b.pop("_inline", None)
+    return bloques
+
+
+def extraer_subtemas_guia(texto: str) -> list[str]:
+    """Lista plana de subtemas de la sección 'Contenidos' (compatibilidad).
+
+    Aplana ``extraer_estructura_guia()`` (multi-formato, bloque-consciente). Si
+    no se encuentra la sección 'Contenidos', degrada a la extracción genérica
+    numerada ``extraer_subtemas_candidatos()`` (ya filtrada por calidad).
+    """
+    estructura = extraer_estructura_guia(texto)
+    if not estructura:
+        return extraer_subtemas_candidatos(texto)
+    subtemas: list[str] = []
+    vistos: set[str] = set()
+    for bloque in estructura:
+        for s in bloque["subtemas"]:
+            clave = normalizar_subtema(s)
+            if clave and clave not in vistos:
+                subtemas.append(s)
+                vistos.add(clave)
+    return subtemas
 
 
 def hay_discrepancia(lista_a: list[str], lista_b: list[str]) -> bool:
@@ -1003,6 +1134,130 @@ def construir_subtemas_confirmados(
     return detectar_candidatos_por_material(
         textos_teoria, archivos_teoria, archivos_bytes
     )
+
+
+def _tokens_significativos(texto: str) -> set[str]:
+    """Tokens normalizados de ≥3 caracteres y no puramente numéricos."""
+    return {
+        t for t in normalizar_subtema(texto).split()
+        if len(t) >= 3 and not t.isdigit()
+    }
+
+
+def _asignar_archivos_a_bloques(
+    nombres_bloques: list[str], archivos: list[str]
+) -> dict[int, str]:
+    """Asignación global bloque→archivo por solape de tokens (1-a-1 cuando es posible).
+
+    ``resolver_archivo_bloque`` empareja cada bloque por separado y cae a un
+    fallback posicional sin sentido cuando ningún nombre casa bien (observado en
+    Elementos: «Cojinetes» → TEMA7, «Uniones soldadas» → Tornillos). Aquí se
+    calcula el solape de tokens entre el nombre del bloque y el stem del archivo
+    y se asignan los mejores pares primero, sin reutilizar un archivo mientras
+    queden libres. Así «Cojinetes»→Cojinetes y «Uniones soldadas»→Soldadura.
+    """
+    if not archivos:
+        return {}
+    stems = {ar: _tokens_significativos(Path(ar).stem) for ar in archivos}
+    candidatos: list[tuple[float, int, str]] = []
+    for i, nb in enumerate(nombres_bloques):
+        tb = _tokens_significativos(nb)
+        for ar in archivos:
+            inter = tb & stems[ar]
+            if inter:
+                # Coeficiente de solape sobre el conjunto menor: robusto a la
+                # disparidad de longitud entre nombre de bloque y nombre de fichero.
+                score = len(inter) / max(1, min(len(tb), len(stems[ar])))
+                candidatos.append((score, i, ar))
+    candidatos.sort(key=lambda c: c[0], reverse=True)
+
+    asignacion: dict[int, str] = {}
+    archivos_usados: set[str] = set()
+    for score, i, ar in candidatos:
+        if i in asignacion or ar in archivos_usados:
+            continue
+        asignacion[i] = ar
+        archivos_usados.add(ar)
+
+    # Bloques sin solape de tokens: reparte archivos libres por orden; si no
+    # quedan, asigna por posición como último recurso.
+    libres = [ar for ar in archivos if ar not in archivos_usados]
+    for i in range(len(nombres_bloques)):
+        if i in asignacion:
+            continue
+        if libres:
+            asignacion[i] = libres.pop(0)
+        else:
+            asignacion[i] = archivos[i] if i < len(archivos) else archivos[0]
+    return asignacion
+
+
+def construir_estructura_para_prompt(
+    estructura_guia: list[dict],
+    textos_teoria: list[str],
+    archivos_teoria: list[str],
+    archivos_bytes: list[bytes],
+) -> list[dict]:
+    """Resuelve la estructura bloque→subtemas para el prompt guía-first.
+
+    - Bloque CON subtemas en la guía → subtemas con Origen «Guía docente».
+    - Bloque SIN subtemas (caso Elementos) → detección determinista sobre el
+      material cuyo nombre mejor casa con el bloque (``resolver_archivo_bloque``);
+      Origen «Detectado». Si el material tampoco aporta señal, ``subtemas: []`` y
+      el prompt aplica el fallback de bloque único.
+
+    Devuelve ``[{numero, nombre, subtemas:[{nombre, evidencia, origen}]}, …]``.
+    """
+    cands_por_archivo: list[list[dict]] = []
+    asignacion: dict[int, str] = {}
+    if archivos_teoria:
+        cands_por_archivo = detectar_candidatos_por_material(
+            textos_teoria, archivos_teoria, archivos_bytes
+        )
+        # Solo los bloques sin subtemas en la guía necesitan archivo de fallback.
+        idx_sin_subtemas = [
+            i for i, b in enumerate(estructura_guia) if not (b.get("subtemas") or [])
+        ]
+        if idx_sin_subtemas:
+            sub = _asignar_archivos_a_bloques(
+                [estructura_guia[i]["nombre"] for i in idx_sin_subtemas], archivos_teoria
+            )
+            asignacion = {idx_sin_subtemas[k]: v for k, v in sub.items()}
+
+    resultado: list[dict] = []
+    for i, bloque in enumerate(estructura_guia):
+        subtemas_guia = bloque.get("subtemas") or []
+        if subtemas_guia:
+            subtemas = [
+                {
+                    "nombre": s,
+                    "evidencia": "Guía docente — Contenidos",
+                    "origen": "Guía docente",
+                }
+                for s in subtemas_guia
+            ]
+        else:
+            subtemas = []
+            archivo = asignacion.get(i, "")
+            if archivo in archivos_teoria:
+                idx = archivos_teoria.index(archivo)
+                if idx < len(cands_por_archivo):
+                    subtemas = [
+                        {
+                            "nombre": c["nombre"],
+                            "evidencia": c["evidencia"],
+                            "origen": "Detectado",
+                        }
+                        for c in cands_por_archivo[idx]
+                    ]
+        resultado.append(
+            {
+                "numero": bloque.get("numero"),
+                "nombre": bloque["nombre"],
+                "subtemas": subtemas,
+            }
+        )
+    return resultado
 
 
 # ---------------------------------------------------------------------------

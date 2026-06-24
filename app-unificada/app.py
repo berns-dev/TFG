@@ -844,27 +844,24 @@ def _org_generar_organizacion(
             st.write("📄 Extrayendo texto de la guía docente...")
             texto_guia = _org_parser.extraer_texto(guia_docente.getvalue(), guia_docente.name)
 
-            st.write("📚 Extrayendo y clasificando materiales de teoría...")
+            st.write("📚 Extrayendo materiales de teoría...")
+            # Sin clasificación teoría/contexto (junio 2026): solo se suben
+            # materiales de teoría. El heurístico de "contexto" causaba falsos
+            # positivos (un deck de teoría con slide "Contents" se descartaba
+            # entero). La estructura ya no depende de clasificar materiales.
             textos_teoria: list[str] = []
             textos_contexto: list[str] = []
             archivos_teoria: list[str] = []
             archivos_teoria_bytes: list[bytes] = []
-            archivos_contexto: list[str] = []
 
             for archivo in materiales_teoria:
                 try:
                     archivo_bytes = archivo.getvalue()
                     texto_material = _org_parser.extraer_texto(archivo_bytes, archivo.name)
-                    categoria = _org_parser.clasificar_archivo(archivo.name, texto_material)
-                    if categoria == "contexto":
-                        textos_contexto.append(texto_material)
-                        archivos_contexto.append(archivo.name)
-                        st.write(f"  → {archivo.name} → contexto")
-                    else:
-                        textos_teoria.append(texto_material)
-                        archivos_teoria.append(archivo.name)
-                        archivos_teoria_bytes.append(archivo_bytes)
-                        st.write(f"  → {archivo.name} → teoría")
+                    textos_teoria.append(texto_material)
+                    archivos_teoria.append(archivo.name)
+                    archivos_teoria_bytes.append(archivo_bytes)
+                    st.write(f"  → {archivo.name}")
                 except Exception as err:
                     st.warning(f"No se pudo procesar '{archivo.name}': {err}")
 
@@ -876,14 +873,13 @@ def _org_generar_organizacion(
                     "Se generará la organización únicamente a partir de la guía docente."
                 )
 
-            longitud_total = sum(len(t) for t in textos_teoria) + sum(len(t) for t in textos_contexto)
+            longitud_total = sum(len(t) for t in textos_teoria)
             if longitud_total > 120000:
                 textos_teoria = [t[:20000] for t in textos_teoria]
-                textos_contexto = [t[:20000] for t in textos_contexto]
                 st.info("Materiales truncados a 20.000 caracteres por archivo para no superar el límite del modelo.")
 
             st.session_state["org_ultimos_archivos_teoria"] = archivos_teoria
-            st.session_state["org_ultimos_archivos_contexto"] = archivos_contexto
+            st.session_state["org_ultimos_archivos_contexto"] = []
 
             st.write("🕐 Detectando horas lectivas (TE + PA) y laboratorio...")
             horas_docencia = _org_parser.extraer_horas_docencia(texto_guia)
@@ -897,31 +893,14 @@ def _org_generar_organizacion(
             st.session_state["org_ultimas_horas_teoria"] = horas_docencia
             st.session_state["org_ultimas_horas_totales"] = horas_totales if horas_totales > 0 else None
 
-            if not solo_guia and subtemas_confirmados is None:
-                st.write("🔍 Detectando subtemas (guía docente + señales del material)…")
-                candidatos_detectados = _org_parser.detectar_candidatos_por_material(
-                    textos_teoria, archivos_teoria, archivos_teoria_bytes
-                )
-                st.session_state["org_subtemas_detectados"] = candidatos_detectados
-                st.session_state["org_modo_prompt_libre"] = _org_parser.modo_prompt_libre(
-                    texto_guia
-                )
-                subtemas_confirmados = _org_build_subtemas_confirmados(
-                    texto_guia,
-                    textos_teoria,
-                    archivos_teoria,
-                    archivos_teoria_bytes,
-                    candidatos_precalculados=candidatos_detectados,
-                )
+            # Estructura de bloques+subtemas tomada de la guía docente (fuente
+            # autoritativa, multi-formato). Los bloques que la guía no subdivide
+            # se completan con la detección por material.
+            estructura_guia = _org_parser.extraer_estructura_guia(texto_guia)
             st.session_state["org_candidatos_guia"] = _org_parser.extraer_subtemas_guia(
                 texto_guia
             )
-            if subtemas_confirmados is None:
-                n_guia = len(st.session_state["org_candidatos_guia"])
-                st.caption(
-                    f"Guía docente: {n_guia} bloques temáticos detectados — "
-                    "el modelo estructurará los subtemas libremente (sin lista cerrada del PDF)."
-                )
+            st.session_state["org_subtemas_detectados"] = []
 
             st.write("🌐 Detectando idioma de los materiales...")
             if solo_guia:
@@ -931,7 +910,40 @@ def _org_generar_organizacion(
                     horas_laboratorio=horas_laboratorio,
                     subtemas_guia=st.session_state["org_candidatos_guia"],
                 )
+            elif estructura_guia:
+                st.write("🔍 Resolviendo subtemas (guía docente + señales del material)…")
+                estructura_prompt = _org_parser.construir_estructura_para_prompt(
+                    estructura_guia, textos_teoria, archivos_teoria, archivos_teoria_bytes
+                )
+                n_con_guia = sum(
+                    1 for b in estructura_guia if (b.get("subtemas") or [])
+                )
+                st.caption(
+                    f"Guía docente: {len(estructura_guia)} bloques "
+                    f"({n_con_guia} con subtemas en la guía; el resto se completa "
+                    "con las señales estructurales del material)."
+                )
+                prompt, _idioma = _org_prompts.construir_prompt_guia_first(
+                    texto_guia=texto_guia,
+                    estructura_guia=estructura_prompt,
+                    textos_teoria=textos_teoria,
+                    textos_contexto=textos_contexto,
+                    horas_totales=horas_totales if horas_totales > 0 else None,
+                    horas_laboratorio=horas_laboratorio,
+                )
             else:
+                # Legacy: guía sin sección 'Contenidos' reconocible. El modelo
+                # estructura los subtemas a partir del material.
+                st.write("🔍 Detectando subtemas (señales del material)…")
+                candidatos_detectados = _org_parser.detectar_candidatos_por_material(
+                    textos_teoria, archivos_teoria, archivos_teoria_bytes
+                )
+                st.session_state["org_subtemas_detectados"] = candidatos_detectados
+                subtemas_confirmados = (
+                    candidatos_detectados
+                    if any(candidatos_detectados)
+                    else None
+                )
                 prompt, _idioma = _org_prompts.construir_prompt(
                     texto_guia=texto_guia,
                     textos_teoria=textos_teoria,
@@ -950,13 +962,19 @@ def _org_generar_organizacion(
             resultado, info_norm = _org_parser.normalizar_horas_output(resultado, horas_totales if horas_totales else 0)
             st.session_state["org_warning_normalizacion"] = info_norm
 
+            if estructura_guia:
+                # La guía es la fuente autoritativa del nº de bloques (puede
+                # diferir del nº de archivos: p. ej. un bloque repartido en
+                # varios PDFs).
+                n_esperados_bloques = len(estructura_guia)
+            elif solo_guia:
+                n_esperados_bloques = _org_parser.contar_bloques_output(resultado)
+            else:
+                n_esperados_bloques = len(textos_teoria)
+
             _org_validar_y_persistir(
                 resultado,
-                n_esperados=(
-                    _org_parser.contar_bloques_output(resultado)
-                    if solo_guia
-                    else len(textos_teoria)
-                ),
+                n_esperados=n_esperados_bloques,
                 asignatura_id=asignatura_id,
                 slug=slug,
                 version=1,
@@ -2419,21 +2437,10 @@ def _vista_organizador() -> None:
         if h_te + h_pa <= 0 and st.session_state.get("org_ultimas_horas_teoria"):
             st.warning("⚠️ No se detectaron horas lectivas (TE/PA) en la guía docente.")
 
-    if st.session_state["org_ultimos_archivos_teoria"] or st.session_state["org_ultimos_archivos_contexto"]:
-        with st.expander("📋 Clasificación de archivos detectada", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("Teoría")
-                for n in st.session_state["org_ultimos_archivos_teoria"]:
-                    st.write(f"- {n}")
-                if not st.session_state["org_ultimos_archivos_teoria"]:
-                    st.write("Sin archivos clasificados como teoría.")
-            with c2:
-                st.subheader("Contexto/Outline")
-                for n in st.session_state["org_ultimos_archivos_contexto"]:
-                    st.write(f"- {n}")
-                if not st.session_state["org_ultimos_archivos_contexto"]:
-                    st.write("Sin archivos clasificados como contexto.")
+    if st.session_state["org_ultimos_archivos_teoria"]:
+        with st.expander("📋 Materiales de teoría procesados", expanded=False):
+            for n in st.session_state["org_ultimos_archivos_teoria"]:
+                st.write(f"- {n}")
 
     st.divider()
 
