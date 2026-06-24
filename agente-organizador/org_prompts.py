@@ -267,6 +267,135 @@ Estas horas NO se incluyen en la distribución temática de bloques y subtemas.
     return prompt, idioma
 
 
+def construir_prompt_solo_guia(
+    texto_guia: str,
+    horas_totales: int | None = None,
+    horas_laboratorio: int = 0,
+    subtemas_guia: list[str] | None = None,
+) -> tuple[str, str]:
+    """Prompt de fallback cuando ningún material de teoría aporta texto extraíble.
+
+    Caso real: PDFs de diapositivas escaneadas/imagen de los que el extractor no
+    obtiene texto. En ese escenario la guía docente es la ÚNICA fuente: define la
+    estructura de bloques (sección Contenidos), su orden, su numeración y los
+    subtemas. No hay número de archivos al que anclar la cardinalidad, así que la
+    manda íntegramente la guía.
+
+    Mantiene el principio rector (transforma, nunca inventa): el modelo solo puede
+    usar lo que aparece textualmente en la guía docente.
+    """
+    idioma = detectar_idioma([texto_guia])
+    if idioma == "english":
+        instruccion_idioma = (
+            "LANGUAGE INSTRUCTION: The teaching guide is in English.\n"
+            "You MUST write your entire response in English."
+        )
+    else:
+        instruccion_idioma = (
+            "INSTRUCCIÓN DE IDIOMA: La guía docente está en español.\n"
+            "Debes escribir toda tu respuesta en español."
+        )
+
+    if horas_totales is not None:
+        instruccion_horas = (
+            f"DISTRIBUCIÓN DE HORAS — RESTRICCIÓN ABSOLUTA:\n"
+            f"La guía docente indica {horas_totales}h lectivas (TE + PA) para distribuir "
+            f"entre los bloques temáticos. Repártelas de forma proporcional a la "
+            f"extensión que cada bloque ocupa en la sección Contenidos de la guía. "
+            f"Todos los bloques deben recibir al menos 0.5h.\n"
+            f"La suma de horas de todos los bloques debe ser EXACTAMENTE {horas_totales}h. "
+            f"Antes de responder, verifica internamente que la suma cuadra y ajusta si es necesario."
+        )
+    else:
+        instruccion_horas = (
+            "DISTRIBUCIÓN DE HORAS: La guía docente no especifica las horas totales. "
+            "Distribuye de forma proporcional a la extensión de cada bloque en la guía."
+        )
+
+    if subtemas_guia:
+        lineas_sub = "\n".join(f"- {s}" for s in subtemas_guia)
+        bloque_subtemas_guia = (
+            "SUBTEMAS DETECTADOS EN LA SECCIÓN CONTENIDOS DE LA GUÍA "
+            "(referencia de cobertura):\n"
+            f"{lineas_sub}\n"
+            "Agrúpalos bajo el bloque temático al que pertenecen según la propia guía. "
+            "No añadas subtemas que no figuren en este listado o en el texto de la guía."
+        )
+    else:
+        bloque_subtemas_guia = "[Sin subtemas detectados automáticamente en la guía]"
+
+    instruccion_estructura = (
+        "RESTRICCIÓN DE ESTRUCTURA — PRIORIDAD MÁXIMA:\n"
+        "NO se ha podido extraer texto de los materiales de teoría (probablemente "
+        "PDFs de diapositivas escaneadas o basadas en imagen). Por tanto, la guía "
+        "docente es la ÚNICA fuente, tanto de estructura como de contenido.\n"
+        "\n"
+        "1. BLOQUES: Identifica los bloques temáticos EXCLUSIVAMENTE a partir de la "
+        "sección Contenidos de la guía docente. El número de bloques, su orden y su "
+        "numeración los determina la guía, no ninguna otra fuente.\n"
+        "2. NUMERACIÓN: Si la guía numera sus temas (Tema 3, Unidad 3, Bloque III…), "
+        "el número N de cada '## Bloque N' debe coincidir con esa numeración, en cifra "
+        "arábiga. Si no los numera, usa numeración secuencial por orden de aparición.\n"
+        "3. SUBTEMAS: Cada subtema debe figurar textualmente en la guía docente. "
+        "Como Evidencia, indica la referencia de la guía (p. ej. 'Guía docente — "
+        "Contenidos'). Origen siempre 'Guía docente'.\n"
+        "4. Si un bloque de la guía no tiene subtemas desglosados, crea un único "
+        "subtema con el nombre completo del bloque y Evidencia 'Guía docente'."
+    )
+
+    prompt = f"""
+{instruccion_idioma}
+
+CONTEXTO: Generación de la distribución temática SOLO a partir de la guía docente.
+
+Instrucciones obligatorias:
+1) Identifica los bloques temáticos, su orden y sus horas a partir de la guía docente.
+2) {instruccion_estructura}
+3) Asigna las horas de cada bloque en su encabezado (## Bloque N — Nombre · Xh).
+   NO repartas horas entre subtemas en la tabla.
+
+RESTRICCIÓN CRÍTICA: No puedes añadir, inferir ni inventar ningún tema, subtema o
+concepto que no aparezca textualmente en la guía docente.
+
+{instruccion_horas}
+
+Formato de salida:
+- Devuelve el resultado en Markdown.
+- Debes seguir LITERALMENTE esta plantilla de salida (mismos encabezados, orden y estructura):
+  # DISTRIBUCIÓN TEMÁTICA — {{NOMBRE_ASIGNATURA}}
+
+  **Horas lectivas disponibles:** {{TOTAL}}h ({{TE}}h TE + {{PA}}h PA) | **Prácticas de laboratorio:** {{PL}}h *(informativo)*
+
+  ---
+
+  ## Bloque {{N}} — {{NOMBRE_BLOQUE}} · {{HORAS_BLOQUE}}h
+
+  | Subtema | Evidencia | Origen |
+  |---------|-----------|--------|
+  | {{subtema}} | Guía docente | Guía docente |
+
+  *(repetir para cada bloque)*
+
+  ---
+
+  > 🔬 Prácticas de laboratorio: {{PL}}h (sesiones prácticas, no incluidas en la distribución temática)
+- No añadas ninguna sección fuera de esa plantilla.
+- Prohibido incluir: análisis previos, conteos, cálculos intermedios, verificaciones finales, notas de ajuste o cualquier texto adicional.
+- Todos los valores numéricos de horas deben usar punto decimal (.) y nunca coma (,), solo en las horas totales de cada bloque (encabezado ## Bloque N · Xh).
+- Si necesitas ajustar horas para cuadrar, hazlo internamente y no muestres esos ajustes en el output.
+
+Texto de la guía docente:
+{texto_guia}
+
+{bloque_subtemas_guia}
+
+NOTA INFORMATIVA (PL): La guía docente indica {horas_laboratorio}h de prácticas de laboratorio.
+Estas horas NO se incluyen en la distribución temática de bloques y subtemas.
+""".strip()
+
+    return prompt, idioma
+
+
 def construir_prompt_refinamiento(
     output_previo: str,
     feedback_previo: list[str],

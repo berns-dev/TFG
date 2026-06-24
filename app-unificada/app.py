@@ -868,11 +868,13 @@ def _org_generar_organizacion(
                 except Exception as err:
                     st.warning(f"No se pudo procesar '{archivo.name}': {err}")
 
-            if not textos_teoria:
-                _db_actualizar_ejecucion(ejecucion_id, "error")
-                status.update(label="❌ Error en el proceso", state="error")
-                st.error("No se pudo extraer texto válido de ningún material de teoría.")
-                return False
+            solo_guia = not textos_teoria
+            if solo_guia:
+                st.warning(
+                    "⚠️ No se pudo extraer texto de ningún material de teoría "
+                    "(probablemente PDFs de diapositivas escaneadas o basadas en imagen). "
+                    "Se generará la organización únicamente a partir de la guía docente."
+                )
 
             longitud_total = sum(len(t) for t in textos_teoria) + sum(len(t) for t in textos_contexto)
             if longitud_total > 120000:
@@ -895,7 +897,7 @@ def _org_generar_organizacion(
             st.session_state["org_ultimas_horas_teoria"] = horas_docencia
             st.session_state["org_ultimas_horas_totales"] = horas_totales if horas_totales > 0 else None
 
-            if subtemas_confirmados is None:
+            if not solo_guia and subtemas_confirmados is None:
                 st.write("🔍 Detectando subtemas (guía docente + señales del material)…")
                 candidatos_detectados = _org_parser.detectar_candidatos_por_material(
                     textos_teoria, archivos_teoria, archivos_teoria_bytes
@@ -922,14 +924,22 @@ def _org_generar_organizacion(
                 )
 
             st.write("🌐 Detectando idioma de los materiales...")
-            prompt, _idioma = _org_prompts.construir_prompt(
-                texto_guia=texto_guia,
-                textos_teoria=textos_teoria,
-                textos_contexto=textos_contexto,
-                horas_totales=horas_totales if horas_totales > 0 else None,
-                horas_laboratorio=horas_laboratorio,
-                subtemas_por_material=subtemas_confirmados,
-            )
+            if solo_guia:
+                prompt, _idioma = _org_prompts.construir_prompt_solo_guia(
+                    texto_guia=texto_guia,
+                    horas_totales=horas_totales if horas_totales > 0 else None,
+                    horas_laboratorio=horas_laboratorio,
+                    subtemas_guia=st.session_state["org_candidatos_guia"],
+                )
+            else:
+                prompt, _idioma = _org_prompts.construir_prompt(
+                    texto_guia=texto_guia,
+                    textos_teoria=textos_teoria,
+                    textos_contexto=textos_contexto,
+                    horas_totales=horas_totales if horas_totales > 0 else None,
+                    horas_laboratorio=horas_laboratorio,
+                    subtemas_por_material=subtemas_confirmados,
+                )
 
             st.write("🤖 Consultando al agente (esto puede tardar ~15s)...")
             resultado, stop_reason = _org_agente.ejecutar_agente(prompt)
@@ -942,7 +952,11 @@ def _org_generar_organizacion(
 
             _org_validar_y_persistir(
                 resultado,
-                n_esperados=len(textos_teoria),
+                n_esperados=(
+                    _org_parser.contar_bloques_output(resultado)
+                    if solo_guia
+                    else len(textos_teoria)
+                ),
                 asignatura_id=asignatura_id,
                 slug=slug,
                 version=1,
