@@ -924,9 +924,44 @@ def build_generador_message(
 # Taller interactivo — generación y refinamiento desde prompt del profesor
 # ---------------------------------------------------------------------------
 
+PROMPT_TALLER_RAZONADOR = """Eres el paso de razonamiento previo a generar un bloque interactivo de visualización para material docente de ingeniería mecánica. No generas HTML ni código: piensas en texto plano para que otro paso construya el bloque con esa base.
+
+Recibirás la instrucción del profesor y el Markdown curado de la sección del tema. Tu trabajo, en este orden:
+
+1. A partir del contexto del Markdown curado, fórmate una idea clara de qué concepto de ingeniería trata la instrucción: qué es, qué papel juega dentro de la teoría que presenta esa sección, con qué convenciones lo nombra el material. Esto no es para copiarlo literalmente en la visualización — es para que la reconstrucción de fórmula o comportamiento del paso siguiente quede anclada al marco conceptual correcto de esa sección, no a una aproximación genérica desconectada del tema.
+2. Identifica la relación matemática o física relevante. Si corresponde a una fórmula, curva o criterio estándar reconocido en la literatura de ingeniería (ej. Ramberg-Osgood, curva de diseño CTOD, ecuación de Hertz, modelos de tasa de fallos de fiabilidad...), nómbralo explícitamente y usa su forma conocida — no improvises una aproximación propia si existe una fórmula establecida.
+3. Si la expresión exacta no está disponible en el Markdown (marcador de ecuación rota o no extraída), dilo explícitamente y declara qué conocimiento de ingeniería vas a usar para reconstruirla, en línea con el régimen dual de fuentes del agente: el texto descriptivo viene del material, la implementación de la física puede apoyarse en conocimiento general de ingeniería.
+4. Enumera los valores o tramos que deben quedar matemáticamente consistentes entre sí — por ejemplo, el valor en la frontera entre dos zonas de una curva por tramos debe coincidir exactamente; el rango de un slider debe corresponder al rango físico real de la variable.
+5. Si la instrucción pide una animación o un mecanismo, indica qué cantidad física debe traducirse en qué cambio visual concreto: qué elemento se mueve, en qué eje o dirección, proporcional a qué variable — para que el movimiento represente la física real y no solo dé sensación de movimiento.
+
+Responde en texto plano, breve y estructurado en estos puntos. No generes HTML, JavaScript ni bloques de código."""
+
+
+def build_taller_razonador_message(
+    instruccion: str,
+    markdown_bloque: str,
+    texto_original: str | None = None,
+) -> str:
+    lines = [
+        f"INSTRUCCIÓN DEL PROFESOR:\n{instruccion.strip()}",
+        "",
+        "MARKDOWN DEL BLOQUE (contexto teórico):",
+        (markdown_bloque or "")[:12000],
+    ]
+    if texto_original:
+        lines += [
+            "",
+            "MATERIAL ORIGINAL DEL PROFESOR (rangos y valores):",
+            texto_original[:8000],
+        ]
+    return "\n".join(lines)
+
+
 PROMPT_TALLER_GENERADOR = """Eres un generador de bloques HTML interactivos para material docente de ingeniería mecánica.
 
-El profesor describe en lenguaje natural qué visualización quiere. Implementa un bloque HTML autocontenido:
+El profesor describe en lenguaje natural qué visualización quiere. Recibirás también el razonamiento previo de otro paso (qué concepto es, qué fórmula estándar identificó o cómo va a reconstruirla, qué debe quedar consistente, qué cantidad física debe traducirse en qué movimiento). Implementa ese razonamiento con fidelidad: no cambies la fórmula, los valores de consistencia entre tramos ni el mapeo física-movimiento que ya se decidieron.
+
+Implementa un bloque HTML autocontenido:
 - Un único <div> raíz con id único
 - Chart.js o canvas nativo según convenga
 - Sliders solo si el profesor los pide explícitamente
@@ -953,6 +988,7 @@ def build_taller_generador_message(
     instruccion: str,
     markdown_bloque: str,
     texto_original: str | None = None,
+    razonamiento: str | None = None,
 ) -> str:
     lines = [
         f"SLUG_EXACTO: {slug}",
@@ -966,6 +1002,13 @@ def build_taller_generador_message(
             "",
             "MATERIAL ORIGINAL DEL PROFESOR (rangos y valores):",
             texto_original[:8000],
+        ]
+    if razonamiento:
+        lines += [
+            "",
+            "RAZONAMIENTO PREVIO (de otro paso — implementar con fidelidad, "
+            "sin cambiar fórmula, consistencia ni mapeo física-movimiento):",
+            razonamiento.strip(),
         ]
     return "\n".join(lines)
 

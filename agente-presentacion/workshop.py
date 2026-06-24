@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 
@@ -11,13 +12,18 @@ from generador_html import _is_valid_html, _slug, validar_bloque_html
 from prs_config import ANTHROPIC_API_KEY, MODEL_SMART, REQUEST_TIMEOUT_SECONDS
 from prs_prompts import (
     PROMPT_TALLER_GENERADOR,
+    PROMPT_TALLER_RAZONADOR,
     PROMPT_TALLER_REFINADOR,
     build_taller_generador_message,
+    build_taller_razonador_message,
     build_taller_refinador_message,
 )
 
+logger = logging.getLogger(__name__)
+
 _MAX_RETRIES = 2
 _MAX_TOKENS = 8192
+_MAX_TOKENS_RAZONADOR = 1024
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -35,14 +41,16 @@ def _limpiar_respuesta_html(raw: str) -> str:
     return raw
 
 
-def _llamar_sonnet(system: str, user_message: str) -> str:
+def _llamar_sonnet(
+    system: str, user_message: str, max_tokens: int = _MAX_TOKENS
+) -> str:
     client = _get_client()
     last_exc: Exception | None = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
             response = client.messages.create(
                 model=MODEL_SMART,
-                max_tokens=_MAX_TOKENS,
+                max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user_message}],
             )
@@ -62,6 +70,31 @@ def _llamar_sonnet(system: str, user_message: str) -> str:
     raise RuntimeError("No se pudo obtener respuesta del modelo")
 
 
+def _razonar_instruccion(
+    instruccion: str,
+    markdown_bloque: str,
+    texto_original: str | None = None,
+) -> str:
+    """Razonamiento previo (Sonnet): concepto, fórmula, consistencia, mapeo física-movimiento.
+
+    Devuelve cadena vacía si la llamada falla — el generador sigue
+    funcionando sin este contexto extra (degradación elegante, mismo
+    criterio que el resto del agente ante fallos de API).
+    """
+    try:
+        user_msg = build_taller_razonador_message(
+            instruccion, markdown_bloque, texto_original
+        )
+        razonamiento = _llamar_sonnet(
+            PROMPT_TALLER_RAZONADOR, user_msg, max_tokens=_MAX_TOKENS_RAZONADOR
+        )
+        logger.info("[TALLER] Razonamiento previo: %s", razonamiento[:500])
+        return razonamiento
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[TALLER] Razonamiento previo falló: %s", exc)
+        return ""
+
+
 def generar_desde_instruccion(
     instruccion: str,
     markdown_bloque: str,
@@ -74,9 +107,10 @@ def generar_desde_instruccion(
         (slug, html_fragment)
     """
     slug = _slug(titulo or instruccion[:40])
+    razonamiento = _razonar_instruccion(instruccion, markdown_bloque, texto_original)
     system = PROMPT_TALLER_GENERADOR.replace("{slug}", slug)
     user_msg = build_taller_generador_message(
-        slug, instruccion, markdown_bloque, texto_original
+        slug, instruccion, markdown_bloque, texto_original, razonamiento
     )
     raw = _llamar_sonnet(system, user_msg)
     if not _is_valid_html(raw):
