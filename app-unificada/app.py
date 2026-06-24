@@ -428,7 +428,6 @@ _ORG_KEYS: dict[str, object] = {
     "org_contador_add_subtema": lambda: {},
     "org_contador_add_bloque": 0,
     "org_subtemas_detectados": lambda: [],
-    "org_modo_prompt_libre": False,
     "org_sub_widget_rev": lambda: {},
 }
 
@@ -634,23 +633,6 @@ def _org_actualizar_desde_bloques(slug: str) -> None:
     )
 
 
-def _org_build_subtemas_confirmados(
-    texto_guia: str,
-    textos_teoria: list[str],
-    archivos_teoria: list[str],
-    archivos_bytes: list[bytes],
-    candidatos_precalculados: list[list[dict]] | None = None,
-) -> list[list[dict]] | None:
-    """Guía docente primero (modo libre); lista cerrada del material solo sin guía."""
-    return _org_parser.construir_subtemas_confirmados(
-        texto_guia,
-        textos_teoria,
-        archivos_teoria,
-        archivos_bytes,
-        candidatos_precalculados=candidatos_precalculados,
-    )
-
-
 def _org_bump_sub_widget_rev(idx_b: int) -> None:
     """Invalida widgets de subtemas tras borrar o reordenar filas (evita desfase Streamlit)."""
     revs = st.session_state.setdefault("org_sub_widget_rev", {})
@@ -762,13 +744,7 @@ def _org_render_panel_deteccion() -> None:
     """Muestra las señales deterministas detectadas en cada material."""
     archivos = st.session_state.get("org_ultimos_archivos_teoria", [])
     candidatos = st.session_state.get("org_subtemas_detectados", [])
-    modo_libre = st.session_state.get("org_modo_prompt_libre", False)
     with st.expander("🔬 Señales de detección estructural", expanded=False):
-        if modo_libre:
-            st.caption(
-                "Modo libre (guía docente con bloques): el modelo estructura subtemas, "
-                "pero la detección determinista se ejecutó para enriquecer evidencia al confirmar."
-            )
         if not archivos:
             st.caption("Aún no hay materiales de teoría procesados en esta sesión.")
             return
@@ -790,7 +766,6 @@ def _org_generar_organizacion(
     asignatura_id: int,
     slug: str,
     feedback_previo: list[str] | None = None,
-    subtemas_confirmados: list[list[dict]] | None = None,
 ) -> bool:
     output_previo = st.session_state.get("org_ultimo_output")
 

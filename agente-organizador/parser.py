@@ -12,36 +12,6 @@ import pdfplumber
 from pptx import Presentation
 
 
-def clasificar_archivo(nombre: str, texto: str) -> str:
-    nombre_normalizado = (nombre or "").lower()
-    muestra_texto = (texto or "")[:300].lower()
-
-    indicadores_nombre = [
-        "outline",
-        "index",
-        "program",
-        "syllabus",
-        "c0",
-        "tema0",
-        "indice",
-    ]
-    indicadores_texto = [
-        "outline",
-        "contents",
-        "index",
-        "programa",
-        "índice general",
-        "tabla de contenidos",
-    ]
-
-    if any(indicador in nombre_normalizado for indicador in indicadores_nombre):
-        return "contexto"
-    if any(indicador in muestra_texto for indicador in indicadores_texto):
-        return "contexto"
-
-    return "teoria"
-
-
 def extraer_texto(archivo_bytes, nombre_archivo) -> str:
     extension = Path(nombre_archivo).suffix.lower()
 
@@ -1105,35 +1075,6 @@ def detectar_candidatos_por_material(
         else:
             resultado.append([])
     return resultado
-
-
-def modo_prompt_libre(texto_guia: str) -> bool:
-    """True si la guía aporta bloques temáticos y el LLM estructura subtemas libremente."""
-    return len(extraer_subtemas_guia(texto_guia)) >= 2
-
-
-def construir_subtemas_confirmados(
-    texto_guia: str,
-    textos_teoria: list[str],
-    archivos_teoria: list[str],
-    archivos_bytes: list[bytes],
-    candidatos_precalculados: list[list[dict]] | None = None,
-) -> list[list[dict]] | None:
-    """Lista cerrada de subtemas por material para el prompt del Organizador.
-
-    Si la guía docente aporta bloques temáticos (sección Contenidos), devuelve
-    ``None`` para modo libre. La detección determinista se ejecuta aparte vía
-    ``detectar_candidatos_por_material()`` — no se omite por tener guía.
-    """
-    if modo_prompt_libre(texto_guia):
-        return None
-
-    if candidatos_precalculados is not None:
-        return candidatos_precalculados
-
-    return detectar_candidatos_por_material(
-        textos_teoria, archivos_teoria, archivos_bytes
-    )
 
 
 def _tokens_significativos(texto: str) -> set[str]:
