@@ -17,10 +17,11 @@ Pipeline:
      DOMContentLoaded propio de cada bloque se elimina al embeber: en la
      presentacion la inicializacion es lazy por viewport
      (IntersectionObserver del contenedor).
-  5. SVG esquematicos opcionales (Haiku, PROMPT_GENERADOR_SVG) SOLO para
-     marcadores [FIGURA: ...] de secciones sin bloque interactivo. Si Haiku
-     responde NO_PROCEDE o el SVG no pasa la sanitizacion, se mantiene el
-     placeholder gris (mismo criterio que el PDF).
+  5. Marcadores [FIGURA: ...] sin bloque interactivo aprobado quedan como
+     placeholder gris (mismo criterio que el PDF). No hay generacion
+     automatica de figuras: si el profesor quiere una figura representada,
+     la pide explicitamente en el taller, que es el unico camino con ciclo
+     de revision (preview -> refinar -> aprobar) de todo el agente.
   6. Render Markdown -> HTML por segmentos, protegiendo LaTeX para MathJax,
      e intercalando los bloques interactivos en su offset.
   7. Ensamblado: sidebar con indice de H2 + scroll-spy, navegacion
@@ -29,9 +30,11 @@ Pipeline:
 
 Restricciones (no negociables):
   - El contenido textual procede exclusivamente del Markdown del profesor.
-  - Los SVG se generan solo desde descripciones textuales explicitas del
-    material y se marcan con el footer "Diagrama generado a partir del
-    material del profesor". Ante la duda, no se genera.
+  - Ninguna figura se genera sin que el profesor la haya pedido y aprobado
+    en el taller. Antes (hasta 2026-06) existia un generador de SVG
+    esquematicos vía Haiku para figuras sin bloque interactivo; se elimino
+    porque no tenia paso de revision: un esquema generado mal no se podia
+    corregir antes de llegar al documento final. Ver agente-presentacion/CLAUDE.md.
   - Los bloques interactivos no se duplican: se reutiliza la logica de
     generador_html sin copiarla.
 """
@@ -45,16 +48,10 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import anthropic
 import markdown as md_lib
 
-from prs_config import (
-    ANTHROPIC_API_KEY,
-    MODEL_FAST,
-    REQUEST_TIMEOUT_SECONDS,
-)
+from prs_config import ANTHROPIC_API_KEY
 from generador_html import _generar_bloque, _slug
-from prs_prompts import PROMPT_GENERADOR_SVG, build_svg_message
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +59,6 @@ logger = logging.getLogger(__name__)
 # pestañas (todas las secciones del tema): 2 workers para no agotar el
 # límite de output tokens/min de la organización (429).
 _MAX_WORKERS = 2
-_MAX_SVG_POR_DOCUMENTO = 4
-_MAX_TOKENS_SVG = 2048
 
 # ---------------------------------------------------------------------------
 # Regex de estructura Markdown
@@ -92,11 +87,6 @@ _SELF_INIT_RE = re.compile(
     r"\s*(?:function\s*\(\s*\)|\(\s*\)\s*=>)\s*\{[\s\S]*?\}\s*\)\s*;?",
 )
 
-# Elementos y atributos prohibidos en SVG generado
-_SVG_PROHIBIDO_RE = re.compile(
-    r"<\s*script|<\s*image|<\s*foreignObject|href\s*=|url\s*\(|\bon[a-z]+\s*=",
-    re.IGNORECASE,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -345,110 +335,30 @@ def _figura_placeholder(descripcion: str) -> str:
     )
 
 
-def _figura_svg(descripcion: str, svg: str) -> str:
-    """Card de figura con SVG generado, marcado como tal."""
-    return (
-        '<figure class="figura-svg">'
-        + svg
-        + f"<figcaption>{html_lib.escape(descripcion)}</figcaption>"
-        + '<div class="figura-svg-footer">Diagrama generado a partir del '
-        "material del profesor</div>"
-        "</figure>"
-    )
-
-
-# ---------------------------------------------------------------------------
-# SVG esquematicos (Haiku, opcional y conservador)
-# ---------------------------------------------------------------------------
-
-def _svg_es_seguro(svg: str) -> bool:
-    """True si el SVG es autocontenido y sin contenido activo/externo."""
-    svg_strip = svg.strip()
-    return (
-        svg_strip.lower().startswith("<svg")
-        and svg_strip.rstrip().endswith("</svg>")
-        and len(svg_strip) < 12000
-        and not _SVG_PROHIBIDO_RE.search(svg_strip)
-    )
-
-
-def _generar_svg(
-    descripcion: str, contexto: str, client: anthropic.Anthropic
-) -> str:
-    """Pide a Haiku un SVG esquematico; '' si no procede o no es seguro."""
-    try:
-        response = client.messages.create(
-            model=MODEL_FAST,
-            max_tokens=_MAX_TOKENS_SVG,
-            system=PROMPT_GENERADOR_SVG,
-            messages=[{
-                "role": "user",
-                "content": build_svg_message(descripcion, contexto),
-            }],
-        )
-        raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```[a-z]*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw).strip()
-        if "NO_PROCEDE" in raw[:40] or not raw.lower().startswith("<svg"):
-            return ""
-        if not _svg_es_seguro(raw):
-            logger.warning(
-                "[PRESENTACION] SVG descartado por sanitización: %r",
-                descripcion[:60],
-            )
-            return ""
-        return raw
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[PRESENTACION] Generación SVG falló: %s", exc)
-        return ""
-
-
 def _generar_figuras(
     secciones: list[dict],
-    asignaciones: dict[int, list[tuple[int, dict]]],
     figura_overrides: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Decide el render de cada [FIGURA: ...] del documento.
 
-    Las figuras con override interactivo se insertan directamente. Las demás
-    intentan SVG si la sección no tiene bloque interactivo, hasta un máximo
-    de _MAX_SVG_POR_DOCUMENTO intentos; el resto queda como placeholder gris.
+    Las figuras con un fragmento aprobado en el taller (override) se
+    insertan directamente. El resto se queda siempre como placeholder gris
+    — no hay generación automática de figuras sin que el profesor la pida
+    explícitamente en el taller, porque ese es el único camino con ciclo de
+    revisión (preview -> refinar -> aprobar) de todo el agente.
     """
     figuras_html: dict[str, str] = {}
     figura_overrides = figura_overrides or {}
-    candidatas: list[tuple[str, str]] = []  # (descripcion, contexto)
 
-    for i, seccion in enumerate(secciones):
+    for seccion in secciones:
         for m in _FIGURA_RE.finditer(seccion["body"]):
             descripcion = m.group(1).strip()
             if descripcion in figuras_html:
                 continue
-            if descripcion in figura_overrides:
-                figuras_html[descripcion] = figura_overrides[descripcion]
-                continue
-            figuras_html[descripcion] = _figura_placeholder(descripcion)
-            if i not in asignaciones and len(candidatas) < _MAX_SVG_POR_DOCUMENTO:
-                candidatas.append((descripcion, seccion["body"]))
+            figuras_html[descripcion] = figura_overrides.get(
+                descripcion, _figura_placeholder(descripcion)
+            )
 
-    if not candidatas or not ANTHROPIC_API_KEY:
-        return figuras_html
-
-    client = anthropic.Anthropic(
-        api_key=ANTHROPIC_API_KEY,
-        timeout=float(REQUEST_TIMEOUT_SECONDS),
-    )
-    workers = min(len(candidatas), _MAX_WORKERS)
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(_generar_svg, desc, ctx, client): desc
-            for desc, ctx in candidatas
-        }
-        for future in as_completed(futures):
-            desc = futures[future]
-            svg = future.result()
-            if svg:
-                figuras_html[desc] = _figura_svg(desc, svg)
     return figuras_html
 
 
@@ -739,27 +649,6 @@ _PAGE_TEMPLATE = """\
     }
     .figura-placeholder p { font-size: 13px; font-style: italic; margin: 0; }
 
-    .figura-svg {
-      margin: 1.25rem 0;
-      padding: 1rem 1.25rem;
-      background: #FFFFFF;
-      border: 0.5px solid rgba(0,0,0,0.08);
-      border-radius: 10px;
-      text-align: center;
-    }
-    .figura-svg svg { max-width: 100%; height: auto; }
-    .figura-svg figcaption {
-      font-size: 13px;
-      font-style: italic;
-      color: #6B6860;
-      margin-top: 0.5rem;
-    }
-    .figura-svg-footer {
-      font-size: 11px;
-      color: #9A9890;
-      margin-top: 0.35rem;
-    }
-
     /* ---- Bloque interactivo ---- */
     .bloque-interactivo {
       border-left: 3px solid #003366;
@@ -1011,7 +900,7 @@ def generar_presentacion(
     bloques_html = _generar_bloques(
         elementos_seleccionados, verbose, texto_original
     )
-    figuras_html = _generar_figuras(secciones, asignaciones)
+    figuras_html = _generar_figuras(secciones)
 
     titulo_esc = html_lib.escape(titulo)
 
@@ -1214,7 +1103,7 @@ def generar_presentacion_con_fragmentos(
 
     figura_overrides = _preparar_figura_overrides(fragmentos_aprobados)
     asignaciones_html = _asignar_fragmentos_a_secciones(secciones, fragmentos_aprobados)
-    figuras_html = _generar_figuras(secciones, asignaciones_html, figura_overrides)
+    figuras_html = _generar_figuras(secciones, figura_overrides)
 
     titulo_esc = html_lib.escape(titulo)
     veces_visto: dict[str, int] = {}
