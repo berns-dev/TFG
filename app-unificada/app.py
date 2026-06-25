@@ -1263,11 +1263,11 @@ def _cnt_generar_bloque_desde_material(
                 rutas_material=[ruta_material],
                 nombre_archivo=nombre_archivo,
             )
-            avisos_lectura = reporte.get("errores") or []
-            if avisos_lectura:
-                for av in avisos_lectura:
-                    st.warning(av)
             if not md_bloque.strip():
+                avisos_lectura = reporte.get("errores") or []
+                if avisos_lectura:
+                    for av in avisos_lectura:
+                        st.warning(av)
                 raise ValueError(
                     "No se pudo extraer ni curar contenido del material. "
                     "Revisa que el PDF/PPTX no esté corrupto o escaneado sin texto."

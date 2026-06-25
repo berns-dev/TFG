@@ -211,7 +211,6 @@ def _call_anthropic(chunk_text: str, tema_horas: float | None = None) -> dict[st
     user_message = _build_user_message(chunk_text, tema_horas)
 
     last_raw = ""
-    last_stop_reason = ""
     for attempt in range(3):
         raw, stop_reason = call_messages(
             client,
@@ -220,7 +219,6 @@ def _call_anthropic(chunk_text: str, tema_horas: float | None = None) -> dict[st
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
-        last_stop_reason = stop_reason
         if stop_reason == "max_tokens":
             logger.warning(
                 "Respuesta del clasificador truncada por max_tokens (intento %s)",

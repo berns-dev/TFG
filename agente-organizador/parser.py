@@ -782,8 +782,7 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> tuple[list[dict], str]
                 lineas, alturas_pagina, cuerpo_fn, cuerpo_sz
             )
             if candidatos_indice:
-                estado = "ok" if candidatos_indice else "sin_titulos"
-                return candidatos_indice, estado
+                return candidatos_indice, "ok"
 
             # 5. Sin índice — scan visual de todas las páginas
             for (npag, y_bucket), palabras_linea in sorted(lineas.items()):
