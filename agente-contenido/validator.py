@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path
 from typing import Any
 
 from cnt_config import FIDELITY_THRESHOLD
+
+_MONOREPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_MONOREPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_MONOREPO_ROOT))
+
+from shared.text_utils import normalize_for_matching  # noqa: E402
 
 _STOPWORDS = {
     "para",
@@ -39,13 +47,6 @@ _STOPWORDS = {
 }
 
 # Marcadores estructurales/internos que el agente omite a propósito en el output
-# (cabeceras de página/diapositiva, figuras, texto ilegible). No deben contar
-# como "términos clave" perdidos: penalizaban la fidelidad sin reflejar pérdida
-# real de contenido del profesor.
-# Los marcadores de ecuación rota también se excluyen: si el clasificador los
-# sustituye legítimamente por [ECUACION_RECONSTRUIDA: ...] (ver SYSTEM_PROMPT,
-# regla 11), el literal "ecuacion_parcial"/"ecuacion_no_extraible" deja de estar
-# en el output a propósito, y no debe leerse como pérdida de contenido.
 _STRUCTURAL_MARKER_RE = re.compile(
     r"\[(?:PAGINA|SLIDE)\s+\d+\]|\[TEXTO_ILEGIBLE\]|\[FIGURA[^\]]*\]"
     r"|\[ECUACION_PARCIAL:[^\]]*\]|\[ECUACION_NO_EXTRAIBLE\]|\[ECUACION_RECONSTRUIDA:[^\]]*\]",
@@ -59,7 +60,7 @@ def extract_key_terms(text: str) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     for token in tokens:
-        norm = token.lower()
+        norm = normalize_for_matching(token)
         if len(norm) <= 4 or norm in _STOPWORDS:
             continue
         if norm in seen:
@@ -69,15 +70,30 @@ def extract_key_terms(text: str) -> list[str]:
     return terms
 
 
+def _term_present_in_output(term: str, output_norm: str) -> bool:
+    """Comprueba presencia del término en el output con normalización simétrica."""
+    term_norm = normalize_for_matching(term)
+    if not term_norm or len(term_norm) <= 4:
+        return True
+    if term_norm in output_norm:
+        return True
+    # Subcadena sin espacios (p. ej. guión tipográfico partido en el PDF)
+    compact_out = output_norm.replace(" ", "")
+    compact_term = term_norm.replace(" ", "")
+    return bool(compact_term and compact_term in compact_out)
+
+
 def validate_fidelity(original_chunk: str, markdown_output: str) -> dict[str, Any]:
     """
-    Comprueba que terminos tecnicos del input aparecen en el output.
-    Si faltan terminos clave, baja la cobertura.
+    Comprueba que terminos tecnicos del input aparecen en el output curado.
+
+    Usa normalización Unicode simétrica (NFD, guiones, NBSP) en ambos lados
+    antes del matching léxico.
     """
     chunk_sin_marcadores = _STRUCTURAL_MARKER_RE.sub(" ", original_chunk or "")
     original_terms = extract_key_terms(chunk_sin_marcadores)
-    output_lower = (markdown_output or "").lower()
-    missing = [t for t in original_terms if t.lower() not in output_lower]
+    output_norm = normalize_for_matching(markdown_output or "")
+    missing = [t for t in original_terms if not _term_present_in_output(t, output_norm)]
     coverage = 1 - len(missing) / max(len(original_terms), 1)
     return {
         "coverage_score": round(coverage, 3),

@@ -83,6 +83,13 @@ def _is_mirrored_text(line: str) -> bool:
     return False
 
 
+def _process_mirror_line(line: str) -> str:
+    """Sustituye líneas en espejo por marcador en lugar de descartarlas."""
+    if _is_mirrored_text(line):
+        return "[TEXTO_ILEGIBLE]"
+    return line
+
+
 _PAGE_MARK_RE = re.compile(r"^\[PAGINA\s+(\d+)\]", re.MULTILINE | re.IGNORECASE)
 
 
@@ -94,7 +101,7 @@ def _clean_page_blocks(raw_document: str, filename: str, *, light: bool = False)
 
     matches = list(_PAGE_MARK_RE.finditer(doc))
     if not matches:
-        filtered = [ln for ln in doc.split("\n") if not _is_mirrored_text(ln)]
+        filtered = [_process_mirror_line(ln) for ln in doc.split("\n")]
         return clean_extracted_text("\n".join(filtered), filename, light=light).strip()
 
     parts: list[str] = []
@@ -106,7 +113,7 @@ def _clean_page_blocks(raw_document: str, filename: str, *, light: bool = False)
         if body == "[TEXTO_ILEGIBLE]":
             parts.append(f"{label}\n[TEXTO_ILEGIBLE]")
             continue
-        filtered_lines = [ln for ln in body.split("\n") if not _is_mirrored_text(ln)]
+        filtered_lines = [_process_mirror_line(ln) for ln in body.split("\n")]
         text = clean_extracted_text("\n".join(filtered_lines), filename, light=light).strip()
         if text:
             parts.append(f"{label}\n{text}")
@@ -158,9 +165,7 @@ def _extract_pdf_plain(path: Path) -> str:
                     len(texto_pagina),
                     repr(texto_pagina[:200]),
                 )
-                filtered_lines = [
-                    ln for ln in texto_pagina.split("\n") if not _is_mirrored_text(ln)
-                ]
+                filtered_lines = [_process_mirror_line(ln) for ln in texto_pagina.split("\n")]
                 text = clean_extracted_text("\n".join(filtered_lines), path.name).strip()
                 if text:
                     parts.append(f"[PAGINA {idx}]\n{text}")
@@ -322,9 +327,7 @@ def _extract_pptx(path: Path) -> str:
                     len(slide_raw_text),
                     repr(slide_raw_text[:200]),
                 )
-                filtered_lines = [
-                    ln for ln in slide_raw_text.split("\n") if not _is_mirrored_text(ln)
-                ]
+                filtered_lines = [_process_mirror_line(ln) for ln in slide_raw_text.split("\n")]
                 slide_text = clean_extracted_text("\n".join(filtered_lines), path.name).strip()
                 if slide_text:
                     parts.append(f"[SLIDE {idx}]\n{slide_text}")

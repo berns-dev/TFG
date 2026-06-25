@@ -10,6 +10,21 @@ import anthropic
 _MAX_RETRIES = 2
 
 
+def extract_text_from_message(message: object) -> tuple[str, str]:
+    """Extrae texto y stop_reason de una respuesta de messages.create."""
+    content = getattr(message, "content", None)
+    if not content:
+        raise RuntimeError("La API devolvió una respuesta sin contenido.")
+    block = content[0]
+    text = getattr(block, "text", None)
+    if not isinstance(text, str):
+        raise RuntimeError(
+            f"La API no devolvió un bloque de texto (tipo={type(block).__name__})."
+        )
+    stop_reason = getattr(message, "stop_reason", None) or ""
+    return text, stop_reason
+
+
 def call_messages(
     client: anthropic.Anthropic,
     *,
@@ -34,12 +49,15 @@ def call_messages(
     for attempt in range(_MAX_RETRIES + 1):
         try:
             message = client.messages.create(**kwargs)
-            texto = message.content[0].text
-            stop_reason = getattr(message, "stop_reason", None) or ""
-            return texto, stop_reason
+            return extract_text_from_message(message)
+        except anthropic.RateLimitError as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                time.sleep(30 * (attempt + 1))
+                continue
+            raise
         except (
             anthropic.APIConnectionError,
-            anthropic.RateLimitError,
             anthropic.APIError,
         ) as exc:
             last_exc = exc

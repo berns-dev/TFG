@@ -350,7 +350,16 @@ def _db_confirmar_organizacion(asignatura_id: int, output_id: int, bloques: list
             "SELECT id FROM temas WHERE asignatura_id = ?", (asignatura_id,)
         ).fetchall()
         for tema in temas_existentes:
-            conn.execute("DELETE FROM subbloques WHERE tema_id = ?", (tema["id"],))
+            tid = tema["id"]
+            conn.execute(
+                "DELETE FROM visualizacion_interactiva WHERE tema_id = ?",
+                (tid,),
+            )
+            conn.execute(
+                "DELETE FROM contenido_tema WHERE tema_id = ?",
+                (tid,),
+            )
+            conn.execute("DELETE FROM subbloques WHERE tema_id = ?", (tid,))
         conn.execute("DELETE FROM temas WHERE asignatura_id = ?", (asignatura_id,))
 
         for orden, bloque in enumerate(bloques, start=1):
@@ -1140,11 +1149,11 @@ def _cnt_curar_bloque(
     tema_nombre: str,
     rutas_material: list[str],
     nombre_archivo: str = "",
-) -> tuple[str, float | None, list[dict]]:
+) -> tuple[str, float | None, dict]:
     """Genera el markdown curado del bloque completo (extracción fiel, sin densidad horaria)."""
     texto = _cnt_extraer_texto_bloque(rutas_material)
     if not texto.strip():
-        return "", None, []
+        return "", None, {}
 
     if not nombre_archivo and rutas_material:
         nombre_archivo = Path(rutas_material[0]).name
@@ -1160,7 +1169,7 @@ def _cnt_curar_bloque(
         max_workers=max_w,
     )
     if not markdown.strip():
-        return "", None, []
+        return "", None, {}
 
     scores = [
         r["coverage_score"]
@@ -1168,7 +1177,7 @@ def _cnt_curar_bloque(
         if r.get("coverage_score") is not None
     ]
     fidelidad: float | None = round(sum(scores) / len(scores), 3) if scores else None
-    return markdown, fidelidad, reporte.get("fidelity") or []
+    return markdown, fidelidad, reporte
 
 
 def _cnt_generar_bloque_desde_material(
@@ -1196,13 +1205,14 @@ def _cnt_generar_bloque_desde_material(
     accion = "Regenerando" if regenerar else "Curando"
     with st.status(f"{accion} bloque: {tema_nombre}…", expanded=True) as status:
         try:
-            md_bloque, fidelidad, _ = _cnt_curar_bloque(
+            md_bloque, fidelidad, reporte = _cnt_curar_bloque(
                 tema_nombre=tema_nombre,
                 rutas_material=[ruta_material],
                 nombre_archivo=nombre_archivo,
             )
             if not md_bloque.strip():
                 raise ValueError("No se pudo extraer ni curar contenido del material.")
+            avisos_chunk = reporte.get("errores") or []
             db.actualizar_tema_input_id(tema_id, material_sel["id"], RUTA_DB)
             if regenerar:
                 db.regenerar_contenido_tema_borrador(tema_id, md_bloque, RUTA_DB)
@@ -1220,7 +1230,12 @@ def _cnt_generar_bloque_desde_material(
             label = f"✅ Borrador listo: {tema_nombre}"
             if fidelidad is not None and fidelidad < umbral:
                 label += f" (fidelidad {fidelidad} < {umbral})"
+            if avisos_chunk:
+                label += f" — {len(avisos_chunk)} fragmento(s) omitido(s)"
             status.update(label=label, state="complete")
+            if avisos_chunk:
+                for av in avisos_chunk:
+                    st.warning(av)
             _db_actualizar_ejecucion(ejecucion_id, "completado")
         except Exception as err:
             _db_actualizar_ejecucion(ejecucion_id, "error")
@@ -1351,6 +1366,31 @@ def _vista_contenido() -> None:
                     )
             else:
                 st.caption("Sin subtemas del Organizador.")
+
+            if texto_md:
+                marcadores = _cnt_coverage.contar_marcadores(texto_md)
+                n_prob = marcadores.get("total_problemas", 0)
+                n_rev = marcadores.get("requiere_revision", 0)
+                if n_prob or n_rev:
+                    st.markdown(
+                        '<div style="font-size:12px;font-weight:600;margin-top:16px;">'
+                        "Marcadores de extracción</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if n_prob:
+                        st.warning(
+                            f"{n_prob} marcador(es) sin resolver "
+                            f"([ECUACION], [ECUACION_PARCIAL], [TEXTO_ILEGIBLE])."
+                        )
+                    if n_rev:
+                        st.info(
+                            f"{n_rev} ecuación(es) reconstruida(s) por IA "
+                            f"— revisar [ECUACION_RECONSTRUIDA]."
+                        )
+                    if marcadores.get("figura"):
+                        st.caption(
+                            f"{marcadores['figura']} referencia(s) [FIGURA] en el bloque."
+                        )
 
     with col_ed:
         if ct is None:

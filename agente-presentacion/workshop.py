@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
-import time
+import sys
+from pathlib import Path
 
 import anthropic
 
@@ -19,9 +20,14 @@ from prs_prompts import (
     build_taller_refinador_message,
 )
 
+_MONOREPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_MONOREPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_MONOREPO_ROOT))
+
+from shared.anthropic_client import call_messages  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
-_MAX_RETRIES = 2
 _MAX_TOKENS = 8192
 _MAX_TOKENS_RAZONADOR = 1024
 
@@ -45,29 +51,14 @@ def _llamar_sonnet(
     system: str, user_message: str, max_tokens: int = _MAX_TOKENS
 ) -> str:
     client = _get_client()
-    last_exc: Exception | None = None
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            response = client.messages.create(
-                model=MODEL_SMART,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user_message}],
-            )
-            return _limpiar_respuesta_html(response.content[0].text)
-        except (
-            anthropic.APIConnectionError,
-            anthropic.RateLimitError,
-            anthropic.APIError,
-        ) as exc:
-            last_exc = exc
-            if attempt < _MAX_RETRIES:
-                time.sleep(2**attempt)
-                continue
-            raise
-    if last_exc:
-        raise last_exc
-    raise RuntimeError("No se pudo obtener respuesta del modelo")
+    raw, _stop = call_messages(
+        client,
+        model=MODEL_SMART,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user_message}],
+    )
+    return _limpiar_respuesta_html(raw)
 
 
 def _razonar_instruccion(

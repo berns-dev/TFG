@@ -319,6 +319,7 @@ def get_connection(ruta=RUTA_DB_POR_DEFECTO):
     conn = sqlite3.connect(ruta)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -354,10 +355,11 @@ def init_db(ruta=RUTA_DB_POR_DEFECTO) -> int:
             for sentencia in MIGRACIONES[version_destino]:
                 try:
                     conn.execute(sentencia)
-                except sqlite3.OperationalError:
-                    # La columna ya existe — la migración fue aplicada parcialmente
-                    # en una sesión anterior. Se continúa sin error.
-                    pass
+                except sqlite3.OperationalError as exc:
+                    msg = str(exc).lower()
+                    if "duplicate column" in msg or "already exists" in msg:
+                        continue
+                    raise
             conn.commit()
             version_actual = version_destino
 
@@ -600,7 +602,7 @@ def guardar_contenido_tema_edicion(
     ruta=RUTA_DB_POR_DEFECTO,
 ) -> None:
     """Persiste una edición manual del profesor (sin aprobar todavía)."""
-    estado = "aprobado" if porcentaje_editado == 0 else "editado"
+    estado = "editado"
     conn = get_connection(ruta)
     try:
         existe = conn.execute(

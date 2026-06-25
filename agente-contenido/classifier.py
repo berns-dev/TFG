@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 import time
+from pathlib import Path
 from typing import Any
 
 import anthropic
 
 from cnt_config import (
     ANTHROPIC_API_KEY,
+    CLASSIFIER_MAX_TOKENS,
     MIN_CHARS_FOR_SMART,
     MODEL_FAST,
     MODEL_SMART,
@@ -18,6 +21,12 @@ from cnt_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MONOREPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_MONOREPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_MONOREPO_ROOT))
+
+from shared.anthropic_client import call_messages  # noqa: E402
 
 SYSTEM_PROMPT = """Eres un procesador especializado de material docente universitario.
 Recibes fragmentos de texto extraidos de documentos academicos (PDF o PPTX).
@@ -203,11 +212,13 @@ def _call_anthropic(chunk_text: str, tema_horas: float | None = None) -> dict[st
     user_message = _build_user_message(chunk_text, tema_horas)
 
     last_raw = ""
+    last_stop_reason = ""
     for attempt in range(3):
         try:
-            message = client.messages.create(
+            raw, stop_reason = call_messages(
+                client,
                 model=model,
-                max_tokens=2048,
+                max_tokens=CLASSIFIER_MAX_TOKENS,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_message}],
             )
@@ -220,7 +231,12 @@ def _call_anthropic(chunk_text: str, tema_horas: float | None = None) -> dict[st
                 time.sleep(2**attempt)
                 continue
             raise
-        raw = message.content[0].text
+        last_stop_reason = stop_reason
+        if stop_reason == "max_tokens":
+            logger.warning(
+                "Respuesta del clasificador truncada por max_tokens (intento %s)",
+                attempt + 1,
+            )
         last_raw = raw
         parsed = _parse_delimited_response(raw)
         contenido = str(parsed.get("contenido_markdown", "")).strip()
@@ -239,6 +255,11 @@ def _call_anthropic(chunk_text: str, tema_horas: float | None = None) -> dict[st
             idioma = str(parsed.get("idioma", "es")).strip().lower() or "es"
             if idioma not in VALID_LANGUAGES:
                 idioma = "es"
+            if stop_reason == "max_tokens":
+                logger.warning(
+                    "Fragmento clasificado con respuesta truncada (max_tokens); "
+                    "revisar el bloque generado."
+                )
             return {
                 "tipo": tipo,
                 "titulo_detectado": parsed.get("titulo_detectado"),

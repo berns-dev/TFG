@@ -1090,6 +1090,9 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
             "Verifica que está incluido en requirements.txt e instalado en el entorno."
         )
 
+    if not (markdown_text or "").strip():
+        raise ValueError("El markdown está vacío — no hay contenido para exportar a PDF.")
+
     # 1. Pre-process markdown (antes del strip: la asignatura sale del
     #    frontmatter tema_detectado, o del H1 si no hay metadata)
     asignatura = _extraer_asignatura(markdown_text, titulo)
@@ -1111,7 +1114,9 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
     flowables = parser.flowables
 
     if not flowables:
-        flowables = [Paragraph("(Documento vacío)", _ESTILOS["p"])]
+        raise ValueError(
+            "No se pudo extraer contenido del markdown para generar el PDF."
+        )
 
     # 4. Build PDF with ReportLab
     buf = io.BytesIO()

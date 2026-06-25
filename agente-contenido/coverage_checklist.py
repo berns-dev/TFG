@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import re
-import unicodedata
+import sys
+from pathlib import Path
 
+_MONOREPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_MONOREPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_MONOREPO_ROOT))
 
-def _normalizar(texto: str) -> str:
-    t = unicodedata.normalize("NFD", (texto or "").lower())
-    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
-    t = re.sub(r"[^a-z0-9\s]", " ", t)
-    return re.sub(r"\s+", " ", t).strip()
+from shared.text_utils import normalize_for_matching as _normalizar
 
 
 _STOPWORDS = frozenset({
