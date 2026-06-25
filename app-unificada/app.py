@@ -36,6 +36,7 @@ if RAIZ_APP not in sys.path:
     sys.path.insert(0, RAIZ_APP)
 
 from database import db  # noqa: E402
+from shared.anthropic_client import classify_api_error  # noqa: E402
 from ui.components import (  # noqa: E402
     cobertura_item_html,
     file_meta,
@@ -162,9 +163,10 @@ try:
     _org_agente = _org_mods["agente"]
     _org_parser = _org_mods["parser"]
     _org_prompts = _org_mods["org_prompts"]
+    _org_config = _org_mods["org_config"]
     _ORG_ERROR: str | None = None
 except Exception as _e:
-    _org_agente = _org_parser = _org_prompts = None
+    _org_agente = _org_parser = _org_prompts = _org_config = None
     _ORG_ERROR = str(_e)
 
 
@@ -302,6 +304,11 @@ def _db_registrar_validacion(
     fidelidad léxica (Contenido) no se altera — esto es únicamente persistencia.
     """
     if ejecucion_id is None:
+        _log.warning(
+            "Validación descartada (ejecucion_id=None): tipo=%s — %s",
+            tipo,
+            descripcion,
+        )
         return
     conn = db.get_connection(RUTA_DB)
     try:
@@ -809,7 +816,7 @@ def _org_generar_organizacion(
                 return True
             except Exception as err:
                 status.update(label="❌ Error al aplicar el ajuste", state="error")
-                st.error(f"Error durante el refinamiento: {err}")
+                st.error(f"Error durante el refinamiento: {classify_api_error(err)}")
                 return False
 
     # ── Camino completo: primera generación ───────────────────────────────────
@@ -859,8 +866,19 @@ def _org_generar_organizacion(
 
             longitud_total = sum(len(t) for t in textos_teoria)
             if longitud_total > 120000:
-                textos_teoria = [t[:20000] for t in textos_teoria]
-                st.info("Materiales truncados a 20.000 caracteres por archivo para no superar el límite del modelo.")
+                recortes: list[str] = []
+                textos_truncados: list[str] = []
+                for idx, t in enumerate(textos_teoria):
+                    nombre = archivos_teoria[idx] if idx < len(archivos_teoria) else f"archivo {idx + 1}"
+                    if len(t) > 20000:
+                        recortes.append(f"**{nombre}** ({len(t):,} → 20.000 caracteres)")
+                    textos_truncados.append(t[:20000])
+                textos_teoria = textos_truncados
+                detalle = "; ".join(recortes) if recortes else "varios archivos"
+                st.info(
+                    f"Materiales truncados por límite del modelo "
+                    f"({longitud_total:,} caracteres totales > 120.000): {detalle}."
+                )
 
             st.session_state["org_ultimos_archivos_teoria"] = archivos_teoria
             st.session_state["org_ultimos_archivos_contexto"] = []
@@ -873,7 +891,11 @@ def _org_generar_organizacion(
             horas_totales = horas_teoria + horas_aula
 
             if horas_totales == 0:
-                st.warning("⚠️ No se detectaron horas lectivas (TE/PA) en la guía docente.")
+                st.warning(
+                    "⚠️ No se detectaron horas lectivas (TE/PA) en la guía docente. "
+                    "La distribución de horas por bloque no se normalizará automáticamente; "
+                    "revísala manualmente antes de confirmar."
+                )
             st.session_state["org_ultimas_horas_teoria"] = horas_docencia
             st.session_state["org_ultimas_horas_totales"] = horas_totales if horas_totales > 0 else None
 
@@ -937,7 +959,11 @@ def _org_generar_organizacion(
                     subtemas_por_material=subtemas_confirmados,
                 )
 
-            st.write("🤖 Consultando al agente (esto puede tardar ~15s)...")
+            _org_timeout = getattr(_org_config, "REQUEST_TIMEOUT_SECONDS", 120)
+            st.write(
+                f"🤖 Consultando al agente "
+                f"(puede tardar hasta ~{_org_timeout}s según el tamaño de los materiales)..."
+            )
             resultado, stop_reason = _org_agente.ejecutar_agente(prompt)
             st.session_state["org_warning_truncamiento"] = _org_parser.detectar_output_truncado(
                 resultado, stop_reason
@@ -972,7 +998,7 @@ def _org_generar_organizacion(
         except Exception as err:
             _db_actualizar_ejecucion(ejecucion_id, "error")
             status.update(label="❌ Error en el proceso", state="error")
-            st.error(f"Error durante la generación: {err}")
+            st.error(f"Error durante la generación: {classify_api_error(err)}")
             return False
 
 
@@ -1065,26 +1091,50 @@ def _cnt_extract_text_cached(ruta: str, mtime_ns: int) -> str:
     return (_cnt_extractor.extract_text(ruta) or "").strip()
 
 
-def _cnt_leer_material(ruta: str) -> str:
-    """Texto de un PDF/PPTX en disco, con caché entre reruns de Streamlit."""
+def _cnt_leer_material(ruta: str) -> tuple[str, str | None]:
+    """Texto de un PDF/PPTX en disco, con caché entre reruns de Streamlit.
+
+    Returns:
+        (texto, error) — ``error`` es None si la lectura fue correcta.
+    """
     if not os.path.exists(ruta):
-        return ""
+        return "", "no_encontrado"
     try:
         mtime_ns = os.stat(ruta).st_mtime_ns
-        return _cnt_extract_text_cached(ruta, mtime_ns)
+        texto = _cnt_extract_text_cached(ruta, mtime_ns)
+        return texto, None
+    except (OSError, ValueError, RuntimeError) as exc:
+        _log.warning("Extracción texto fallida (ilegible) para %s: %s", ruta, exc)
+        return "", f"ilegible:{exc}"
     except Exception as exc:
-        _log.warning("Extracción texto fallida para %s: %s", ruta, exc)
-        return ""
+        _log.warning("Extracción texto fallida (transitorio) para %s: %s", ruta, exc)
+        return "", f"transitorio:{exc}"
 
 
-def _cnt_extraer_texto_bloque(rutas_material: list[str]) -> str:
+def _cnt_format_error_lectura(nombre: str, err: str) -> str:
+    if err == "no_encontrado":
+        return f"{nombre}: archivo no encontrado en disco"
+    if err.startswith("ilegible:"):
+        return f"{nombre}: archivo ilegible o corrupto ({err[9:]})"
+    if err.startswith("transitorio:"):
+        return f"{nombre}: error al leer el archivo ({err[11:]})"
+    return f"{nombre}: {err}"
+
+
+def _cnt_extraer_texto_bloque(rutas_material: list[str]) -> tuple[str, list[str]]:
     """Concatena el texto extraído de todos los materiales del bloque."""
     partes: list[str] = []
+    errores: list[str] = []
     for ruta in rutas_material:
-        texto = _cnt_leer_material(ruta)
-        if texto:
+        texto, err = _cnt_leer_material(ruta)
+        nombre = os.path.basename(ruta)
+        if err:
+            errores.append(_cnt_format_error_lectura(nombre, err))
+        elif texto:
             partes.append(texto)
-    return "\n\n".join(partes)
+        else:
+            errores.append(f"{nombre}: sin texto extraíble")
+    return "\n\n".join(partes), errores
 
 
 def _cnt_numero_bloque(bloque_label: str) -> int | None:
@@ -1135,7 +1185,7 @@ def _cnt_sugerir_material_id(tema: dict, materiales: list[dict]) -> int | None:
     guardado = tema.get("input_id")
     if guardado in ids:
         return guardado
-    return materiales[0]["id"]
+    return None
 
 
 def _cnt_etiqueta_material(mat: dict) -> str:
@@ -1151,9 +1201,12 @@ def _cnt_curar_bloque(
     nombre_archivo: str = "",
 ) -> tuple[str, float | None, dict]:
     """Genera el markdown curado del bloque completo (extracción fiel, sin densidad horaria)."""
-    texto = _cnt_extraer_texto_bloque(rutas_material)
+    texto, errores_lectura = _cnt_extraer_texto_bloque(rutas_material)
     if not texto.strip():
-        return "", None, {}
+        reporte_vacio: dict = {}
+        if errores_lectura:
+            reporte_vacio["errores"] = errores_lectura
+        return "", None, reporte_vacio
 
     if not nombre_archivo and rutas_material:
         nombre_archivo = Path(rutas_material[0]).name
@@ -1210,8 +1263,15 @@ def _cnt_generar_bloque_desde_material(
                 rutas_material=[ruta_material],
                 nombre_archivo=nombre_archivo,
             )
+            avisos_lectura = reporte.get("errores") or []
+            if avisos_lectura:
+                for av in avisos_lectura:
+                    st.warning(av)
             if not md_bloque.strip():
-                raise ValueError("No se pudo extraer ni curar contenido del material.")
+                raise ValueError(
+                    "No se pudo extraer ni curar contenido del material. "
+                    "Revisa que el PDF/PPTX no esté corrupto o escaneado sin texto."
+                )
             avisos_chunk = reporte.get("errores") or []
             db.actualizar_tema_input_id(tema_id, material_sel["id"], RUTA_DB)
             if regenerar:
@@ -1240,7 +1300,7 @@ def _cnt_generar_bloque_desde_material(
         except Exception as err:
             _db_actualizar_ejecucion(ejecucion_id, "error")
             status.update(label="❌ Error", state="error")
-            st.error(f"Error al generar el bloque: {err}")
+            st.error(f"Error al generar el bloque: {classify_api_error(err)}")
             return
 
     st.session_state.pop(f"cnt_md_{tema_id}", None)
@@ -1308,6 +1368,11 @@ def _vista_contenido() -> None:
         sugerido_id = _cnt_sugerir_material_id(tema, materiales_teoria)
         ids = [m["id"] for m in materiales_teoria]
         default_idx = ids.index(sugerido_id) if sugerido_id in ids else 0
+        if sugerido_id is None:
+            st.caption(
+                "No hay material cuyo nombre coincida con este bloque; "
+                "selección manual requerida."
+            )
         mat_idx = st.selectbox(
             "Material de teoría para este bloque:",
             options=range(len(materiales_teoria)),
@@ -1613,14 +1678,19 @@ def _prs_extraer_texto_material(rutas: list[str]) -> tuple[str, list[str]]:
     partes: list[str] = []
     fallos: list[str] = []
     for ruta in rutas:
-        if not os.path.exists(ruta):
-            fallos.append(os.path.basename(ruta))
-            continue
-        texto = _cnt_leer_material(ruta)
-        if texto:
+        nombre = os.path.basename(ruta)
+        texto, err = _cnt_leer_material(ruta)
+        if err:
+            if err == "no_encontrado":
+                fallos.append(f"{nombre} (no encontrado)")
+            elif err.startswith("ilegible:"):
+                fallos.append(f"{nombre} (ilegible o corrupto)")
+            else:
+                fallos.append(f"{nombre} (error al leer)")
+        elif texto:
             partes.append(texto)
         else:
-            fallos.append(os.path.basename(ruta))
+            fallos.append(f"{nombre} (sin texto extraíble)")
     texto = "\n\n".join(partes)
     return texto[:8000], fallos
 
@@ -1687,9 +1757,14 @@ def _vista_presentacion() -> None:
         st.session_state["prs_tema_idx"] = 0
     estados_map = _estados_bloques_asignatura(asignatura_id)
     tema_idx = render_bloque_chips(temas, st.session_state["prs_tema_idx"], estados_map, "prs")
+    prev_tema_id = st.session_state.get("prs_tema_id_activo")
     st.session_state["prs_tema_idx"] = tema_idx
     tema = temas[tema_idx]
     tema_id: int = tema["id"]
+    if prev_tema_id is not None and prev_tema_id != tema_id:
+        st.session_state.pop(f"prs_pdf_bytes_{prev_tema_id}", None)
+        st.session_state.pop(f"prs_html_pres_{prev_tema_id}", None)
+    st.session_state["prs_tema_id_activo"] = tema_id
     tema_nombre: str = tema["nombre"]
 
     ct = _db_cnt_get_contenido_tema(tema_id)
@@ -1824,7 +1899,7 @@ def _vista_presentacion() -> None:
                         status.update(label="Preview generado", state="complete")
                     except Exception as err:
                         status.update(label="Error", state="error")
-                        st.error(str(err))
+                        st.error(classify_api_error(err))
                 st.rerun()
 
             if refinar and instruccion.strip() and taller.get("html"):
@@ -1848,7 +1923,7 @@ def _vista_presentacion() -> None:
                         status.update(label="Preview actualizado", state="complete")
                     except Exception as err:
                         status.update(label="Error", state="error")
-                        st.error(str(err))
+                        st.error(classify_api_error(err))
                 st.rerun()
 
             if html_preview:
@@ -1935,7 +2010,7 @@ def _vista_presentacion() -> None:
                         _st_pdf.update(label="PDF generado", state="complete")
                     except Exception as _e:
                         _st_pdf.update(label="Error al generar el PDF", state="error")
-                        st.error(str(_e))
+                        st.error(classify_api_error(_e))
                 st.rerun()
 
             if st.session_state.get(f"prs_pdf_bytes_{tema_id}"):
@@ -1976,7 +2051,7 @@ def _vista_presentacion() -> None:
                         _st_pres.update(label="Presentación generada", state="complete")
                     except Exception as _e:
                         _st_pres.update(label="Error al generar la presentación", state="error")
-                        st.error(str(_e))
+                        st.error(classify_api_error(_e))
                 st.rerun()
 
             if n_aprobadas == 0:
@@ -2487,19 +2562,22 @@ def _vista_organizador() -> None:
 
         wn = st.session_state.get("org_warning_normalizacion")
         if wn:
-            diferencia = wn["diferencia"]
-            suma_antes = wn["suma_antes"]
-            total_obj = suma_antes - diferencia
-            bloques_ajustados = ", ".join(
-                f"**{nombre}** ({v['antes']}h → {v['despues']}h)"
-                for nombre, v in list(wn["ajustes"].items())[:6]
-            )
-            st.warning(
-                f"⚠️ **Normalización de horas aplicada:** el modelo asignó **{suma_antes:.1f}h** "
-                f"en total de bloques en lugar de **{total_obj:.0f}h** (diferencia: {diferencia:+.1f}h). "
-                f"Las horas se redistribuyeron entre bloques. "
-                + (f"Bloques ajustados: {bloques_ajustados}." if bloques_ajustados else "")
-            )
+            if wn.get("motivo") == "sin_ancla_horaria":
+                st.warning(f"⚠️ {wn.get('mensaje', 'Horas no detectadas en la guía docente.')}")
+            elif "diferencia" in wn:
+                diferencia = wn["diferencia"]
+                suma_antes = wn["suma_antes"]
+                total_obj = suma_antes - diferencia
+                bloques_ajustados = ", ".join(
+                    f"**{nombre}** ({v['antes']}h → {v['despues']}h)"
+                    for nombre, v in list(wn["ajustes"].items())[:6]
+                )
+                st.warning(
+                    f"⚠️ **Normalización de horas aplicada:** el modelo asignó **{suma_antes:.1f}h** "
+                    f"en total de bloques en lugar de **{total_obj:.0f}h** (diferencia: {diferencia:+.1f}h). "
+                    f"Las horas se redistribuyeron entre bloques. "
+                    + (f"Bloques ajustados: {bloques_ajustados}." if bloques_ajustados else "")
+                )
 
         wt = st.session_state.get("org_warning_truncamiento")
         if wt:
@@ -2552,9 +2630,27 @@ def _vista_organizador() -> None:
                 key_prefix="org_valoracion",
             )
         else:
+            n_curados, n_viz = db.contar_trabajo_curado_asignatura(asignatura_id, RUTA_DB)
+            requiere_aviso_borrado = (n_curados + n_viz) > 0
+            if requiere_aviso_borrado:
+                st.warning(
+                    f"Al confirmar se **eliminarán {n_curados} bloque(s) con contenido curado** "
+                    f"y **{n_viz} visualización(es) aprobada(s)** de esta asignatura."
+                )
+                st.checkbox(
+                    "Entiendo que se borrará el trabajo previo de Contenido y Presentación",
+                    key="org_confirm_borrado_ok",
+                )
+            puede_confirmar = (
+                not requiere_aviso_borrado
+                or st.session_state.get("org_confirm_borrado_ok", False)
+            )
             if st.button(
                 "✅ Confirmar organización como definitiva",
-                type="primary", use_container_width=True, key="org_btn_confirmar_org",
+                type="primary",
+                use_container_width=True,
+                key="org_btn_confirmar_org",
+                disabled=not puede_confirmar,
             ):
                 _org_sync_widgets_a_bloques(st.session_state["org_iteracion"])
                 _org_actualizar_desde_bloques(slug)

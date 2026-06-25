@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -214,23 +213,13 @@ def _call_anthropic(chunk_text: str, tema_horas: float | None = None) -> dict[st
     last_raw = ""
     last_stop_reason = ""
     for attempt in range(3):
-        try:
-            raw, stop_reason = call_messages(
-                client,
-                model=model,
-                max_tokens=CLASSIFIER_MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
-            )
-        except (
-            anthropic.APIConnectionError,
-            anthropic.RateLimitError,
-            anthropic.APIError,
-        ):
-            if attempt < 2:
-                time.sleep(2**attempt)
-                continue
-            raise
+        raw, stop_reason = call_messages(
+            client,
+            model=model,
+            max_tokens=CLASSIFIER_MAX_TOKENS,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
         last_stop_reason = stop_reason
         if stop_reason == "max_tokens":
             logger.warning(

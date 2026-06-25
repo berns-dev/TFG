@@ -538,6 +538,38 @@ def get_contenido_tema(tema_id: int, ruta=RUTA_DB_POR_DEFECTO) -> dict | None:
         conn.close()
 
 
+def contar_trabajo_curado_asignatura(
+    asignatura_id: int,
+    ruta=RUTA_DB_POR_DEFECTO,
+) -> tuple[int, int]:
+    """Cuenta bloques con markdown curado y visualizaciones aprobadas de la asignatura."""
+    conn = get_connection(ruta)
+    try:
+        n_contenido = conn.execute(
+            """
+            SELECT COUNT(*) FROM contenido_tema ct
+            JOIN temas t ON t.id = ct.tema_id
+            WHERE t.asignatura_id = ?
+              AND (
+                TRIM(COALESCE(ct.markdown_final, '')) != ''
+                OR TRIM(COALESCE(ct.markdown_borrador, '')) != ''
+              )
+            """,
+            (asignatura_id,),
+        ).fetchone()[0]
+        n_viz = conn.execute(
+            """
+            SELECT COUNT(*) FROM visualizacion_interactiva vi
+            JOIN temas t ON t.id = vi.tema_id
+            WHERE t.asignatura_id = ? AND vi.estado = 'aprobado'
+            """,
+            (asignatura_id,),
+        ).fetchone()[0]
+        return int(n_contenido), int(n_viz)
+    finally:
+        conn.close()
+
+
 def upsert_contenido_tema_borrador(
     tema_id: int,
     markdown_borrador: str,

@@ -33,9 +33,11 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import anthropic
 
@@ -53,6 +55,12 @@ from prs_prompts import (
     build_generador_message,
     build_razonador_message,
 )
+
+_MONOREPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_MONOREPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_MONOREPO_ROOT))
+
+from shared.anthropic_client import extract_text_from_message  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -398,7 +406,8 @@ def _razonar_visualizacion(
         system=PROMPT_RAZONADOR_VISUALIZACION,
         messages=[{"role": "user", "content": user_msg}],
     )
-    raw = response.content[0].text.strip()
+    raw, _ = extract_text_from_message(response)
+    raw = raw.strip()
     visualizacion = _parse_visualizacion(raw, elemento)
 
     if verbose and visualizacion.get("VISUALIZABLE") != "NO":
@@ -608,7 +617,8 @@ def _describir_variables_haiku(
                 "content": build_descripcion_variables_message(latex, variables, contexto),
             }],
         )
-        raw = response.content[0].text.strip()
+        raw, _ = extract_text_from_message(response)
+        raw = raw.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw).strip()
@@ -1123,7 +1133,8 @@ def _generar_bloque(
                 system=PROMPT_GENERADOR_HTML,
                 messages=[{"role": "user", "content": mensaje}],
             )
-            raw = response.content[0].text.strip()
+            raw, _ = extract_text_from_message(response)
+            raw = raw.strip()
 
             # Strip accidental backtick code fences despite prompt instructions
             if raw.startswith("```"):

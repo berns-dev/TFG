@@ -50,6 +50,12 @@ def call_messages(
         try:
             message = client.messages.create(**kwargs)
             return extract_text_from_message(message)
+        except anthropic.APITimeoutError as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                time.sleep(2**attempt)
+                continue
+            raise
         except anthropic.RateLimitError as exc:
             last_exc = exc
             if attempt < _MAX_RETRIES:
@@ -68,3 +74,25 @@ def call_messages(
     if last_exc:
         raise last_exc
     raise RuntimeError("No se pudo obtener respuesta del modelo")
+
+
+def classify_api_error(exc: BaseException) -> str:
+    """Mensaje legible para el profesor según el tipo de fallo de API."""
+    if isinstance(exc, anthropic.APITimeoutError):
+        return (
+            "La consulta superó el tiempo límite de la API. "
+            "Intenta de nuevo con menos material o más tarde."
+        )
+    if isinstance(exc, anthropic.RateLimitError):
+        return (
+            "Límite de peticiones a la API alcanzado. "
+            "Espera un momento e inténtalo de nuevo."
+        )
+    if isinstance(exc, anthropic.APIConnectionError):
+        return (
+            "No se pudo conectar con la API de Anthropic. "
+            "Comprueba tu conexión a internet."
+        )
+    if isinstance(exc, anthropic.APIError):
+        return f"Error de la API de Anthropic: {exc}"
+    return str(exc)

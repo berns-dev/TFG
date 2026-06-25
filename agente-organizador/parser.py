@@ -700,7 +700,7 @@ def _buscar_candidatos_indice(
     return []
 
 
-def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
+def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> tuple[list[dict], str]:
     """Detecta líneas candidatas a título en un PDF por tamaño/estilo de fuente.
 
     Estrategia (dos fases):
@@ -718,7 +718,10 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
       candidatas a título. Umbral relativo (20 %) para robustez entre documentos
       con distintos cuerpos (slides 16 pt vs. papers 10 pt).
 
-    Retorna [{titulo: str, referencia: str}] con referencia "Índice (p. N)" o "p. N".
+    Retorna (candidatos, estado) donde estado es:
+      - ``sin_metadatos``: PDF escaneado o sin palabras con fuente/tamaño
+      - ``sin_titulos``: PDF analizado pero sin títulos detectados
+      - ``ok``: al menos un candidato encontrado
     """
     resultados: list[dict] = []
     vistos_norm: set[str] = set()
@@ -746,7 +749,7 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
 
             # PDF escaneado o vacío: no hay metadatos de fuente útiles
             if len(todas_palabras) < 20:
-                return []
+                return [], "sin_metadatos"
 
             # 2. Determinar (fontname, size) del cuerpo por frecuencia.
             # Se excluyen fuentes matemáticas (CambriaMath, Symbol…) y tamaños
@@ -762,7 +765,7 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
                     conteo[(fn, sz)] += 1
 
             if not conteo:
-                return []
+                return [], "sin_metadatos"
 
             cuerpo_fn, cuerpo_sz = conteo.most_common(1)[0][0]
 
@@ -779,7 +782,8 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
                 lineas, alturas_pagina, cuerpo_fn, cuerpo_sz
             )
             if candidatos_indice:
-                return candidatos_indice
+                estado = "ok" if candidatos_indice else "sin_titulos"
+                return candidatos_indice, estado
 
             # 5. Sin índice — scan visual de todas las páginas
             for (npag, y_bucket), palabras_linea in sorted(lineas.items()):
@@ -867,9 +871,28 @@ def extraer_titulos_visuales_pdf(archivo_bytes: bytes) -> list[dict]:
 
     except Exception as exc:
         _log.warning("extraer_titulos_visuales_pdf: fallo en extracción visual (%s)", exc)
-        return []
+        return [], "sin_metadatos"
 
-    return resultados
+    if resultados:
+        return resultados, "ok"
+    return [], "sin_titulos"
+
+
+def _contar_lineas_numeracion_crudas(texto: str) -> int:
+    """Cuenta líneas con numeración X.Y sin filtrar por calidad de subtema."""
+    n = 0
+    for linea in (texto or "").splitlines():
+        linea = linea.strip()
+        if _PAGINA_FOOTER_RE.match(linea):
+            continue
+        if not _SUBTEMA_NUM_RE.match(linea):
+            continue
+        m_pref = re.match(r"^(\d+(?:\.\d+)*)\.?\s*", linea)
+        prefijo = m_pref.group(1) if m_pref else ""
+        if prefijo.split(".")[0] == "0" or "." not in prefijo:
+            continue
+        n += 1
+    return n
 
 
 def _extraer_candidatos_numeracion(texto: str) -> list[dict]:
@@ -938,7 +961,16 @@ def extraer_candidatos_con_evidencia(
       - fuente: 'numeracion' | 'titulo_slide' | 'titulo_visual'
     """
     candidatos_num = _extraer_candidatos_numeracion(texto)
+    lineas_num_crudas = _contar_lineas_numeracion_crudas(texto)
     if len(candidatos_num) >= _MIN_CANDIDATOS_NUMERACION:
+        if lineas_num_crudas > len(candidatos_num):
+            _log.warning(
+                "Numeración gana la cascada en %s: %s candidato(s) válido(s) "
+                "de %s línea(s) numeradas — revisar calidad de detección",
+                nombre_archivo or "material",
+                len(candidatos_num),
+                lineas_num_crudas,
+            )
         return candidatos_num
 
     candidatos: list[dict] = list(candidatos_num)
@@ -961,7 +993,19 @@ def extraer_candidatos_con_evidencia(
             vistos.add(clave)
 
     if ext == ".pdf" and archivo_bytes is not None:
-        for item in extraer_titulos_visuales_pdf(archivo_bytes):
+        visuales, estado_visual = extraer_titulos_visuales_pdf(archivo_bytes)
+        if estado_visual == "sin_metadatos":
+            _log.info(
+                "PDF %s sin metadatos de fuente (probable escaneado); "
+                "estrategia visual no aplicable",
+                nombre_archivo or "?",
+            )
+        elif estado_visual == "sin_titulos":
+            _log.info(
+                "PDF %s analizado sin títulos visuales detectados",
+                nombre_archivo or "?",
+            )
+        for item in visuales:
             if not es_subtema_valido(item["titulo"]):
                 continue
             clave = normalizar_subtema(item["titulo"])
@@ -1731,6 +1775,20 @@ def normalizar_horas_output(markdown: str, total_horas: float) -> tuple[str, dic
         (markdown, None) si la suma era exacta
     """
     if not total_horas or total_horas <= 0:
+        HDR_RE_EARLY = re.compile(r"^(## Bloque \d+ — .+? · )([\d.,]+)(h.*)$")
+        tiene_hdrs = any(
+            HDR_RE_EARLY.match(ln.rstrip("\r\n"))
+            for ln in markdown.splitlines()
+        )
+        if tiene_hdrs:
+            return markdown, {
+                "motivo": "sin_ancla_horaria",
+                "mensaje": (
+                    "No se detectaron horas TE+PA en la guía docente; "
+                    "la suma de horas por bloque no se normalizó. "
+                    "Revisa manualmente la distribución."
+                ),
+            }
         return markdown, None
 
     HDR_RE = re.compile(r"^(## Bloque \d+ — .+? · )([\d.,]+)(h.*)$")
