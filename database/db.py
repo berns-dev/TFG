@@ -21,7 +21,7 @@ import sqlite3
 
 RUTA_DB_POR_DEFECTO = "data/tfg.db"
 
-VERSION_SCHEMA = 8
+VERSION_SCHEMA = 9
 
 # Asignaturas con las que se ha validado la suite (ver CLAUDE.md).
 ASIGNATURAS_CONOCIDAS = [
@@ -296,6 +296,9 @@ MIGRACIONES: dict[int, list[str]] = {
     ],
     8: [
         "ALTER TABLE subbloques ADD COLUMN fuente TEXT DEFAULT ''",
+    ],
+    9: [
+        "ALTER TABLE visualizacion_interactiva ADD COLUMN razonamiento_spec TEXT DEFAULT ''",
     ],
 }
 
@@ -704,7 +707,8 @@ def listar_visualizaciones_tema(tema_id: int, ruta=RUTA_DB_POR_DEFECTO) -> list[
             dict(r)
             for r in conn.execute(
                 "SELECT id, tema_id, titulo, prompt_inicial, historial_json, "
-                "html_fragment, seccion_ancla, estado, orden, fecha_actualizacion "
+                "html_fragment, seccion_ancla, estado, orden, fecha_actualizacion, "
+                "razonamiento_spec "
                 "FROM visualizacion_interactiva WHERE tema_id = ? "
                 "ORDER BY orden, id",
                 (tema_id,),
@@ -719,7 +723,8 @@ def get_visualizacion(viz_id: int, ruta=RUTA_DB_POR_DEFECTO) -> dict | None:
     try:
         row = conn.execute(
             "SELECT id, tema_id, titulo, prompt_inicial, historial_json, "
-            "html_fragment, seccion_ancla, estado, orden, fecha_actualizacion "
+            "html_fragment, seccion_ancla, estado, orden, fecha_actualizacion, "
+            "razonamiento_spec "
             "FROM visualizacion_interactiva WHERE id = ?",
             (viz_id,),
         ).fetchone()
@@ -734,6 +739,7 @@ def insertar_visualizacion_borrador(
     prompt_inicial: str,
     historial_json: str,
     html_fragment: str,
+    razonamiento_spec: str = "",
     ruta=RUTA_DB_POR_DEFECTO,
 ) -> int:
     conn = get_connection(ruta)
@@ -744,9 +750,13 @@ def insertar_visualizacion_borrador(
         ).fetchone()[0]
         cur = conn.execute(
             "INSERT INTO visualizacion_interactiva "
-            "(tema_id, titulo, prompt_inicial, historial_json, html_fragment, orden) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (tema_id, titulo, prompt_inicial, historial_json, html_fragment, max_orden + 1),
+            "(tema_id, titulo, prompt_inicial, historial_json, html_fragment, "
+            "razonamiento_spec, orden) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                tema_id, titulo, prompt_inicial, historial_json, html_fragment,
+                razonamiento_spec or "", max_orden + 1,
+            ),
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -758,16 +768,31 @@ def actualizar_visualizacion_borrador(
     viz_id: int,
     html_fragment: str,
     historial_json: str,
+    *,
     titulo: str | None = None,
+    razonamiento_spec: str | None = None,
     ruta=RUTA_DB_POR_DEFECTO,
 ) -> None:
     conn = get_connection(ruta)
     try:
-        if titulo is not None:
+        if titulo is not None and razonamiento_spec is not None:
+            conn.execute(
+                "UPDATE visualizacion_interactiva SET html_fragment = ?, historial_json = ?, "
+                "titulo = ?, razonamiento_spec = ?, fecha_actualizacion = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (html_fragment, historial_json, titulo, razonamiento_spec, viz_id),
+            )
+        elif titulo is not None:
             conn.execute(
                 "UPDATE visualizacion_interactiva SET html_fragment = ?, historial_json = ?, "
                 "titulo = ?, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?",
                 (html_fragment, historial_json, titulo, viz_id),
+            )
+        elif razonamiento_spec is not None:
+            conn.execute(
+                "UPDATE visualizacion_interactiva SET html_fragment = ?, historial_json = ?, "
+                "razonamiento_spec = ?, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?",
+                (html_fragment, historial_json, razonamiento_spec, viz_id),
             )
         else:
             conn.execute(

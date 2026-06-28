@@ -51,7 +51,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import markdown as md_lib
 
 from prs_config import ANTHROPIC_API_KEY
-from generador_html import _generar_bloque, _slug
+from generador_html import (
+    _generar_bloque,
+    _slug,
+    extraer_slug_desde_html,
+    sanitizar_chartjs_html,
+)
+from shared.text_utils import (
+    prepare_display_math,
+    promote_bare_display_lines,
+    should_keep_as_display_math,
+    split_mixed_display_math_block,
+    tokenize_ecuacion_markers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +80,7 @@ _FRONTMATTER_RE = re.compile(r"\A---\s*\n.*?\n---\s*\n", re.DOTALL)
 _TEMA_DETECTADO_RE = re.compile(r"^tema_detectado:\s*(.+)$", re.MULTILINE)
 _H1_RE = re.compile(r"^#\s+(?!#)(.+)$", re.MULTILINE)
 _H2_RE = re.compile(r"^##\s+(?!#)(.+)$", re.MULTILINE)
-_BLOCK_LATEX_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
+_BLOCK_LATEX_RE = re.compile(r"\$\$([\s\S]*?)\$\$")
 _INLINE_LATEX_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
 _FIGURA_RE = re.compile(r"\[FIGURA:\s*([^\]]+)\]")
 _TEXTO_ILEGIBLE_RE = re.compile(r"\[TEXTO_ILEGIBLE\]")
@@ -266,6 +278,131 @@ def _asignar_a_secciones(
 # Render Markdown -> HTML (con proteccion de LaTeX y marcadores)
 # ---------------------------------------------------------------------------
 
+_ECUACION_TOKEN_PREFIX = "xxECUATOKEN"
+
+
+_ECUACION_MARCADOR_ETIQUETAS = {
+    "parcial": "parcial",
+    "no_extraible": "no extraíble",
+    "reconstruida": "revisar",
+    "inline": "no transcrita",
+}
+
+
+_LATEX_IN_TEXT_RE = re.compile(
+    r"\\(?:frac|left|right|ln|sqrt|sum|int|sigma|varepsilon|Delta|eta|quad)"
+)
+
+
+def _ecuacion_marker_html(info: dict[str, str]) -> str:
+    """Marcador de ecuación inline: etiqueta pequeña + contenido, sin recuadro."""
+    tipo = info.get("tipo", "")
+    texto = info.get("texto", "").strip()
+    etiqueta = _ECUACION_MARCADOR_ETIQUETAS.get(tipo, "ecuación")
+    titulo = f"Ecuación {etiqueta} en el material original"
+
+    if tipo == "inline" or (tipo == "no_extraible" and not texto):
+        return (
+            f'<span class="ecuacion-marcador ecuacion-marcador--{tipo}" '
+            f'title="{html_lib.escape(titulo)}">'
+            f'<span class="ecuacion-marcador-tag">{etiqueta}</span>'
+            '<span class="ecuacion-marcador-hueco">?</span>'
+            "</span>"
+        )
+
+    if _LATEX_IN_TEXT_RE.search(texto):
+        cuerpo = f"\\({texto}\\)"
+    elif "$" in texto or "\\" in texto:
+        cuerpo = texto
+    else:
+        cuerpo = html_lib.escape(texto)
+
+    return (
+        f'<span class="ecuacion-marcador ecuacion-marcador--{tipo}" '
+        f'title="{html_lib.escape(titulo)}">'
+        f'<span class="ecuacion-marcador-tag">{etiqueta}</span> '
+        f'<span class="ecuacion-marcador-texto">{cuerpo}</span>'
+        "</span>"
+    )
+
+
+def _repair_mixed_ecuacion_display(html: str) -> str:
+    """Separa bloques display que aún mezclan fórmula y prosa (HTML legado)."""
+    _PROSE_IN_MATH_RE = re.compile(
+        r"\b(Reemplazar|Además|donde|figura|Anteriormente|Si tomamos)\b",
+        re.IGNORECASE,
+    )
+
+    def repl(m: re.Match[str]) -> str:
+        inner = m.group(1).strip()
+        if not _PROSE_IN_MATH_RE.search(inner):
+            return m.group(0)
+        partes = re.split(r"\n\s*\n+", inner)
+        bloques: list[str] = []
+        for parte in partes:
+            p = parte.strip()
+            if not p:
+                continue
+            if should_keep_as_display_math(p):
+                bloques.append(
+                    f'<div class="ecuacion-display">\\[{p}\\]</div>'
+                )
+            else:
+                bloques.append(f"<p>{p}</p>")
+        return "".join(bloques)
+
+    return re.sub(
+        r'<div class="ecuacion-display">\\\[([\s\S]*?)\\\]</div>',
+        repl,
+        html,
+    )
+
+
+def _fix_html_math_layout(html: str) -> str:
+    """Evita <div> dentro de <p>, repara bloques mixtos y LaTeX suelto."""
+    html = _repair_mixed_ecuacion_display(html)
+
+    html = re.sub(
+        r"<p>\s*(<div class=\"ecuacion-display\">)",
+        r"\1",
+        html,
+    )
+    html = re.sub(
+        r"(</div>)\s*</p>",
+        r"\1",
+        html,
+    )
+    html = re.sub(
+        r"<p>([^<]*?)<div class=\"ecuacion-display\">",
+        lambda m: (
+            f"<p>{m.group(1)}</p><div class=\"ecuacion-display\">"
+            if m.group(1).strip()
+            else '<div class="ecuacion-display">'
+        ),
+        html,
+    )
+    html = re.sub(
+        r"</div>(\s*\\(?:sigma|frac|left|ln|eta)[^<]+?)</p>",
+        lambda m: (
+            f'</div><div class="ecuacion-display">\\[{m.group(1).strip()}\\]</div>'
+            if should_keep_as_display_math(m.group(1).strip())
+            else f"</div><p>{m.group(1)}</p>"
+        ),
+        html,
+    )
+    html = re.sub(
+        r"</p>(\s*\\(?:sigma|frac|left|ln|eta)[^<]+?)</p>",
+        lambda m: (
+            f'</p><div class="ecuacion-display">\\[{m.group(1).strip()}\\]</div>'
+            if should_keep_as_display_math(m.group(1).strip())
+            else m.group(0)
+        ),
+        html,
+    )
+    html = re.sub(r"</p>\s*$", "", html)
+    return html
+
+
 def _render_markdown(texto: str, figuras_html: dict[str, str]) -> str:
     """Convierte un segmento Markdown a HTML para la presentacion.
 
@@ -279,10 +416,14 @@ def _render_markdown(texto: str, figuras_html: dict[str, str]) -> str:
             para cada figura del documento (placeholder gris o SVG).
     """
     texto = _EMOJI_MARCADOR_RE.sub("", texto)
-    texto = re.sub(r"\[ECUACION_PARCIAL:[^\]]+\]", "", texto)
-    texto = re.sub(r"\[ECUACION\]", "", texto)
+    texto = prepare_display_math(texto)
+    texto, ecuacion_subs = tokenize_ecuacion_markers(texto, _ECUACION_TOKEN_PREFIX)
 
     tokens: dict[str, str] = {}
+    for key, info in ecuacion_subs.items():
+        prestok = f"xxPRESTOKEN{len(tokens)}xx"
+        tokens[prestok] = _ecuacion_marker_html(info)
+        texto = texto.replace(key, prestok)
 
     def _token(html_final: str) -> str:
         key = f"xxPRESTOKEN{len(tokens)}xx"
@@ -303,14 +444,21 @@ def _render_markdown(texto: str, figuras_html: dict[str, str]) -> str:
         ),
         texto,
     )
-    texto = _BLOCK_LATEX_RE.sub(
-        lambda m: _token(
-            '<div class="ecuacion-display">\\['
-            + html_lib.escape(m.group(1).strip())
-            + "\\]</div>"
-        ),
-        texto,
-    )
+    texto = promote_bare_display_lines(texto)
+    def _wrap_block_latex(m: re.Match[str]) -> str:
+        content = m.group(1).strip()
+        if should_keep_as_display_math(content):
+            return _token(
+                '<div class="ecuacion-display">\\['
+                + html_lib.escape(content)
+                + "\\]</div>"
+            )
+        return split_mixed_display_math_block(content)
+
+    prev_block = None
+    while prev_block != texto:
+        prev_block = texto
+        texto = _BLOCK_LATEX_RE.sub(_wrap_block_latex, texto)
     texto = _INLINE_LATEX_RE.sub(
         lambda m: _token("\\(" + html_lib.escape(m.group(1).strip()) + "\\)"),
         texto,
@@ -318,11 +466,15 @@ def _render_markdown(texto: str, figuras_html: dict[str, str]) -> str:
 
     html_out = md_lib.markdown(texto, extensions=["tables", "fenced_code"])
 
-    for key, html_final in tokens.items():
-        # El token puede llegar envuelto en <p>...</p> si iba solo en linea
-        html_out = html_out.replace(f"<p>{key}</p>", html_final)
-        html_out = html_out.replace(key, html_final)
-    return html_out
+    for _ in range(max(len(tokens), 1)):
+        prev = html_out
+        for key in sorted(tokens, key=len, reverse=True):
+            html_final = tokens[key]
+            html_out = html_out.replace(f"<p>{key}</p>", html_final)
+            html_out = html_out.replace(key, html_final)
+        if html_out == prev:
+            break
+    return _fix_html_math_layout(html_out)
 
 
 def _figura_placeholder(descripcion: str) -> str:
@@ -373,7 +525,10 @@ def _preparar_bloque(html_bloque: str, slug: str) -> str:
     inicializa por viewport con IntersectionObserver) y envuelve el bloque
     en la card "Explorador interactivo" diferenciada del texto.
     """
-    sin_autoarranque = _SELF_INIT_RE.sub("", html_bloque)
+    slug_html = extraer_slug_desde_html(html_bloque)
+    if slug_html:
+        slug = slug_html
+    sin_autoarranque = _SELF_INIT_RE.sub("", sanitizar_chartjs_html(html_bloque))
     return (
         f'<div class="bloque-interactivo" data-slug="{slug}"'
         ' data-initialized="false">'
@@ -648,6 +803,28 @@ _PAGE_TEMPLATE = """\
       margin-bottom: 0.35rem;
     }
     .figura-placeholder p { font-size: 13px; font-style: italic; margin: 0; }
+
+    /* ---- Marcadores de ecuación (inline, sin cortar el párrafo) ---- */
+    .ecuacion-marcador {
+      color: #185FA5;
+      font-style: italic;
+    }
+    .ecuacion-marcador-tag {
+      font-size: 0.7em;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #9A9890;
+      margin-right: 0.15em;
+      font-style: normal;
+      font-weight: 500;
+    }
+    .ecuacion-marcador-texto,
+    .ecuacion-marcador-hueco {
+      font-style: italic;
+    }
+    .ecuacion-marcador-hueco {
+      font-weight: 500;
+    }
 
     /* ---- Bloque interactivo ---- */
     .bloque-interactivo {

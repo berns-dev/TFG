@@ -254,11 +254,95 @@ Si no hay suficiente información para determinar el patrón con confianza, usar
 
 
 # ---------------------------------------------------------------------------
-# Sistema: generador de bloques HTML interactivos
-# Modelo: Sonnet — generacion de logica JS compleja + Chart.js / canvas
+# Reglas compartidas de renderizado Chart.js (generador + taller)
 # ---------------------------------------------------------------------------
 
-PROMPT_GENERADOR_HTML = """Eres un generador de bloques HTML interactivos para material docente de ingeniería. El diseño debe ser visualmente atractivo e interactivo — no académico ni corporativo. Generas un bloque autocontenido por ecuación.
+_REGLA_SUAVIZADO_CURVAS = """Para curvas físicas (tensión-deformación, esfuerzo-deformación, P-V, T-S,
+  o cualquier relación no lineal):
+  1. Usar mínimo 50-100 puntos calculados por la función JS, no una lista
+     estática de puntos. Los puntos deben calcularse en la función update()
+     con un bucle for.
+  2. En cada dataset Chart.js tipo línea: si el muestreo analítico tiene ≥80 puntos
+     en un bucle for, usar tension: 0 (la suavidad viene del muestreo). Solo usar
+     tension: 0.4 si hay menos de 50 puntos calculados.
+  3. Si la curva tiene zonas de comportamiento diferenciado (elástica,
+     plástica, post-rotura), calcular los puntos por tramos con la ecuación
+     correcta para cada zona.
+  4. Prohibido usar arrays literales de 5-10 puntos para curvas físicas
+     continuas.
+  5. Continuidad en fronteras entre tramos: el último punto de un tramo y el
+     primero del siguiente deben tener exactamente el mismo (x, y) — sin
+     saltos ni cortes en transiciones de régimen. Cerca de cada frontera,
+     triplicar la densidad de muestreo en un intervalo estrecho."""
+
+_REGLA_CONTINUIDAD_FISICA = """REGLA — CONTINUIDAD Y TRAMOS (cualquier curva física, no solo σ-ε):
+  1. Una función pura y = f(x, params) por serie; si hay tramos, evaluar la fórmula
+     del tramo activo (if/else). Prohibido unir tramos con constantes sueltas.
+  2. En cada frontera x_b entre tramos: calcular y_b = f(x_b) con el tramo anterior
+     y reutilizar exactamente (x_b, y_b) al iniciar el tramo siguiente.
+  3. Prohibido fijar un valor de frontera (y_max, y_inicio, P_crit, etc.) que no
+     coincida numéricamente con f(x_b) del tramo previo.
+  4. Transiciones o decaimientos: preferir interpolación normalizada
+     y = y_a + (y_b - y_a)·t^p con t∈[0,1] y p≥1, o leyes suaves equivalentes.
+     Evitar y_a - K·(x-x_a)^p con p<1 (tangente vertical y salto visual).
+  5. Varias series en el mismo gráfico: solo si comparten magnitud de eje X;
+     si cada serie tiene su propia abscisa física, usar ejes/unidades coherentes
+     y no mezclar dominios incompatibles."""
+
+_REGLA_MODELADO_CURVAS = """REGLA — MODELADO POR FÓRMULAS (obligatoria si hay curvas o gráficas):
+  La forma de la curva sale de evaluar funciones, no de unir puntos a ojo.
+  1. IDENTIFICAR el modelo estándar de ingeniería (Hall-Petch, Hollomon,
+     Ramberg-Osgood, ley de Hooke, ecuación de estado, ley de Wien, curva SN,
+     etc.) a partir del Markdown, la instrucción y conocimiento del dominio.
+     Si el profesor pide una curva genérica sin datos, usa valores
+     REPRESENTATIVOS del material o régimen que describe el contexto (acero,
+     polímero, cerámica, fluido...) — no hace falta que el MD dé números.
+  2. ESPECIFICAR e implementar en JS una función por tramo o por serie:
+       y = f(x)   o   σ = g(ε)   con la expresión explícita en comentario.
+     Prohibido dibujar la forma “aproximada” con pocos vértices.
+  3. PARÁMETROS — prioridad de fuentes:
+       (a) valores numéricos del Markdown o material original del profesor;
+       (b) si faltan, constantes típicas de ingeniería para ese fenómeno,
+           documentadas en comentario JS como "valor representativo".
+     Los sliders (si los hay) deben modular parámetros del modelo, no
+     sustituir la fórmula.
+  4. MUESTREO: bucle for con 80-120 puntos por serie/tramo; en cada tramo
+     evaluar f(x) directamente. La suavidad visual viene del muestreo denso
+     de una función continua, no de tension ni de pocos puntos intermedios.
+  5. VARIAS SERIES (p. ej. aparente vs verdadera, varias temperaturas):
+     una función o conjunto de tramos por serie, misma lógica de muestreo,
+     ejes y unidades coherentes con el texto del material.
+  6. PRESENTACIÓN: la gráfica Chart.js es el elemento principal; el texto
+     explicativo es complementario y breve — nunca sustituye al canvas."""
+
+_SISTEMA_DISENO_TALLER = """── SISTEMA DE DISEÑO (obligatorio) ──
+Fuentes — @import en <style> del bloque:
+  'Playfair Display', serif 600 (títulos); 'DM Sans', sans-serif 400/500 (cuerpo).
+Paleta: acento #185FA5, hover #0C447C, card #FFFFFF, superficie #F0EEE9,
+  texto #1A1A1A, secundario #6B6860, terciario #9A9890, borde rgba(0,0,0,0.08).
+Prohibido: gradientes, box-shadow, blur, glow. Sin emojis en títulos ni tablas.
+
+── ESTRUCTURA DEL BLOQUE (orden obligatorio) ──
+Card exterior: background #FFFFFF, border 0.5px solid rgba(0,0,0,0.08),
+  border-radius 14px, padding 1.75rem 2rem.
+  1. Etiqueta sección: 11px uppercase #9A9890 (del ### del MD si existe).
+  2. Título h2: Playfair 24px #1A1A1A.
+  3. Descripción: DM Sans 14px #6B6860, máx. 3 líneas, solo del MD.
+  4. Ecuación: MathJax centrada si figura en ECUACIONES DEL BLOQUE o razonamiento.
+  5. GRÁFICA (si aplica): contenedor #F0EEE9, border-radius 12px, height 380px,
+     padding lateral para ejes; canvas con responsive + maintainAspectRatio false.
+  6. Texto complementario breve (listas o párrafos cortos — no cajas que oculten el canvas).
+  7. Sliders (si los hay): cards #F0EEE9, accent-color #185FA5, id bloque_{slug}_slider_*.
+Selectores e IDs con prefijo bloque_{slug}_."""
+
+
+# ---------------------------------------------------------------------------
+# Sistema: generador de bloques HTML interactivos
+# Modelo: Sonnet — generacion de logica JS complexa + Chart.js / canvas
+# ---------------------------------------------------------------------------
+
+PROMPT_GENERADOR_HTML = (
+    """Eres un generador de bloques HTML interactivos para material docente de ingeniería. El diseño debe ser visualmente atractivo e interactivo — no académico ni corporativo. Generas un bloque autocontenido por ecuación.
 
 INPUT QUE RECIBIRÁS:
 - Nombre de la ecuación o relación
@@ -434,6 +518,11 @@ CURVA_SIMPLE:
   Añadir el dataset de cursor interactivo descrito en la sección 8.
   Si el rango de X tiene >50 puntos, usar 80 puntos de muestreo para
   que la curva sea suave pero la actualización sea fluida.
+  REGLA — SUAVIZADO DE CURVAS (aplica también a TRAYECTORIA):
+"""
+    + _REGLA_SUAVIZADO_CURVAS
+    + """
+  """ + _REGLA_MODELADO_CURVAS + """
 
 FAMILIA_CURVAS:
   Chart.js multilínea, 4 curvas por parámetro (mín, 33%, 66%, máx).
@@ -465,6 +554,7 @@ MAPA_2D:
 TRAYECTORIA:
   Chart.js scatter+línea. Slider progreso 0-100%. Referencia gris claro,
   trayectoria recorrida #185FA5. Sin leyenda si una sola serie.
+  Aplicar REGLA — SUAVIZADO DE CURVAS (definida en CURVA_SIMPLE).
 
 RESPUESTA_FRECUENCIAL:
   Dos Chart.js apilados: magnitud y fase, eje X logarítmico.
@@ -619,6 +709,8 @@ dos reglas distintas según el tipo de información:
    Si el modelo físico implica una asíntota o una transición, reprodúcela.
    El objetivo es que la visualización sea físicamente correcta y pedagógicamente
    útil, no que sea una transcripción literal del texto del contexto.
+   Aplica además la REGLA — MODELADO POR FÓRMULAS y la REGLA — SUAVIZADO DE
+   CURVAS definidas en CURVA_SIMPLE.
 
 Si falta información de texto para la descripción o el insight, omitir antes
 que inventar afirmaciones sobre el material del profesor.
@@ -628,6 +720,7 @@ Devuelve ÚNICAMENTE el HTML del bloque, sin explicaciones, sin backticks.
 IMPORTANTE: El bloque se inserta en un contenedor que ya carga MathJax y
 Chart.js v4. NO incluyas <html>, <head>, <body> ni CDN de MathJax/Chart.js.
 Genera <style> con selectores prefijados bloque_{slug}_ y el markup+JS del bloque."""
+)
 
 
 
@@ -924,17 +1017,123 @@ def build_generador_message(
 # Taller interactivo — generación y refinamiento desde prompt del profesor
 # ---------------------------------------------------------------------------
 
-PROMPT_TALLER_RAZONADOR = """Eres el paso de razonamiento previo a generar un bloque interactivo de visualización para material docente de ingeniería mecánica. No generas HTML ni código: piensas en texto plano para que otro paso construya el bloque con esa base.
+PROMPT_TALLER_RAZONADOR = """Eres el paso de razonamiento previo a generar un bloque interactivo de visualización para material docente de ingeniería mecánica. No generas HTML ni código: produces una especificación de modelado que otro paso implementará fielmente en JavaScript.
 
-Recibirás la instrucción del profesor y el Markdown curado de la sección del tema. Tu trabajo, en este orden:
+El fenómeno puede ser cualquiera que pida el profesor (σ-ε, P-V, curvas SN, Hall-Petch, diagramas de fase, perfiles térmicos, etc.). Identifica el modelo estándar del dominio; no asumas un tipo de curva fijo.
 
-1. A partir del contexto del Markdown curado, fórmate una idea clara de qué concepto de ingeniería trata la instrucción: qué es, qué papel juega dentro de la teoría que presenta esa sección, con qué convenciones lo nombra el material. Esto no es para copiarlo literalmente en la visualización — es para que la reconstrucción de fórmula o comportamiento del paso siguiente quede anclada al marco conceptual correcto de esa sección, no a una aproximación genérica desconectada del tema.
-2. Identifica la relación matemática o física relevante. Si corresponde a una fórmula, curva o criterio estándar reconocido en la literatura de ingeniería (ej. Ramberg-Osgood, curva de diseño CTOD, ecuación de Hertz, modelos de tasa de fallos de fiabilidad...), nómbralo explícitamente y usa su forma conocida — no improvises una aproximación propia si existe una fórmula establecida.
-3. Si la expresión exacta no está disponible en el Markdown (marcador de ecuación rota o no extraída), dilo explícitamente y declara qué conocimiento de ingeniería vas a usar para reconstruirla, en línea con el régimen dual de fuentes del agente: el texto descriptivo viene del material, la implementación de la física puede apoyarse en conocimiento general de ingeniería.
-4. Enumera los valores o tramos que deben quedar matemáticamente consistentes entre sí — por ejemplo, el valor en la frontera entre dos zonas de una curva por tramos debe coincidir exactamente; el rango de un slider debe corresponder al rango físico real de la variable.
-5. Si la instrucción pide una animación o un mecanismo, indica qué cantidad física debe traducirse en qué cambio visual concreto: qué elemento se mueve, en qué eje o dirección, proporcional a qué variable — para que el movimiento represente la física real y no solo dé sensación de movimiento.
+Recibirás la instrucción del profesor y el Markdown curado de la sección del tema.
 
-Responde en texto plano, breve y estructurado en estos puntos. No generes HTML, JavaScript ni bloques de código."""
+Responde en texto plano con EXACTAMENTE estas secciones (omite solo las que no apliquen):
+
+CONCEPTO
+  Qué relación física o ingenieril se visualiza y su papel en la sección del MD.
+
+MODELO MATEMÁTICO
+  Fórmula(s) estándar en notación clara (LaTeX o texto), una por tramo o por serie.
+  Si hay varias curvas (p. ej. aparente y verdadera), define cada una.
+  Nombra el modelo si es reconocido (Hollomon, Ramberg-Osgood, Hall-Petch...).
+  Si el MD no da la ecuación explícita, reconstrúyela con conocimiento de
+  ingeniería coherente con el material del bloque — no improvises formas arbitrarias.
+
+PARÁMETROS Y FUENTES
+  Lista cada constante con valor numérico, unidades y origen:
+  - "del MD" / "del material original" / "representativo típico [material o régimen]".
+  Si el profesor no dio datos concretos, elige valores representativos del contexto
+  (tipo de material, orden de magnitud, forma esperada de la curva) y dilo explícito.
+
+EJES Y RANGOS
+  Variable independiente (eje X), dependiente (eje Y), unidades y rango [min, max]
+  que muestre la forma relevante de la curva (no solo 0-1 por defecto).
+
+TRAMOS Y CONTINUIDAD
+  Si la curva es por tramos: límites de cada tramo, fórmula en cada uno y condición
+  de continuidad en las fronteras (mismo x,y). Densidad de muestreo extra cerca de
+  transiciones (cambio de régimen, máximos, mínimos, puntos de inflexión).
+  En cada frontera x_b: calcular y_b con el tramo anterior y usarlo como inicio del siguiente.
+
+MUESTREO
+  Número de puntos por tramo/serie (mín. 80) y estrategia: evaluar f(x) en bucle.
+
+PRESENTACIÓN
+  Qué va en la gráfica (series, colores sugeridos, anotaciones de puntos clave) y
+  qué texto breve complementa sin sustituir el canvas.
+
+ANIMACIÓN O MECANISMO (solo si aplica)
+  Qué magnitud física controla qué movimiento visual.
+
+No generes HTML, JavaScript ni bloques de código."""
+
+
+PROMPT_TALLER_REVISOR_FISICA = """Eres revisor de especificaciones de visualización para material docente de ingeniería.
+No generas HTML. Recibes la instrucción del profesor y una especificación de modelado (fórmulas,
+parámetros, ejes, tramos). Tu trabajo:
+
+1. Comprobar que las fórmulas son el modelo estándar correcto para lo pedido.
+2. Detectar incoherencias: unidades mezcladas, rangos de ejes absurdos, saltos previstos en
+   fronteras entre tramos, parámetros sin valor numérico cuando hacen falta.
+   En curvas por tramos: el valor en cada frontera debe salir de evaluar f(x) en el tramo
+   anterior, no de una constante independiente que contradiga esa evaluación.
+3. Si faltan datos numéricos y el profesor no los pidió, proponer valores representativos
+   coherentes con el Markdown (indicar origen "representativo típico").
+4. Corregir la especificación y devolverla COMPLETA con las mismas secciones
+   (CONCEPTO, MODELO MATEMÁTICO, PARÁMETROS Y FUENTES, EJES Y RANGOS, TRAMOS Y CONTINUIDAD,
+   MUESTREO, PRESENTACIÓN).
+
+Si la especificación ya es sólida, devuélvela igual con cambios mínimos.
+Responde solo con la especificación corregida, sin comentarios meta."""
+
+
+def build_taller_revisor_message(
+    instruccion: str,
+    razonamiento: str,
+    markdown_bloque: str,
+) -> str:
+    return "\n".join([
+        f"INSTRUCCIÓN DEL PROFESOR:\n{instruccion.strip()}",
+        "",
+        "ESPECIFICACIÓN A REVISAR:",
+        razonamiento.strip(),
+        "",
+        "MARKDOWN DEL BLOQUE (contexto):",
+        (markdown_bloque or "")[:8000],
+    ])
+
+
+_BLOCK_LATEX_RE = re.compile(r"\$\$([\s\S]*?)\$\$")
+_INLINE_LATEX_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
+
+
+def extraer_ecuaciones_markdown(texto: str, max_ecuaciones: int = 12) -> list[str]:
+    """Extrae ecuaciones LaTeX del markdown para anclar el modelado del taller."""
+    if not texto:
+        return []
+    encontradas: list[str] = []
+    vistos: set[str] = set()
+    for m in _BLOCK_LATEX_RE.finditer(texto):
+        expr = m.group(1).strip()
+        if expr and expr not in vistos:
+            vistos.add(expr)
+            encontradas.append(expr)
+    for m in _INLINE_LATEX_RE.finditer(texto):
+        expr = m.group(1).strip()
+        if expr and expr not in vistos:
+            vistos.add(expr)
+            encontradas.append(expr)
+        if len(encontradas) >= max_ecuaciones:
+            break
+    return encontradas[:max_ecuaciones]
+
+
+def _append_ecuaciones_bloque(lines: list[str], markdown_bloque: str) -> None:
+    ecuaciones = extraer_ecuaciones_markdown(markdown_bloque)
+    if not ecuaciones:
+        return
+    lines += [
+        "",
+        "ECUACIONES DEL BLOQUE (usar como referencia para el modelado):",
+    ]
+    for i, eq in enumerate(ecuaciones, 1):
+        lines.append(f"  {i}. {eq}")
 
 
 def build_taller_razonador_message(
@@ -946,31 +1145,53 @@ def build_taller_razonador_message(
         f"INSTRUCCIÓN DEL PROFESOR:\n{instruccion.strip()}",
         "",
         "MARKDOWN DEL BLOQUE (contexto teórico):",
-        (markdown_bloque or "")[:12000],
+        (markdown_bloque or "")[:7000],
     ]
+    _append_ecuaciones_bloque(lines, markdown_bloque or "")
     if texto_original:
         lines += [
             "",
             "MATERIAL ORIGINAL DEL PROFESOR (rangos y valores):",
-            texto_original[:8000],
+            texto_original[:4000],
         ]
     return "\n".join(lines)
 
 
 PROMPT_TALLER_GENERADOR = """Eres un generador de bloques HTML interactivos para material docente de ingeniería mecánica.
 
-El profesor describe en lenguaje natural qué visualización quiere. Recibirás también el razonamiento previo de otro paso (qué concepto es, qué fórmula estándar identificó o cómo va a reconstruirla, qué debe quedar consistente, qué cantidad física debe traducirse en qué movimiento). Implementa ese razonamiento con fidelidad: no cambies la fórmula, los valores de consistencia entre tramos ni el mapeo física-movimiento que ya se decidieron.
+El profesor describe en lenguaje natural qué visualización quiere. Recibirás el RAZONAMIENTO PREVIO con la especificación de modelado (fórmulas, parámetros, ejes, tramos, muestreo). Implementa esa especificación con fidelidad: no cambies fórmulas, valores de continuidad ni rangos de ejes ya decididos.
 
 Implementa un bloque HTML autocontenido:
 - Un único <div> raíz con id único
+- Si la instrucción pide una curva o gráfica, renderízala en Chart.js (canvas con datos trazados). No sustituyas la gráfica por cajas de texto explicativas.
+- Contenedor del canvas: height mínima 360px y position relative; en Chart.js usar
+  responsive: true y maintainAspectRatio: false.
 - Chart.js o canvas nativo según convenga
+- Si la instrucción pide un mecanismo (cilindro, actuador, animación SVG, botones
+  avanzar/retroceder): usa SVG sin Chart.js ni <canvas>; requestAnimationFrame para
+  mover el conjunto móvil dentro de un <g>; botones con onclick; sin curvas ni ejes.
 - Sliders solo si el profesor los pide explícitamente
 - Sin tags html/head/body ni CDN (Chart.js ya está en la página)
 - window['initBloque_{slug}'] = function() { ... };
 - Incluye document.addEventListener('DOMContentLoaded', ...) que invoque initBloque_{slug}()
+- Función de actualización como function declaration global (function update_...(){}) invocada desde oninput de los sliders
+- En JS: funciones puras de evaluación (p. ej. function f_tramo(x, params){...}) que
+  implementen las fórmulas del razonamiento; los bucles de muestreo solo llaman a esas funciones.
 
-El texto y las ecuaciones deben provenir del MARKDOWN DEL BLOQUE o del MATERIAL ORIGINAL.
-Puedes usar conocimiento de ingeniería para implementar la física en código, no para inventar qué dijo el profesor.
+""" + _SISTEMA_DISENO_TALLER + """
+
+""" + _REGLA_MODELADO_CURVAS + """
+
+""" + _REGLA_CONTINUIDAD_FISICA + """
+
+REGLA — SUAVIZADO DE CURVAS (obligatoria en curvas físicas Chart.js):
+""" + _REGLA_SUAVIZADO_CURVAS + """
+
+El texto descriptivo y las ecuaciones mostradas al usuario deben provenir del MARKDOWN DEL BLOQUE o del MATERIAL ORIGINAL.
+Los parámetros numéricos del modelo pueden venir del razonamiento (MD, material original o valores representativos típicos).
+
+COMPACTACIÓN: texto explicativo breve (máx. 2 párrafos cortos + lista opcional); evita comentarios
+JS largos; prioriza un script completo con cierre </script> dentro del límite de tokens.
 
 Responde ÚNICAMENTE con el HTML del bloque, sin markdown ni explicaciones."""
 
@@ -980,6 +1201,27 @@ PROMPT_TALLER_REFINADOR = """Eres un editor de bloques HTML interactivos ya gene
 Recibirás el HTML actual y una instrucción del profesor. Cambia SOLO lo pedido; conserva la lógica.
 Mantén window['initBloque_{slug}'] y el listener DOMContentLoaded.
 Sin CDN ni tags html/head/body.
+
+""" + _SISTEMA_DISENO_TALLER + """
+
+Si la instrucción corrige curvas, saltos, cortes o segmentos rectos en una gráfica Chart.js,
+recalcula los puntos evaluando las fórmulas del modelo (no muevas vértices a mano) y aplica:
+""" + _REGLA_MODELADO_CURVAS + """
+
+""" + _REGLA_CONTINUIDAD_FISICA + """
+
+REGLA — SUAVIZADO DE CURVAS:
+""" + _REGLA_SUAVIZADO_CURVAS + """
+
+Si el gráfico no se ve o el canvas queda vacío: comprueba que el contenedor del canvas tenga
+height explícita (≥360px), maintainAspectRatio: false, y que initBloque_{slug} cree el chart
+y llame a update al final.
+
+Si el profesor pide continuidad o eliminar un salto: recalcula el punto de frontera
+compartido entre tramos (mismo x,y exacto evaluando f(x) del tramo anterior) y aumenta
+la densidad de puntos cerca de esa frontera. No basta con suavizar visualmente si hay
+discontinuidad numérica entre arrays ni con tension de Chart.js.
+
 Responde ÚNICAMENTE con el HTML completo actualizado."""
 
 
@@ -990,24 +1232,26 @@ def build_taller_generador_message(
     texto_original: str | None = None,
     razonamiento: str | None = None,
 ) -> str:
+    md_limit = 5000 if (razonamiento or "").strip() else 10000
     lines = [
         f"SLUG_EXACTO: {slug}",
         f"INSTRUCCIÓN DEL PROFESOR:\n{instruccion.strip()}",
         "",
         "MARKDOWN DEL BLOQUE (contexto teórico):",
-        (markdown_bloque or "")[:12000],
+        (markdown_bloque or "")[:md_limit],
     ]
+    _append_ecuaciones_bloque(lines, markdown_bloque or "")
     if texto_original:
         lines += [
             "",
             "MATERIAL ORIGINAL DEL PROFESOR (rangos y valores):",
-            texto_original[:8000],
+            texto_original[:4000],
         ]
     if razonamiento:
         lines += [
             "",
-            "RAZONAMIENTO PREVIO (de otro paso — implementar con fidelidad, "
-            "sin cambiar fórmula, consistencia ni mapeo física-movimiento):",
+            "RAZONAMIENTO PREVIO (implementar con fidelidad — fórmulas, parámetros, "
+            "ejes, tramos y muestreo ya decididos):",
             razonamiento.strip(),
         ]
     return "\n".join(lines)
@@ -1017,9 +1261,17 @@ def build_taller_refinador_message(
     slug: str,
     html_actual: str,
     instruccion: str,
+    razonamiento: str | None = None,
 ) -> str:
-    return (
-        f"SLUG_EXACTO: {slug}\n\n"
-        f"INSTRUCCIÓN DEL PROFESOR:\n{instruccion.strip()}\n\n"
-        f"HTML ACTUAL:\n{html_actual}"
-    )
+    parts = [
+        f"SLUG_EXACTO: {slug}\n\n",
+        f"INSTRUCCIÓN DEL PROFESOR:\n{instruccion.strip()}\n\n",
+    ]
+    if razonamiento:
+        parts.append(
+            "ESPECIFICACIÓN DE MODELADO ORIGINAL (conservar fórmulas y continuidad salvo "
+            "que la instrucción del profesor pida cambiar el modelo):\n"
+            f"{razonamiento.strip()}\n\n"
+        )
+    parts.append(f"HTML ACTUAL:\n{html_actual}")
+    return "".join(parts)

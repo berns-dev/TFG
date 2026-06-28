@@ -66,6 +66,12 @@ def inject_theme(
             color: {TEXTO} !important;
             border-color: {BORDE} !important;
         }}
+        textarea:not(:disabled),
+        input:not(:disabled),
+        [data-testid="stTextArea"] textarea:not(:disabled) {{
+            caret-color: {acento} !important;
+            -webkit-text-fill-color: {TEXTO} !important;
+        }}
         [data-testid="stCodeBlock"] code {{ color: {TEXTO} !important; }}
         [data-testid="stTextArea"] textarea:disabled {{
             color: {TEXTO_SEC} !important;
@@ -790,6 +796,9 @@ def inject_theme(
 
         div[class*="st-key-sd_composer_row_"] [data-testid="stVerticalBlock"] textarea {{
             min-height: 64px !important;
+            caret-color: {acento} !important;
+            color: {TEXTO} !important;
+            -webkit-text-fill-color: {TEXTO} !important;
         }}
         div[class*="st-key-sd_composer_row_"] .stButton > button[kind="secondary"],
         div[class*="st-key-sd_composer_row_"] .stButton > button:not([kind="primary"]) {{
@@ -1123,9 +1132,13 @@ def inject_theme(
         .sd-landing-card.cargar .tit {{ color: {acento_oscuro}; }}
 
         /* ── Markdown mono en editor ── */
-        textarea[data-testid="stTextArea"] {{
+        textarea[data-testid="stTextArea"],
+        [data-testid="stTextArea"] textarea {{
             font-family: 'DM Mono', ui-monospace, Menlo, monospace !important;
             font-size: 12.5px !important;
+            caret-color: {acento} !important;
+            color: {TEXTO} !important;
+            -webkit-text-fill-color: {TEXTO} !important;
         }}
 
         /* ── Sticky panel (cobertura / rail) ── */

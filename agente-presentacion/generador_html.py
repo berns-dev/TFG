@@ -926,6 +926,16 @@ _DOMLOADED_RE = re.compile(
 )
 
 
+def _ultimo_script_cerrado(bloque: str) -> bool:
+    """True si el último <script> del bloque tiene su </script> (no cortado a medias)."""
+    low = (bloque or "").lower()
+    last_open = low.rfind("<script")
+    if last_open == -1:
+        return False
+    last_close = low.rfind("</script>")
+    return last_close != -1 and last_close > last_open
+
+
 def validar_bloque_html(
     bloque: str, slug: str, requiere_autoarranque: bool = True
 ) -> tuple[bool, str]:
@@ -940,7 +950,8 @@ def validar_bloque_html(
          completa), esta condición se omite — el contenedor invoca
          ``initBloque_{slug}()`` externamente vía IntersectionObserver y un
          DOMContentLoaded propio sería innecesario.
-      3. El script no está truncado (termina en ``</script>`` o ``};``).
+      3. El último ``<script>`` del bloque está cerrado con ``</script>`` (no cortado
+         a medias). Puede haber markup (p. ej. ``</div>``) después del script.
 
     Las comillas del acceso a window pueden ser simples, dobles o backticks
     (Sonnet alterna entre las tres formas — las tres son JS válido).
@@ -972,11 +983,288 @@ def validar_bloque_html(
                 f"falta la llamada DOMContentLoaded a initBloque_{slug}"
             )
 
-    stripped = bloque.rstrip()
-    if not (stripped.endswith("</script>") or stripped.endswith("};")):
+    if not _ultimo_script_cerrado(bloque):
         motivos.append("script truncado (sin cierre </script>)")
 
     return (not motivos, "; ".join(motivos))
+
+
+_GRAFICA_KEYWORDS = (
+    "gráfic", "grafic", "chart", "diagrama de fase", "trazar", "plot",
+    "frente a", " versus ", " vs ",
+    "tensión-deformación", "tension-deformacion", "σ-ε", "sigma-epsilon",
+)
+
+_CURVA_KEYWORDS = (
+    "curva de", "curva σ", "curva tensión", "curva tension",
+    "curva sn", "curva p-v", "deformación", "deformacion",
+)
+
+_EXCLUYE_GRAFICA_PHRASES = (
+    "sin gráfica", "sin grafica", "sin chart", "sin canvas", "sin curva",
+    "no chart", "solo svg", "sin canvas",
+)
+
+_MECANISMO_KEYWORDS = (
+    "actuador", "cilindro", "émbolo", "embolo", "vástago", "vastago",
+    "mecanismo", "svg", "botón", "boton", "botones", "avanzar", "retroceder",
+    "animación", "animacion", "pistón", "piston", "válvula de corredera",
+    "valvula de corredera", "doble efecto", "simple efecto",
+)
+
+_JS_CORRUPTO_RE = re.compile(
+    r"tension\s*:\s*0\.4\.4|tension\s*:\s*0\.0\.4"
+)
+
+
+def instruccion_excluye_grafica(instruccion: str) -> bool:
+    """True si el profesor pide explícitamente evitar Chart.js / curvas."""
+    inst = (instruccion or "").lower()
+    return any(p in inst for p in _EXCLUYE_GRAFICA_PHRASES)
+
+
+def instruccion_es_mecanismo_svg(instruccion: str) -> bool:
+    """True si la petición es animación SVG de mecanismo, no gráfica Chart.js."""
+    inst = (instruccion or "").lower()
+    if instruccion_excluye_grafica(inst):
+        return True
+    if not any(k in inst for k in _MECANISMO_KEYWORDS):
+        return False
+    pide_curva = any(k in inst for k in _CURVA_KEYWORDS) or any(
+        k in inst for k in ("chart.js", "chartjs", "new chart")
+    )
+    return not pide_curva
+
+
+def instruccion_pide_grafica_curva_taller(instruccion: str) -> bool:
+    """True si la instrucción requiere validación Chart.js (curvas, diagramas)."""
+    if instruccion_es_mecanismo_svg(instruccion):
+        return False
+    inst = (instruccion or "").lower()
+    if any(k in inst for k in _GRAFICA_KEYWORDS):
+        return True
+    if any(k in inst for k in _CURVA_KEYWORDS):
+        return True
+    if "curva" in inst and not instruccion_excluye_grafica(inst):
+        return True
+    if "representa" in inst and any(
+        w in inst for w in ("curva", "gráfic", "grafic", "tensión", "tension", "diagrama")
+    ):
+        return True
+    return False
+
+
+def validar_grafica_taller(html: str, instruccion: str = "") -> tuple[bool, str]:
+    """Comprueba canvas/Chart.js solo cuando la instrucción pide gráfica de curvas."""
+    if _JS_CORRUPTO_RE.search(html):
+        return False, "sintaxis JS inválida en tension (valor corrupto)"
+
+    tiene_canvas = bool(re.search(r"<canvas\b", html, re.IGNORECASE))
+    tiene_chart = "new Chart" in html
+    tiene_svg = bool(re.search(r"<svg\b", html, re.IGNORECASE))
+    pide_grafica = instruccion_pide_grafica_curva_taller(instruccion)
+    es_mecanismo = instruccion_es_mecanismo_svg(instruccion)
+
+    if es_mecanismo:
+        if tiene_canvas and not tiene_chart:
+            return False, "falta new Chart(...) — el script no inicializa la gráfica"
+        if not tiene_svg:
+            return False, "falta <svg> para la animación del mecanismo"
+        return True, ""
+
+    if pide_grafica or tiene_canvas:
+        if not tiene_canvas:
+            return False, "falta <canvas> para la gráfica pedida"
+        if not tiene_chart:
+            return False, "falta new Chart(...) — el script no inicializa la gráfica"
+        inst = (instruccion or "").lower()
+        es_curva = (
+            re.search(r"type\s*:\s*['\"]line['\"]", html) is not None
+            or any(w in inst for w in ("curva", "tensión", "tension", "deformación", "deformacion"))
+        )
+        if es_curva and not re.search(r"for\s*\(", html):
+            return False, (
+                "falta bucle for de muestreo — la curva debe evaluarse con 80+ puntos"
+            )
+        ok_cal, motivo_cal = evaluar_calidad_curva_html(html)
+        if not ok_cal:
+            return False, motivo_cal
+    return True, ""
+
+
+_LITERAL_XY_RE = re.compile(
+    r"\{\s*x\s*:\s*[-+]?[\d.eE]+\s*,\s*y\s*:\s*[-+]?[\d.eE]+\s*\}"
+)
+_PUSH_XY_RE = re.compile(
+    r"\.push\s*\(\s*\{\s*x\s*:\s*([-+]?[\d.eE]+)\s*,\s*y\s*:\s*([-+]?[\d.eE]+)\s*\}"
+)
+_DATA_ARRAY_BLOCK_RE = re.compile(
+    r"const\s+data_\w+\s*=\s*\[\s*\];(.*?)(?=const\s+data_\w+\s*=\s*\[\s*\];|const\s+chart\s*=|new\s+Chart)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _extraer_series_push(html: str) -> list[list[tuple[float, float]]]:
+    """Extrae series de puntos {x,y} por bloque data_* en el JS generado."""
+    series: list[list[tuple[float, float]]] = []
+    for block in _DATA_ARRAY_BLOCK_RE.findall(html or ""):
+        pts = [
+            (float(m.group(1)), float(m.group(2)))
+            for m in _PUSH_XY_RE.finditer(block)
+        ]
+        if pts:
+            series.append(pts)
+    if not series:
+        pts = [
+            (float(m.group(1)), float(m.group(2)))
+            for m in _PUSH_XY_RE.finditer(html or "")
+        ]
+        if pts:
+            series.append(pts)
+    return series
+
+
+def detectar_saltos_curva_puntos(
+    puntos: list[tuple[float, float]],
+) -> tuple[bool, str]:
+    """Detecta saltos verticales o discontinuidades bruscas entre puntos consecutivos."""
+    if len(puntos) < 3:
+        return True, ""
+
+    xs = [p[0] for p in puntos]
+    ys = [p[1] for p in puntos]
+    x_span = max(xs) - min(xs) or 1.0
+    y_span = max(ys) - min(ys) or 1.0
+
+    for i in range(1, len(puntos)):
+        x0, y0 = puntos[i - 1]
+        x1, y1 = puntos[i]
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+
+        if dx <= 0.08 * x_span and dy >= 0.18 * y_span:
+            return False, (
+                f"salto vertical en la curva entre x={x0:.3g} y x={x1:.3g} "
+                f"(Δy={dy:.0f}, Δx={dx:.3g})"
+            )
+
+        if dx > 0 and dy > max(80.0, 0.28 * y_span):
+            slope = dy / dx
+            if i >= 2:
+                x_prev, y_prev = puntos[i - 2]
+                dx_prev = abs(x0 - x_prev) or 1e-9
+                dy_prev = abs(y0 - y_prev)
+                slope_prev = dy_prev / dx_prev
+                if slope > 6 * max(slope_prev, 0.5) and dy > 0.12 * y_span:
+                    return False, (
+                        f"discontinuidad brusca cerca de x={x1:.3g} "
+                        f"(pendiente local {slope:.0f} vs {slope_prev:.0f})"
+                    )
+    return True, ""
+
+
+def evaluar_coherencia_tramos_curva(html: str) -> tuple[bool, str]:
+    """Detecta incoherencias genéricas en curvas por tramos (cualquier fenómeno)."""
+    src = html or ""
+    if "new Chart" not in src and "<canvas" not in src.lower():
+        return True, ""
+
+    # Solo decaimientos del tipo y_a - K·Δ^p con exponente < 1 (tangente vertical en frontera).
+    # No aplica a endurecimiento plástico (t^0.65 con t normalizado en [0,1]).
+    if re.search(r"-\s*(?:\d+\.?\d*|[A-Za-z_][\w.]*)\s*\*\s*Math\.pow\s*\(", src):
+        for m in re.finditer(
+            r"-\s*\w+\s*\*\s*Math\.pow\s*\([^)]*,\s*(?:p\.|params\.)?(\w+)",
+            src,
+        ):
+            exp_name = m.group(1)
+            exp_m = re.search(
+                rf"(?:\b{re.escape(exp_name)}\s*[:=]\s*)([\d.]+)", src
+            )
+            if exp_m:
+                try:
+                    if float(exp_m.group(1)) < 1.0:
+                        return False, (
+                            "exponente <1 en decaimiento (y_a - K·Δx^p) puede producir "
+                            "salto o tangente vertical — usar interpolación con exponente ≥1 "
+                            "o fórmula normalizada entre fronteras"
+                        )
+                except ValueError:
+                    continue
+
+    pts = [
+        (float(m.group(1)), float(m.group(2)))
+        for m in _PUSH_XY_RE.finditer(src)
+    ]
+    if pts:
+        ok, motivo = detectar_saltos_curva_puntos(pts)
+        if not ok:
+            return False, motivo
+
+    return True, ""
+
+
+def evaluar_continuidad_curva_html(html: str) -> tuple[bool, str]:
+    """Comprueba continuidad visual de cada serie muestreada con .push({x,y})."""
+    ok_tramos, motivo_tramos = evaluar_coherencia_tramos_curva(html)
+    if not ok_tramos:
+        return False, motivo_tramos
+
+    for idx, serie in enumerate(_extraer_series_push(html), start=1):
+        ok, motivo = detectar_saltos_curva_puntos(serie)
+        if not ok:
+            pref = f"serie {idx}" if len(_extraer_series_push(html)) > 1 else "la curva"
+            return False, f"{pref}: {motivo}"
+    return True, ""
+
+
+def _tiene_muestreo_denso(html: str) -> bool:
+    """True si el JS evalúa la curva en un bucle con muchos puntos (no literales sueltos)."""
+    src = html or ""
+    if src.count(".push(") >= 40:
+        return True
+    if not re.search(r"for\s*\(", src) or ".push(" not in src:
+        return False
+    m = re.search(r"\bN\s*[:=]\s*(\d+)", src)
+    if m and int(m.group(1)) >= 80:
+        return True
+    if re.search(r"<=\s*P\.N|/\s*P\.N", src):
+        return True
+    if re.search(r"for\s*\([^)]*<=\s*(?:1[0-9]|[2-9]\d)\d", src):
+        return True
+    return False
+
+
+def evaluar_calidad_curva_html(html: str) -> tuple[bool, str]:
+    """Heurísticas automáticas sobre el JS generado para curvas Chart.js."""
+    muestreo_denso = _tiene_muestreo_denso(html)
+
+    if re.search(r"tension\s*:\s*0(\s*[,}])", html) and not muestreo_denso:
+        return False, "tension: 0 con pocos puntos — evaluar fórmula en bucle o usar tension: 0.4"
+
+    literales = _LITERAL_XY_RE.findall(html)
+    tiene_bucle = bool(re.search(r"for\s*\(", html))
+    tiene_push = ".push(" in html
+
+    if literales and len(literales) < 20 and not tiene_bucle and not tiene_push:
+        return False, (
+            f"solo {len(literales)} puntos literales estáticos — evaluar fórmula en bucle"
+        )
+
+    if tiene_bucle:
+        pushes = html.count(".push(")
+        if pushes < 1 and "data:" in html and "datasets" in html:
+            return False, "hay bucle pero no se acumulan puntos con .push()"
+
+    if re.search(r"(?:return|=|,\s*)NaN\b", html) or re.search(
+        r"(?:return|=|,\s*)Infinity\b", html
+    ):
+        return False, "el script contiene NaN o Infinity — revisar fórmulas"
+
+    ok_cont, motivo_cont = evaluar_continuidad_curva_html(html)
+    if not ok_cont:
+        return False, motivo_cont
+
+    return True, ""
 
 
 def _bloque_placeholder(slug: str, nombre: str, motivo: str = "") -> str:
@@ -1271,18 +1559,71 @@ _PREVIEW_TALLER_TEMPLATE = """\
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body { margin: 0; padding: 1rem; background: #ffffff; color: #1a1a1a; }
+    canvas { max-width: 100%; }
+    div:has(> canvas) { min-height: 320px; position: relative; }
   </style>
 </head>
 <body>
 <!--FRAGMENT-->
+<script>
+(function () {
+  function runInits() {
+    Object.getOwnPropertyNames(window).forEach(function (name) {
+      if (name.indexOf("initBloque_") !== 0) return;
+      if (typeof window[name] !== "function") return;
+      try {
+        window[name]();
+      } catch (e) {
+        console.error("Error en " + name + ":", e);
+      }
+    });
+  }
+  function boot() {
+    if (window.MathJax && window.MathJax.startup && window.MathJax.startup.promise) {
+      MathJax.startup.promise.then(runInits).catch(runInits);
+    } else {
+      runInits();
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
 </body>
 </html>
 """
 
 
+_TENSION_CORRUPTO_RE = re.compile(r"(\btension\s*:\s*)0\.4\.4")
+_TENSION_CERO_RE = re.compile(r"(\btension\s*:\s*)0(\s*[,}])")
+
+
+def sanitizar_chartjs_html(html: str) -> str:
+    """Repara tension corrupta por post-procesado y sustituye tension: 0 explícito."""
+    html = _TENSION_CORRUPTO_RE.sub(r"\g<1>0.4", html)
+    if not _tiene_muestreo_denso(html):
+        html = _TENSION_CERO_RE.sub(r"\g<1>0.4\2", html)
+    return html
+
+
+_SLUG_INIT_RE = re.compile(
+    r"window\[\s*['\"`]initBloque_([^'\"`]+)['\"`]\s*\]\s*="
+)
+
+
+def extraer_slug_desde_html(html: str) -> str | None:
+    """Obtiene el slug del bloque a partir de initBloque_{slug} en el HTML."""
+    m = _SLUG_INIT_RE.search(html or "")
+    return m.group(1) if m else None
+
+
 def envolver_preview_taller(html_fragment: str) -> str:
     """Envoltorio mínimo para la vista previa del taller (sin formato institucional)."""
-    return _PREVIEW_TALLER_TEMPLATE.replace("<!--FRAGMENT-->", html_fragment)
+    fragmento = sanitizar_chartjs_html(html_fragment)
+    return _PREVIEW_TALLER_TEMPLATE.replace("<!--FRAGMENT-->", fragmento)
 
 
 def _construir_pagina(bloques: list[tuple[str, str]], titulo: str) -> str:

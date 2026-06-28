@@ -17,8 +17,10 @@ from __future__ import annotations
 import io
 import os
 import re
+import sys
 import tempfile
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 
 import matplotlib
@@ -57,6 +59,19 @@ from reportlab.platypus import (
 )
 from reportlab.platypus.flowables import Flowable
 from reportlab.platypus.tables import TableStyle as _TableStyle
+
+_MONOREPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_MONOREPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_MONOREPO_ROOT))
+
+from shared.text_utils import (  # noqa: E402
+    resolve_display_math_blocks,
+    sanitize_block_math,
+    prepare_display_math,
+    should_keep_as_display_math,
+    split_mixed_display_math_block,
+    tokenize_ecuacion_markers,
+)
 
 _LATEX_DPI = 150
 
@@ -287,6 +302,18 @@ class _FiguraPlaceholder(Flowable):
 
 
 # ---------------------------------------------------------------------------
+# Marcadores de ecuación inline ([ECUACION*])
+# ---------------------------------------------------------------------------
+
+_ECUACION_MARCADOR_ETIQUETAS_PDF = {
+    "parcial": "parcial",
+    "no_extraible": "n/e",
+    "reconstruida": "revisar",
+    "inline": "no transcrita",
+}
+
+
+# ---------------------------------------------------------------------------
 # Borde izquierdo para bloques de código/ecuación
 # ---------------------------------------------------------------------------
 
@@ -387,7 +414,7 @@ def _scale_equation_image(img: Image, max_width: float) -> None:
 # Regex pre-proceso de LaTeX antes del parseo HTML
 # ---------------------------------------------------------------------------
 
-_BLOCK_LATEX_RE = re.compile(r"\$\$([\s\S]+?)\$\$")
+_BLOCK_LATEX_RE = re.compile(r"\$\$([\s\S]*?)\$\$")
 _INLINE_LATEX_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
 _FIGURA_RE = re.compile(r"\[FIGURA:\s*([^\]]*)\]")
 _TEXTO_ILEGIBLE_RE = re.compile(r"\[TEXTO_ILEGIBLE\]")
@@ -396,6 +423,7 @@ _TEMA_DETECTADO_RE = re.compile(r"^tema_detectado:\s*(.+)$", re.MULTILINE)
 _H1_MD_RE = re.compile(r"^#\s+(?!#)(.+)$", re.MULTILINE)
 
 _FIGURA_PLACEHOLDER = "XXFIGPLHXX"
+_ECUACION_PLACEHOLDER = "XXECUPLHXX"
 
 
 def _extraer_asignatura(markdown_text: str, fallback: str) -> str:
@@ -427,8 +455,11 @@ def _protect_latex(text: str) -> tuple[str, dict[str, str]]:
     counter = [0]
 
     def repl_block(m: re.Match) -> str:
+        content = m.group(1).strip()
+        if not should_keep_as_display_math(content):
+            return split_mixed_display_math_block(content)
         key = f"{_BLOCK_PLACEHOLDER}{counter[0]}{_BLOCK_PLACEHOLDER}"
-        subs[key] = m.group(1).strip()
+        subs[key] = content
         counter[0] += 1
         return key
 
@@ -439,7 +470,10 @@ def _protect_latex(text: str) -> tuple[str, dict[str, str]]:
         counter[0] += 1
         return key
 
-    text = _BLOCK_LATEX_RE.sub(repl_block, text)
+    prev = None
+    while prev != text:
+        prev = text
+        text = _BLOCK_LATEX_RE.sub(repl_block, text)
     text = _INLINE_LATEX_RE.sub(repl_inline, text)
     return text, subs
 
@@ -465,10 +499,12 @@ class _MarkdownFlowableParser(HTMLParser):
         latex_subs: dict[str, str],
         content_width: float,
         figura_subs: dict[str, str] | None = None,
+        ecuacion_subs: dict[str, dict[str, str]] | None = None,
     ):
         super().__init__()
         self._subs = latex_subs
         self._figura_subs = figura_subs or {}
+        self._ecuacion_subs = ecuacion_subs or {}
         self._content_width = content_width
         # Ecuaciones display: máximo 70% de la columna de texto, centradas
         self._max_eq_width = 0.7 * content_width
@@ -502,6 +538,10 @@ class _MarkdownFlowableParser(HTMLParser):
             rf"{re.escape(_FIGURA_PLACEHOLDER)}\d+"
             rf"{re.escape(_FIGURA_PLACEHOLDER)}"
         )
+        self._ecuacion_pattern = (
+            rf"{re.escape(_ECUACION_PLACEHOLDER)}\d+"
+            rf"{re.escape(_ECUACION_PLACEHOLDER)}"
+        )
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -526,7 +566,8 @@ class _MarkdownFlowableParser(HTMLParser):
             self.flowables.append(_LeftBorderBox(inner))
             return
 
-        # Expand latex placeholders inside inline text (Rich text)
+        # Expand inline equation-marker tokens and LaTeX placeholders
+        text = self._expand_ecuacion_tokens(text)
         text = self._expand_inline_latex(text)
 
         if block in ("h1", "h2", "h3", "h4"):
@@ -581,7 +622,9 @@ class _MarkdownFlowableParser(HTMLParser):
             elif re.search(self._block_latex_pattern, text):
                 self._emit_mixed_paragraph(text, _ESTILOS["p"])
             elif text.strip():
-                self.flowables.append(Paragraph(text, _ESTILOS["p"]))
+                expanded = self._expand_ecuacion_tokens(text)
+                expanded = self._expand_inline_latex(expanded)
+                self.flowables.append(Paragraph(expanded, _ESTILOS["p"]))
 
     def _save_inline_image(self, buf: io.BytesIO) -> str:
         """Persist PNG en disco temporal para <img> inline de ReportLab."""
@@ -611,6 +654,36 @@ class _MarkdownFlowableParser(HTMLParser):
             f'valign="middle"/>'
         )
 
+    def _ecuacion_reportlab_markup(self, info: dict[str, str]) -> str:
+        """Marcador inline: etiqueta pequeña + contenido, sin recuadro."""
+        tipo = info.get("tipo", "")
+        texto = info.get("texto", "").strip()
+        etiqueta = _ECUACION_MARCADOR_ETIQUETAS_PDF.get(tipo, "?")
+        tag = f'<font color="#9A9890" size="7">[{etiqueta}]</font> '
+
+        if tipo == "inline" or (tipo == "no_extraible" and not texto):
+            return tag + '<font color="#185FA5"><i>?</i></font>'
+
+        if "$" in texto:
+            inner = texto.strip("$").strip()
+            return tag + self._inline_latex_markup(inner)
+
+        safe = self._escape(texto)
+        return tag + f'<font color="#185FA5"><i>{safe}</i></font>'
+
+    def _expand_ecuacion_tokens(self, text: str) -> str:
+        """Sustituye tokens de marcadores [ECUACION*] por markup inline."""
+        if not self._ecuacion_subs:
+            return text
+
+        def repl(m: re.Match[str]) -> str:
+            info = self._ecuacion_subs.get(
+                m.group(0), {"tipo": "no_extraible", "texto": ""}
+            )
+            return self._ecuacion_reportlab_markup(info)
+
+        return re.sub(self._ecuacion_pattern, repl, text)
+
     def _expand_inline_latex(self, text: str) -> str:
         """Replace inline latex placeholders with rendered images or fallback."""
         def repl(m: re.Match) -> str:
@@ -632,7 +705,8 @@ class _MarkdownFlowableParser(HTMLParser):
                 expr = self._subs.get(part.strip(), part.strip())
                 self._add_block_equation(expr)
             else:
-                expanded = self._expand_inline_latex(part)
+                expanded = self._expand_ecuacion_tokens(part)
+                expanded = self._expand_inline_latex(expanded)
                 if expanded.strip():
                     self.flowables.append(Paragraph(expanded, style))
 
@@ -1037,7 +1111,7 @@ def _strip_frontmatter(markdown_text: str) -> str:
 
 def _preprocess_md(
     markdown_text: str,
-) -> tuple[str, dict[str, str], dict[str, str]]:
+) -> tuple[str, dict[str, str], dict[str, str], dict[str, dict[str, str]]]:
     """Strip frontmatter, protect FIGURA/TEXTO_ILEGIBLE tags, protect LaTeX."""
     # Strip YAML frontmatter (robusto a CRLF/LF; ver _strip_frontmatter)
     text = _strip_frontmatter(markdown_text)
@@ -1051,8 +1125,8 @@ def _preprocess_md(
         return f"\n\n{key}\n\n"
 
     text = _FIGURA_RE.sub(repl_figura, text)
-    text = re.sub(r"\[ECUACION_PARCIAL:[^\]]+\]", "", text)
-    text = re.sub(r"\[ECUACION\]", "", text)
+    text = prepare_display_math(text)
+    text, ecuacion_subs = tokenize_ecuacion_markers(text, _ECUACION_PLACEHOLDER)
     # Replace [TEXTO_ILEGIBLE] with a visible italic blockquote so the professor
     # can see exactly where gaps exist in the original material.
     text = _TEXTO_ILEGIBLE_RE.sub(
@@ -1061,7 +1135,7 @@ def _preprocess_md(
 
     # Protect LaTeX from the markdown parser
     text, subs = _protect_latex(text)
-    return text, subs, figura_subs
+    return text, subs, figura_subs, ecuacion_subs
 
 
 # ---------------------------------------------------------------------------
@@ -1096,7 +1170,7 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
     # 1. Pre-process markdown (antes del strip: la asignatura sale del
     #    frontmatter tema_detectado, o del H1 si no hay metadata)
     asignatura = _extraer_asignatura(markdown_text, titulo)
-    processed, latex_subs, figura_subs = _preprocess_md(markdown_text)
+    processed, latex_subs, figura_subs, ecuacion_subs = _preprocess_md(markdown_text)
 
     # 2. Markdown → HTML
     html = _md_lib.markdown(
@@ -1108,7 +1182,9 @@ def generar_pdf(markdown_text: str, titulo: str = "Material docente") -> bytes:
     margen_izq = 2.5 * cm
     margen_der = 2.0 * cm
     content_width = A4[0] - margen_izq - margen_der
-    parser = _MarkdownFlowableParser(latex_subs, content_width, figura_subs)
+    parser = _MarkdownFlowableParser(
+        latex_subs, content_width, figura_subs, ecuacion_subs
+    )
     parser.feed(html)
     parser.close()
     flowables = parser.flowables

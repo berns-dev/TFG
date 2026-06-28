@@ -26,6 +26,7 @@ if str(_MONOREPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONOREPO_ROOT))
 
 from shared.anthropic_client import call_messages  # noqa: E402
+from shared.text_utils import sanitize_block_math  # noqa: E402
 
 SYSTEM_PROMPT = """Eres un procesador especializado de material docente universitario.
 Recibes fragmentos de texto extraidos de documentos academicos (PDF o PPTX).
@@ -287,6 +288,7 @@ def classify_and_format(fragment: str, tema_horas: float | None = None) -> dict[
     if not contenido:
         raise RuntimeError("contenido_markdown vacio")
     contenido = _normalize_math_dashes(contenido)
+    contenido = sanitize_block_math(contenido)
 
     return {
         "tipo": tipo,

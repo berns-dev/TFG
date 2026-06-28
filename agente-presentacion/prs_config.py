@@ -16,7 +16,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL_FAST = os.getenv("MODEL_FAST", "claude-haiku-4-5-20251001")   # detector ambiguos
 MODEL_SMART = os.getenv("MODEL_SMART", "claude-sonnet-4-5")          # generador HTML
 
-REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "120"))
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "180"))
 
 # Detección de elementos
 MIN_LATEX_CHARS = int(os.getenv("MIN_LATEX_CHARS", "3"))

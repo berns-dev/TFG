@@ -1519,6 +1519,28 @@ def _vista_contenido() -> None:
                         unsafe_allow_html=True,
                     )
 
+            if estado != "aprobado":
+                with st.expander("¿Cómo escribir fórmulas? (LaTeX)", expanded=False):
+                    st.markdown(
+                        "Las ecuaciones se escriben en **LaTeX**, no en código de "
+                        "programación. Se renderizan automáticamente con MathJax."
+                    )
+                    st.markdown(
+                        "| Quiero... | Escribo... | Resultado |\n"
+                        "|---|---|---|\n"
+                        "| Fórmula en línea | `$E = \\sigma / \\varepsilon$` | $E = \\sigma/\\varepsilon$ |\n"
+                        "| Fórmula en bloque (propia línea) | `$$F = m \\cdot a$$` | fórmula centrada |\n"
+                        "| Fracción | `\\frac{a}{b}` | a partido por b |\n"
+                        "| Subíndice | `\\sigma_y` | sigma sub y |\n"
+                        "| Superíndice | `\\varepsilon^n` | epsilon elevado a n |\n"
+                        "| Letra griega | `\\sigma`, `\\varepsilon`, `\\rho` | σ, ε, ρ |\n"
+                        "| Multiplicación | `\\cdot` | · |\n"
+                    )
+                    st.caption(
+                        "Si ves `[ECUACION_PARCIAL]` o `[ECUACION_NO_EXTRAIBLE]`, "
+                        "sustitúyelo directamente por la fórmula en LaTeX correcta."
+                    )
+
             with st.container(gap=None, key="sd_card_editor"):
                 tab_div, tab_prev, tab_md = st.tabs(["Dividido", "Vista previa", "Markdown"])
                 with tab_div:
@@ -1699,6 +1721,10 @@ def _prs_taller_key(tema_id: int) -> str:
     return f"prs_taller_{tema_id}"
 
 
+def _prs_taller_error_key(tema_id: int) -> str:
+    return f"prs_taller_error_{tema_id}"
+
+
 def _prs_init_taller(tema_id: int) -> None:
     key = _prs_taller_key(tema_id)
     if key not in st.session_state:
@@ -1708,7 +1734,26 @@ def _prs_init_taller(tema_id: int) -> None:
             "slug": "",
             "titulo": "",
             "historial": [],
+            "razonamiento_spec": "",
+            "forzar_vacio": False,
         }
+
+
+def _prs_aplicar_borrador_desde_row(taller: dict, row: dict) -> None:
+    """Sincroniza session_state del taller con un borrador de la BD."""
+    import json
+
+    taller["viz_id"] = row["id"]
+    taller["html"] = row.get("html_fragment") or ""
+    taller["titulo"] = row.get("titulo") or taller.get("titulo", "")
+    taller["razonamiento_spec"] = row.get("razonamiento_spec") or ""
+    try:
+        taller["historial"] = json.loads(row.get("historial_json") or "[]")
+    except json.JSONDecodeError:
+        taller["historial"] = taller.get("historial") or []
+    slug = _prs_generador_html.extraer_slug_desde_html(taller["html"])
+    if slug:
+        taller["slug"] = slug
 
 
 def _prs_get_markdown_bloque(tema_id: int, tema_nombre: str) -> str:
@@ -1793,7 +1838,7 @@ def _vista_presentacion() -> None:
 
     aprobadas = db.listar_visualizaciones_aprobadas(tema_id, RUTA_DB)
 
-    col_main, col_rail = st.columns([2.5, 1])
+    col_main, col_rail = st.columns([3, 1])
 
     with col_main:
         _prs_init_taller(tema_id)
@@ -1807,15 +1852,27 @@ def _vista_presentacion() -> None:
         ):
             st.session_state[_prs_taller_key(tema_id)] = {
                 "viz_id": None, "html": "", "slug": "", "titulo": "", "historial": [],
+                "razonamiento_spec": "", "forzar_vacio": True,
             }
+            st.session_state.pop(_prs_taller_error_key(tema_id), None)
             st.rerun()
 
         viz_id = taller.get("viz_id")
         if viz_id:
             row = db.get_visualizacion(viz_id, RUTA_DB)
             if row and row.get("estado") == "borrador":
-                taller["html"] = row.get("html_fragment") or taller.get("html", "")
-                taller["titulo"] = row.get("titulo") or taller.get("titulo", "")
+                _prs_aplicar_borrador_desde_row(taller, row)
+        elif taller.get("html"):
+            slug = _prs_generador_html.extraer_slug_desde_html(taller["html"])
+            if slug:
+                taller["slug"] = slug
+        elif not taller.get("html") and not taller.get("forzar_vacio"):
+            borradores = [
+                v for v in db.listar_visualizaciones_tema(tema_id, RUTA_DB)
+                if v.get("estado") == "borrador" and v.get("html_fragment")
+            ]
+            if borradores:
+                _prs_aplicar_borrador_desde_row(taller, borradores[-1])
 
         html_preview = taller.get("html") or ""
         if html_preview:
@@ -1832,9 +1889,13 @@ def _vista_presentacion() -> None:
                     unsafe_allow_html=True,
                 )
                 preview_page = _prs_generador_html.envolver_preview_taller(html_preview)
-                st.components.v1.html(preview_page, height=420, scrolling=True)
+                st.components.v1.html(preview_page, height=680, scrolling=True)
 
         with st.container(gap=None, key="sd_card_composer"):
+            err_prev = st.session_state.get(_prs_taller_error_key(tema_id))
+            if err_prev:
+                st.error(err_prev)
+
             prompt_key = f"prs_prompt_{tema_id}"
             prompt_clear_key = f"prs_prompt_clear_{tema_id}"
             if st.session_state.pop(prompt_clear_key, False):
@@ -1849,7 +1910,11 @@ def _vista_presentacion() -> None:
                         "Describe la visualización:",
                         key=prompt_key,
                         height=64,
-                        placeholder="Describe un ajuste a la visualización…",
+                        placeholder=(
+                            "Escribe qué ajustar y pulsa Refinar →"
+                            if taller.get("html")
+                            else "Describe la visualización que quieres generar…"
+                        ),
                         label_visibility="collapsed",
                     )
                 with c_actions:
@@ -1874,7 +1939,7 @@ def _vista_presentacion() -> None:
                 with st.status("Generando visualización…", expanded=True) as status:
                     try:
                         titulo_viz = instruccion.strip()[:80]
-                        slug, html_frag = _prs_workshop.generar_desde_instruccion(
+                        slug, html_frag, razonamiento_spec = _prs_workshop.generar_desde_instruccion(
                             instruccion.strip(),
                             md_bloque,
                             titulo=titulo_viz,
@@ -1884,47 +1949,103 @@ def _vista_presentacion() -> None:
                         historial = [{"rol": "profesor", "texto": instruccion.strip()}]
                         if taller.get("viz_id"):
                             db.actualizar_visualizacion_borrador(
-                                taller["viz_id"], html_frag, json.dumps(historial), titulo_viz, RUTA_DB
+                                taller["viz_id"],
+                                html_frag,
+                                json.dumps(historial),
+                                titulo=titulo_viz,
+                                razonamiento_spec=razonamiento_spec,
+                                ruta=RUTA_DB,
                             )
                             vid = taller["viz_id"]
                         else:
                             vid = db.insertar_visualizacion_borrador(
                                 tema_id, titulo_viz, instruccion.strip(),
-                                json.dumps(historial), html_frag, RUTA_DB,
+                                json.dumps(historial), html_frag, razonamiento_spec, RUTA_DB,
                             )
                         st.session_state[_prs_taller_key(tema_id)] = {
                             "viz_id": vid, "html": html_frag, "slug": slug,
                             "titulo": titulo_viz, "historial": historial,
+                            "razonamiento_spec": razonamiento_spec,
+                            "forzar_vacio": False,
                         }
+                        st.session_state[prompt_clear_key] = True
+                        st.session_state.pop(_prs_taller_error_key(tema_id), None)
                         status.update(label="Preview generado", state="complete")
+                        st.rerun()
                     except Exception as err:
                         status.update(label="Error", state="error")
+                        st.session_state[_prs_taller_error_key(tema_id)] = classify_api_error(err)
                         st.error(classify_api_error(err))
-                st.rerun()
+
+            if refinar and not instruccion.strip() and taller.get("html"):
+                st.warning("Escribe en el cuadro de texto qué quieres ajustar y pulsa **Refinar →**.")
 
             if refinar and instruccion.strip() and taller.get("html"):
                 with st.status("Refinando visualización…", expanded=True) as status:
                     try:
                         import json
-                        slug = taller.get("slug") or "viz"
-                        html_frag = _prs_workshop.refinar_html(
-                            taller["html"], instruccion.strip(), slug
+                        slug = (
+                            taller.get("slug")
+                            or _prs_generador_html.extraer_slug_desde_html(taller["html"])
+                            or "viz"
                         )
-                        historial = list(taller.get("historial") or [])
-                        historial.append({"rol": "profesor", "texto": instruccion.strip()})
+                        historial_prev = list(taller.get("historial") or [])
+                        html_frag, spec_nueva = _prs_workshop.refinar_html(
+                            taller["html"],
+                            instruccion.strip(),
+                            slug,
+                            taller.get("razonamiento_spec") or None,
+                            md_bloque,
+                            historial_prev,
+                            texto_original,
+                        )
+                        historial = historial_prev + [
+                            {"rol": "profesor", "texto": instruccion.strip()}
+                        ]
+                        spec_guardar = (
+                            spec_nueva
+                            if spec_nueva
+                            else taller.get("razonamiento_spec") or ""
+                        )
                         vid = taller["viz_id"]
                         if vid:
                             db.actualizar_visualizacion_borrador(
-                                vid, html_frag, json.dumps(historial), None, RUTA_DB
+                                vid,
+                                html_frag,
+                                json.dumps(historial),
+                                razonamiento_spec=spec_guardar or None,
+                                ruta=RUTA_DB,
                             )
+                        else:
+                            vid = db.insertar_visualizacion_borrador(
+                                tema_id,
+                                taller.get("titulo") or instruccion.strip()[:80],
+                                instruccion.strip(),
+                                json.dumps(historial),
+                                html_frag,
+                                spec_guardar,
+                                RUTA_DB,
+                            )
+                        slug_nuevo = (
+                            _prs_generador_html.extraer_slug_desde_html(html_frag) or slug
+                        )
                         st.session_state[_prs_taller_key(tema_id)] = {
-                            **taller, "html": html_frag, "historial": historial,
+                            **taller,
+                            "viz_id": vid,
+                            "html": html_frag,
+                            "slug": slug_nuevo,
+                            "historial": historial,
+                            "razonamiento_spec": spec_guardar,
+                            "forzar_vacio": False,
                         }
+                        st.session_state[prompt_clear_key] = True
+                        st.session_state.pop(_prs_taller_error_key(tema_id), None)
                         status.update(label="Preview actualizado", state="complete")
+                        st.rerun()
                     except Exception as err:
                         status.update(label="Error", state="error")
+                        st.session_state[_prs_taller_error_key(tema_id)] = classify_api_error(err)
                         st.error(classify_api_error(err))
-                st.rerun()
 
             if html_preview:
                 opciones_ancla = headings + figuras_ancla if (headings or figuras_ancla) else []
@@ -1955,7 +2076,8 @@ def _vista_presentacion() -> None:
                     if vid:
                         db.aprobar_visualizacion(vid, ancla_val, RUTA_DB)
                     st.session_state[_prs_taller_key(tema_id)] = {
-                        "viz_id": None, "html": "", "slug": "", "titulo": "", "historial": [],
+                        "viz_id": None, "html": "", "slug": "", "titulo": "",
+                        "historial": [], "razonamiento_spec": "",
                     }
                     st.session_state[prompt_clear_key] = True
                     st.success("Visualización aprobada.")
